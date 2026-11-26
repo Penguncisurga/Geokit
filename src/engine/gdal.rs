@@ -512,3 +512,129 @@ pub fn gdal_terrain(
     }
     Ok(())
 }
+
+pub fn gdal_xy2shp(
+    gdal: &GdalEnvironment,
+    input_csv: &Path,
+    x_field: &str,
+    y_field: &str,
+    epsg: u32,
+    out: &Path,
+) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let driver = match out
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("shp")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "gpkg" => "GPKG",
+        "geojson" => "GeoJSON",
+        "fgb" => "FlatGeobuf",
+        "kml" => "KML",
+        _ => "ESRI Shapefile",
+    };
+
+    run_cmd(
+        gdal,
+        ogr2ogr,
+        &[
+            "-f".into(),
+            driver.into(),
+            "-a_srs".into(),
+            format!("EPSG:{epsg}"),
+            "-oo".into(),
+            format!("X_POSSIBLE_NAMES={x_field}"),
+            "-oo".into(),
+            format!("Y_POSSIBLE_NAMES={y_field}"),
+            "-oo".into(),
+            "AUTODETECT_TYPE=YES".into(),
+            out.display().to_string(),
+            input_csv.display().to_string(),
+        ],
+    )?;
+    println!(
+        "OK Created point dataset from CSV ({x_field}, {y_field}, EPSG:{epsg}) -> {}",
+        out.display()
+    );
+    Ok(())
+}
+
+pub fn gdal_convert(gdal: &GdalEnvironment, input: &Path, to_fmt: &str, out: &Path) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    let (driver, ext) = match to_fmt.to_ascii_lowercase().as_str() {
+        "shp" | "shapefile" => ("ESRI Shapefile", "shp"),
+        "gpkg" | "geopackage" => ("GPKG", "gpkg"),
+        "geojson" => ("GeoJSON", "geojson"),
+        "kml" => ("KML", "kml"),
+        "fgb" | "flatgeobuf" => ("FlatGeobuf", "fgb"),
+        other => bail!("Unsupported format '{other}'. Use shp, gpkg, geojson, kml, or fgb."),
+    };
+
+    let items = collect_inputs(input, false);
+    if items.is_empty() {
+        println!("{}", "No vector datasets found to convert.".yellow());
+        return Ok(());
+    }
+    let is_batch = items.len() > 1 || out.is_dir() || out.extension().is_none();
+    if is_batch {
+        fs::create_dir_all(out)?;
+    } else if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let mut failures = 0usize;
+    for (idx, (src, _)) in items.iter().enumerate() {
+        let dst = if is_batch {
+            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("layer");
+            out.join(format!("{stem}.{ext}"))
+        } else {
+            out.to_path_buf()
+        };
+        let res = run_cmd(
+            gdal,
+            ogr2ogr,
+            &[
+                "-f".into(),
+                driver.into(),
+                dst.display().to_string(),
+                src.display().to_string(),
+            ],
+        );
+        match res {
+            Ok(()) => println!(
+                "[{}/{}] OK   {} -> {}",
+                idx + 1,
+                items.len(),
+                src.display(),
+                dst.display()
+            ),
+            Err(e) => {
+                failures += 1;
+                eprintln!(
+                    "[{}/{}] ERR  {}: {}",
+                    idx + 1,
+                    items.len(),
+                    src.display(),
+                    e
+                );
+            }
+        }
+    }
+    if failures > 0 {
+        bail!("{failures} dataset(s) failed during conversion.");
+    }
+    Ok(())
+}

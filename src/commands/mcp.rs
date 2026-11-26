@@ -156,18 +156,18 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_gp",
-            "description": "Run batch geoprocessing OR dynamically discover/run ANY installed ArcGIS Pro / ArcMap tool (tools, tool-usage, run, info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join).",
+            "description": "Run batch geoprocessing OR dynamically discover/run ANY installed ArcGIS Pro / ArcMap tool (tools, tool-usage, run, info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join, xy2shp, convert).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["info", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "tools", "tool-usage", "run"]
+                        "enum": ["info", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
                     },
                     "input": { "type": "string", "description": "Input file, folder, .gdb, or keyword pattern (for tools)" },
                     "out": { "type": "string", "description": "Output file, folder, or .gdb (when required)" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"], "description": "Backend engine" },
-                    "epsg": { "type": "integer", "description": "Target EPSG code (for project)" },
+                    "epsg": { "type": "integer", "description": "Target EPSG code (for project or xy2shp)" },
                     "aoi": { "type": "string", "description": "AOI polygon path (for clip)" },
                     "dist": { "type": "string", "description": "Buffer distance e.g. '50 Meters' (for buffer)" },
                     "dissolve": { "type": "boolean", "description": "Dissolve overlapping buffers (for buffer)" },
@@ -177,6 +177,9 @@ fn tool_definitions() -> Value {
                     "mask": { "type": "string", "description": "Mask/erase layer path (for erase)" },
                     "join": { "type": "string", "description": "Join layer path (for spatial-join)" },
                     "match": { "type": "string", "enum": ["intersect", "within", "contains", "closest"], "description": "Match option (for spatial-join)" },
+                    "x_field": { "type": "string", "description": "X / Longitude column name (for xy2shp, default: lon)" },
+                    "y_field": { "type": "string", "description": "Y / Latitude column name (for xy2shp, default: lat)" },
+                    "to": { "type": "string", "enum": ["shp", "gpkg", "geojson", "kml", "fgb"], "description": "Target vector format (for convert)" },
                     "tool": { "type": "string", "description": "Exact ArcPy tool name e.g. Buffer_analysis or Slope_sa (for tool-usage or run)" },
                     "args": { "type": "array", "items": { "type": "string" }, "description": "Positional arguments passed to ArcPy tool (for run)" }
                 },
@@ -319,6 +322,33 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["action"]
             }
+        },
+        {
+            "name": "geokit_qa",
+            "description": "Run Spatial Quality Assurance (QA) checks on a file, folder, or .gdb: CRS uniformity, invalid geometry (CheckGeometry), required NULL/empty fields, and optional polygon self-overlap detection.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string", "description": "File, folder, or .gdb path to inspect" },
+                    "expected_epsg": { "type": "integer", "description": "Expected EPSG code for CRS uniformity check" },
+                    "check_nulls": { "type": "string", "description": "Comma-separated required field names to check for NULL/empty values (e.g. 'DESA,KELAS')" },
+                    "check_overlaps": { "type": "boolean", "description": "Check for self-overlapping polygons within each polygon layer" },
+                    "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap"], "description": "Backend engine" }
+                },
+                "required": ["input"]
+            }
+        },
+        {
+            "name": "geokit_report",
+            "description": "Generate a clean standalone Markdown (.md), HTML (.html), or JSON (.json) GIS workspace inventory report (works without ArcGIS).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory path to report on" },
+                    "out": { "type": "string", "description": "Output report file path (.md, .html, or .json)" }
+                },
+                "required": ["path", "out"]
+            }
         }
     ])
 }
@@ -433,6 +463,15 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(m) = str_arg(args, "match") {
                 cli_args.extend(["--match".into(), m.into()]);
+            }
+            if let Some(xf) = str_arg(args, "x_field") {
+                cli_args.extend(["--x-field".into(), xf.into()]);
+            }
+            if let Some(yf) = str_arg(args, "y_field") {
+                cli_args.extend(["--y-field".into(), yf.into()]);
+            }
+            if let Some(to_fmt) = str_arg(args, "to") {
+                cli_args.extend(["--to".into(), to_fmt.into()]);
             }
         }
         "geokit_layout" => {
@@ -599,6 +638,27 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
                     cli_args.push("--dry-run".into());
                 }
             }
+        }
+        "geokit_qa" => {
+            let Some(input) = str_arg(args, "input") else {
+                return ("Missing required argument: input".into(), true);
+            };
+            cli_args.extend(["qa".into(), input.into(), "--json".into()]);
+            if let Some(epsg) = args.get("expected_epsg").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--expected-epsg".into(), epsg.to_string()]);
+            }
+            if let Some(cn) = str_arg(args, "check_nulls") {
+                cli_args.extend(["--check-nulls".into(), cn.into()]);
+            }
+            if bool_arg(args, "check_overlaps") {
+                cli_args.push("--check-overlaps".into());
+            }
+        }
+        "geokit_report" => {
+            let (Some(path), Some(out)) = (str_arg(args, "path"), str_arg(args, "out")) else {
+                return ("Missing required arguments: path, out".into(), true);
+            };
+            cli_args.extend(["report".into(), path.into(), "--out".into(), out.into()]);
         }
         _ => return (format!("Unknown tool: {name}"), true),
     }

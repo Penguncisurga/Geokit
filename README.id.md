@@ -85,6 +85,7 @@ geokit doctor
 - **`geokit organize <folder> [--output <folder>] [--dry-run]`** — Rapikan file ke folder standar (`01_Vector`, `02_Raster`, `03_Geodatabase`, `04_Projects`, `05_Tabular`) dengan aman.
 - **`geokit sanitize <folder> [--dry-run]`** — Ubah nama file GIS menjadi `snake_case` aman untuk ArcGIS/GDB (tanpa spasi/simbol, awalan angka ditambah `l_`).
 - **`geokit clean <folder> [--include-xml] [--dry-run]`** — Hapus file `.lock`, `.tmp`, `.bak` (dan opsional `.shp.xml` / `.aux.xml`).
+- **`geokit report <folder> --out <laporan.html|.md|.json>`** — Buat laporan inventaris folder GIS siap kirim dalam format HTML, Markdown, atau JSON (tanpa butuh ArcGIS).
 
 ```bash
 # Audit folder proyek
@@ -117,6 +118,9 @@ geokit clean ./proyek_das
 - **`geokit gp intersect <input> --with <overlay> --out <out>`** — Batch *intersect* layer vektor dengan layer overlay.
 - **`geokit gp erase <input> --mask <mask> --out <out>`** — Batch *erase* fitur yang tumpang tindih dengan poligon mask.
 - **`geokit gp spatial-join <input> --join <layer> --out <out> [--match intersect|within|contains|closest]`** — Batch *spatial join* atribut antar layer.
+- **`geokit gp xy2shp <tabel.csv> --x-field lon --y-field lat --epsg 4326 --out <titik.shp>`** — Konversi tabel CSV koordinat X/Y (Lon/Lat) langsung menjadi titik `.shp`, `.gpkg`, atau `.gdb` (ArcGIS Pro, ArcMap, atau GDAL).
+- **`geokit gp convert <input> --to shp|gpkg|geojson|kml|fgb --out <out>`** — Batch konversi format vektor antar SHP, GeoPackage, GeoJSON, KML, dan FlatGeobuf.
+- **`geokit qa <input> [--expected-epsg 32748] [--check-nulls DESA,KELAS] [--check-overlaps]`** — Quality Assurance spasial: cek keseragaman CRS, geometri rusak (*CheckGeometry*), field wajib yang kosong/NULL, dan poligon tumpang tindih (*overlap*).
 
 > **Backend GDAL / QGIS:** Gunakan `--engine gdal` (atau otomatis via `--engine auto` jika ArcGIS Pro tidak terpasang) untuk menjalankan `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), dan `unpack` lewat `ogr2ogr` / `gdalwarp` (otomatis terdeteksi dari `PATH` maupun folder QGIS di Windows).
 
@@ -182,7 +186,7 @@ Kamu bisa mengubah nama folder `organize`, default EPSG untuk `gp project`, defa
 
 ### 6. Built-in MCP Server (`geokit mcp`) & Dukungan ArcMap 10.x (`.mxd`)
 
-`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio`, sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa langsung memakai seluruh fitur `geokit` tanpa perlu membuka GUI ArcGIS!
+`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio` dengan **15 tool GIS**, sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa langsung memakai seluruh fitur `geokit` tanpa perlu membuka GUI ArcGIS!
 
 Tambahkan ke konfigurasi MCP client kamu:
 

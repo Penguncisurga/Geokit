@@ -131,6 +131,32 @@ enum Commands {
         #[command(subcommand)]
         command: PipelineCommand,
     },
+    /// Run Spatial Quality Assurance checks (CRS uniformity, invalid geometry, NULL fields, polygon overlaps)
+    Qa {
+        /// File, folder, or .gdb to inspect
+        input: PathBuf,
+        /// Expected EPSG code (defaults to geokit.toml defaults.epsg if set)
+        #[arg(long)]
+        expected_epsg: Option<u32>,
+        /// Comma-separated required field names to check for NULL/empty values (e.g. "DESA,KELAS")
+        #[arg(long)]
+        check_nulls: Option<String>,
+        /// Check for overlapping polygons within each polygon layer
+        #[arg(long)]
+        check_overlaps: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate a clean Markdown (.md), HTML (.html), or JSON workspace inventory report (no ArcGIS needed)
+    Report {
+        /// Directory to report on (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Output report path (.md, .html, or .json)
+        #[arg(short, long, default_value = "geokit_report.html")]
+        out: PathBuf,
+    },
     /// Control a currently open ArcMap 10.x window live (add/remove/zoom/select/export/run-gp)
     Live {
         #[command(subcommand)]
@@ -196,6 +222,25 @@ fn main() -> Result<()> {
         }
         Commands::Toolbox { command } => commands::toolbox::run(command),
         Commands::Pipeline { command } => commands::pipeline::run(command),
+        Commands::Qa {
+            input,
+            expected_epsg,
+            check_nulls,
+            check_overlaps,
+            json,
+        } => commands::qa::run(
+            &input,
+            commands::qa::QaOptions {
+                expected_epsg,
+                check_nulls,
+                check_overlaps,
+                json,
+            },
+            effective_propy,
+            &cfg,
+            effective_engine,
+        ),
+        Commands::Report { path, out } => commands::report::run(&path, &out),
         Commands::Live { command } => commands::live::run(command),
         Commands::Mcp => commands::mcp::run(),
     }

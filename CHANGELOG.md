@@ -4,6 +4,15 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-11-26
+
+### Added
+- **CSV / XY Table to Point Dataset (`geokit gp xy2shp`)**: convert tabular CSV files with X/Y (or Lon/Lat) columns straight into `.shp`, `.gpkg`, or `.gdb` point feature classes via ArcGIS Pro, ArcMap 10.x, or GDAL (`--x-field`, `--y-field`, `--epsg`).
+- **Batch Vector Format Converter (`geokit gp convert`)**: convert single files, folders, or `.gdb` feature classes across `shp`, `gpkg`, `geojson`, `kml`, and `fgb` (FlatGeobuf), automatically leveraging GDAL where needed.
+- **Spatial Quality Assurance Checker (`geokit qa`)**: inspect vector/raster datasets for CRS uniformity (`--expected-epsg`), invalid geometries (`CheckGeometry`), required NULL/empty attribute fields (`--check-nulls`), and optional polygon self-overlaps (`--check-overlaps`) via ArcGIS Pro or ArcMap 10.x.
+- **Standalone Workspace Inventory Report (`geokit report`)**: native Rust (no ArcGIS needed) report generator exporting clean `.html`, `.md`, or `.json` inventories of all datasets, sizes, health flags, and `.lock` clutter.
+- Added `geokit_qa` and `geokit_report` MCP tools and wired `xy2shp`/`convert` into `geokit_gp` (now **15 MCP tools** total).
+
 ## [1.4.0] - 2026-11-26
 
 ### Added

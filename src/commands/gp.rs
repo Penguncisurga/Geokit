@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
 use crate::engine::gdal::{
-    detect_gdal, gdal_clip, gdal_info, gdal_merge, gdal_pack_gpkg, gdal_project, gdal_unpack,
+    detect_gdal, gdal_clip, gdal_convert, gdal_info, gdal_merge, gdal_pack_gpkg, gdal_project,
+    gdal_unpack, gdal_xy2shp,
 };
 use crate::engine::{
     abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
@@ -168,6 +169,34 @@ pub enum GpCommand {
         /// Positional arguments passed directly to the ArcPy tool
         args: Vec<String>,
     },
+    /// Convert a CSV table with X/Y (or Lon/Lat) columns into a point shapefile, .gpkg, or .gdb feature class
+    Xy2shp {
+        /// Input CSV file path
+        input: PathBuf,
+        /// Column name for X / Longitude (default: lon)
+        #[arg(long, default_value = "lon")]
+        x_field: String,
+        /// Column name for Y / Latitude (default: lat)
+        #[arg(long, default_value = "lat")]
+        y_field: String,
+        /// Coordinate system EPSG code (default: 4326 WGS84)
+        #[arg(long, default_value_t = 4326)]
+        epsg: u32,
+        /// Output point shapefile (.shp), .gpkg, or .gdb feature class path
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Batch convert vector dataset(s) to another format: shp, gpkg, geojson, kml, or fgb
+    Convert {
+        /// Input file, folder, or .gdb
+        input: PathBuf,
+        /// Target format: shp, gpkg, geojson, kml, or fgb
+        #[arg(long)]
+        to: String,
+        /// Output file or directory
+        #[arg(short, long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -186,6 +215,9 @@ struct GpPayload {
     match_option: Option<String>,
     tool: Option<String>,
     args: Option<Vec<String>>,
+    x_field: Option<String>,
+    y_field: Option<String>,
+    target_format: Option<String>,
     json: Option<bool>,
 }
 
@@ -248,9 +280,27 @@ pub fn run(
                 }
                 gdal_unpack(&gdal, &input, &out)
             }
+            GpCommand::Xy2shp {
+                input,
+                x_field,
+                y_field,
+                epsg,
+                out,
+            } => {
+                if !input.is_file() {
+                    bail!("Input CSV file does not exist: {}", input.display());
+                }
+                gdal_xy2shp(&gdal, &input, &x_field, &y_field, epsg, &out)
+            }
+            GpCommand::Convert { input, to, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_convert(&gdal, &input, &to, &out)
+            }
             _ => bail!(
-                "This subcommand currently requires the ArcGIS Pro backend (`--engine arcgis`).\n\
-                 GDAL backend supports: info, project, clip, merge, pack (.gpkg), unpack."
+                "This subcommand currently requires the ArcGIS Pro / ArcMap backend (`--engine arcgis` or `--engine arcmap`).\n\
+                 GDAL backend supports: info, project, clip, merge, pack (.gpkg), unpack, xy2shp, convert."
             ),
         };
     }
@@ -455,6 +505,46 @@ pub fn run(
             args: Some(args),
             ..Default::default()
         },
+        GpCommand::Xy2shp {
+            input,
+            x_field,
+            y_field,
+            epsg,
+            out,
+        } => {
+            if !input.is_file() {
+                bail!("Input CSV file does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "xy2shp".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                epsg: Some(epsg),
+                x_field: Some(x_field),
+                y_field: Some(y_field),
+                ..Default::default()
+            }
+        }
+        GpCommand::Convert { input, to, out } => {
+            if !input.exists() {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            // Prefer GDAL if available for formats like fgb/geojson/gpkg/kml, else route to ArcPy
+            let fmt = to.to_ascii_lowercase();
+            if matches!(fmt.as_str(), "fgb" | "kml") {
+                let gdal = detect_gdal();
+                if gdal.is_available() {
+                    return gdal_convert(&gdal, &input, &fmt, &out);
+                }
+            }
+            GpPayload {
+                action: "convert".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                target_format: Some(fmt),
+                ..Default::default()
+            }
+        }
     };
 
     if resolved == ResolvedBackend::Arcmap {

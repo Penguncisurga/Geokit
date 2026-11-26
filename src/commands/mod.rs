@@ -10,6 +10,8 @@ pub mod map;
 pub mod mcp;
 pub mod organize;
 pub mod pipeline;
+pub mod qa;
 pub mod raster;
+pub mod report;
 pub mod sanitize;
 pub mod toolbox;

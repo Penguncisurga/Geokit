@@ -87,6 +87,7 @@ geokit doctor
 | `geokit organize <dir> [--output <dir>] [--dry-run]` | Organize scattered datasets into `01_Vector`, `02_Raster`, `03_Geodatabase`, `04_Projects`, `05_Tabular` while keeping bundles intact. |
 | `geokit sanitize <dir> [--dry-run]` | Rename datasets (and all sidecars) to ArcGIS/GDB-safe `snake_case` (removes spaces/symbols, prefixes leading digits with `l_`). |
 | `geokit clean <dir> [--include-xml] [--dry-run]` | Remove stale `.lock`, `.tmp`, and `.bak` files (optionally `.shp.xml` / `.aux.xml`). |
+| `geokit report <dir> --out <report.html\|.md\|.json>` | Generate a clean standalone HTML, Markdown, or JSON workspace inventory report (no ArcGIS required). |
 
 **Examples:**
 
@@ -125,6 +126,9 @@ geokit clean ./project_das
 | `geokit gp intersect <input> --with <overlay> --out <out>` | Batch intersect vector datasets with an overlay layer. |
 | `geokit gp erase <input> --mask <erase> --out <out>` | Batch erase features overlapping a mask layer. |
 | `geokit gp spatial-join <input> --join <layer> --out <out> [--match intersect\|within\|contains\|closest]` | Batch spatial join attributes from another layer. |
+| `geokit gp xy2shp <table.csv> --x-field lon --y-field lat --epsg 4326 --out <points.shp>` | Convert a CSV with X/Y (Lon/Lat) coordinates into `.shp`, `.gpkg`, or `.gdb` points (ArcGIS Pro, ArcMap, or GDAL). |
+| `geokit gp convert <input> --to shp\|gpkg\|geojson\|kml\|fgb --out <out>` | Batch convert vector datasets between SHP, GeoPackage, GeoJSON, KML, and FlatGeobuf. |
+| `geokit qa <input> [--expected-epsg 32748] [--check-nulls DESA,KELAS] [--check-overlaps]` | Spatial Quality Assurance check: CRS uniformity, invalid geometry, required NULL/empty fields, and polygon overlaps. |
 
 > **GDAL / QGIS Backend:** Pass `--engine gdal` (or leave default `--engine auto` on machines without ArcGIS Pro) to run `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), and `unpack` using `ogr2ogr` / `gdalwarp` — automatically detected from `PATH` or QGIS on Windows!
 
@@ -229,7 +233,7 @@ tabular = "05_Tabular"
 
 ### 6. Built-in MCP Server (`geokit mcp`) & ArcMap 10.x Support
 
-`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio`, allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run all `geokit` tools natively without opening the ArcGIS GUI.
+`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio` exposing **15 GIS tools**, allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run all `geokit` workflows natively without opening the ArcGIS GUI.
 
 Add to your MCP client configuration:
 

@@ -166,7 +166,7 @@ fn test_mcp_server_stdio_handshake_and_tools() {
 
     let list_resp: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 15);
 
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
@@ -238,4 +238,62 @@ fn test_toolbox_create_and_pipeline_run() {
         .output()
         .unwrap();
     assert!(exec_out.status.success());
+}
+
+#[test]
+fn test_report_markdown_html_and_json() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(root.join("batas_desa.shp"), b"shp").unwrap();
+    fs::write(root.join("batas_desa.shx"), b"shx").unwrap();
+    fs::write(root.join("batas_desa.dbf"), b"dbf").unwrap();
+    fs::write(root.join("batas_desa.prj"), b"prj").unwrap();
+    fs::write(root.join("dem_kendal.tif"), b"tif").unwrap();
+
+    let md_path = root.join("inventory.md");
+    let html_path = root.join("inventory.html");
+    let json_path = root.join("inventory.json");
+
+    let md_out = geokit_bin()
+        .args([
+            "report",
+            root.to_str().unwrap(),
+            "--out",
+            md_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(md_out.status.success());
+    let md = fs::read_to_string(&md_path).unwrap();
+    assert!(md.contains("batas_desa.shp"));
+    assert!(md.contains("dem_kendal.tif"));
+
+    let html_out = geokit_bin()
+        .args([
+            "report",
+            root.to_str().unwrap(),
+            "--out",
+            html_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(html_out.status.success());
+    let html = fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains("<html"));
+    assert!(html.contains("batas_desa.shp"));
+
+    let json_out = geokit_bin()
+        .args([
+            "report",
+            root.to_str().unwrap(),
+            "--out",
+            json_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(json_out.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
+    assert!(parsed["datasets"].as_array().unwrap().len() >= 2);
 }

@@ -696,6 +696,144 @@ def cmd_gp_run(payload):
     return 0
 
 
+def cmd_xy2shp(payload):
+    in_csv = payload["input"]
+    out_path = payload["out"]
+    x_field = payload.get("x_field") or "lon"
+    y_field = payload.get("y_field") or "lat"
+    epsg = int(payload.get("epsg") or 4326)
+    ensure_output_container(out_path, is_batch=False)
+    sr = arcpy.SpatialReference(epsg)
+    tmp_lyr = "geokit_xy_event_lyr"
+    arcpy.MakeXYEventLayer_management(in_csv, x_field, y_field, tmp_lyr, sr)
+    arcpy.CopyFeatures_management(tmp_lyr, out_path)
+    print("OK Created point dataset from CSV (%s, %s, EPSG:%d) -> %s" % (x_field, y_field, epsg, out_path))
+    return 0
+
+
+def cmd_convert(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    fmt = (payload.get("target_format") or "shp").lower()
+    out_path = payload["out"]
+    is_batch = len(items) > 1 or os.path.isdir(out_path) or not os.path.splitext(out_path)[1]
+    if is_batch and not os.path.exists(out_path):
+        os.makedirs(out_path)
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        stem = sanitize_gdb_name(src)
+        dst = os.path.join(out_path, "%s.%s" % (stem, fmt)) if is_batch else out_path
+        try:
+            if fmt == "shp":
+                arcpy.CopyFeatures_management(src, dst)
+            elif fmt == "geojson":
+                arcpy.FeaturesToJSON_conversion(src, dst, geoJSON="GEOJSON")
+            else:
+                raise ValueError("Format '%s' via ArcMap requires `--engine gdal`." % fmt)
+            print("[%d/%d] OK   %s -> %s" % (idx, len(items), os.path.basename(src), dst))
+        except Exception as exc:
+            failures += 1
+            sys.stderr.write("[%d/%d] ERR  %s: %s\n" % (idx, len(items), os.path.basename(src), exc))
+    return 1 if failures else 0
+
+
+def cmd_qa_check(payload):
+    items = collect_datasets(payload["input"], include_rasters=True)
+    expected_epsg = payload.get("expected_epsg")
+    check_nulls = [f.strip() for f in (payload.get("check_nulls") or "").split(",") if f.strip()]
+    check_overlaps = bool(payload.get("check_overlaps", False))
+
+    report = []
+    crs_set = set()
+    total_issues = 0
+
+    for ds_path, kind in items:
+        desc = arcpy.Describe(ds_path)
+        sr = getattr(desc, "spatialReference", None)
+        epsg = sr.factoryCode if (sr and getattr(sr, "factoryCode", 0)) else None
+        crs_name = sr.name if sr else "Unknown"
+        crs_set.add("%s (%s)" % (crs_name, epsg))
+        issues = []
+
+        if not sr or crs_name == "Unknown":
+            issues.append("Missing/Unknown CRS")
+        elif expected_epsg and epsg != int(expected_epsg):
+            issues.append("CRS mismatch: got EPSG:%s, expected EPSG:%s" % (epsg, expected_epsg))
+
+        if kind == "vector":
+            try:
+                chk_tbl = os.path.join(arcpy.env.scratchGDB, "geokit_qa_geom")
+                if arcpy.Exists(chk_tbl):
+                    arcpy.Delete_management(chk_tbl)
+                arcpy.CheckGeometry_management(ds_path, chk_tbl)
+                bad_count = int(arcpy.GetCount_management(chk_tbl).getOutput(0))
+                if bad_count > 0:
+                    issues.append("%d invalid geometry problem(s)" % bad_count)
+                arcpy.Delete_management(chk_tbl)
+            except Exception as exc:
+                issues.append("CheckGeometry skipped: %s" % exc)
+
+            if check_nulls:
+                existing_fields = dict((f.name.lower(), f.name) for f in arcpy.ListFields(ds_path))
+                for req_f in check_nulls:
+                    actual = existing_fields.get(req_f.lower())
+                    if not actual:
+                        issues.append("Missing required field '%s'" % req_f)
+                    else:
+                        null_cnt = 0
+                        with arcpy.da.SearchCursor(ds_path, [actual]) as cur:
+                            for row in cur:
+                                val = row[0]
+                                if val is None or (isinstance(val, basestring) and not val.strip()):
+                                    null_cnt += 1
+                        if null_cnt > 0:
+                            issues.append("Field '%s' has %d NULL/empty value(s)" % (actual, null_cnt))
+
+            if check_overlaps and getattr(desc, "shapeType", "") == "Polygon":
+                try:
+                    ov_fc = os.path.join(arcpy.env.scratchGDB, "geokit_qa_ov")
+                    if arcpy.Exists(ov_fc):
+                        arcpy.Delete_management(ov_fc)
+                    arcpy.Intersect_analysis([ds_path], ov_fc)
+                    ov_count = int(arcpy.GetCount_management(ov_fc).getOutput(0))
+                    if ov_count > 0:
+                        issues.append("%d overlapping polygon pair(s)" % ov_count)
+                    arcpy.Delete_management(ov_fc)
+                except Exception as exc:
+                    issues.append("Overlap check skipped: %s" % exc)
+
+        total_issues += len(issues)
+        report.append({
+            "name": os.path.basename(ds_path),
+            "path": ds_path,
+            "kind": kind,
+            "crs": crs_name,
+            "epsg": epsg,
+            "status": "PASS" if not issues else "WARN",
+            "issues": issues,
+        })
+
+    if payload.get("json"):
+        print(json.dumps({
+            "datasets_checked": len(report),
+            "unique_crs_count": len(crs_set),
+            "total_issues": total_issues,
+            "results": report,
+        }, indent=2))
+        return 0
+
+    print("Spatial QA Report (%d dataset(s) checked):" % len(report))
+    if len(crs_set) > 1:
+        print("  [WARN] Multiple CRS detected across workspace: %s" % ", ".join(sorted(crs_set)))
+    for item in report:
+        tag = "[PASS]" if item["status"] == "PASS" else "[WARN]"
+        epsg_s = ("EPSG:%s" % item["epsg"]) if item["epsg"] else "No EPSG"
+        print("  %s %s (%s / %s)" % (tag, item["name"], item["crs"], epsg_s))
+        for iss in item["issues"]:
+            print("         - %s" % iss)
+    print("Summary: %d checked, %d issue(s) found." % (len(report), total_issues))
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -713,6 +851,9 @@ HANDLERS = {
     "gp_tools": cmd_gp_tools,
     "gp_tool_usage": cmd_gp_tool_usage,
     "gp_run": cmd_gp_run,
+    "xy2shp": cmd_xy2shp,
+    "convert": cmd_convert,
+    "qa_check": cmd_qa_check,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
     "map_broken_links": cmd_map_broken_links,
