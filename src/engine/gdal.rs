@@ -13,6 +13,8 @@ pub struct GdalEnvironment {
     pub ogr2ogr: Option<PathBuf>,
     pub ogrinfo: Option<PathBuf>,
     pub gdalwarp: Option<PathBuf>,
+    pub proj_data: Option<PathBuf>,
+    pub gdal_data: Option<PathBuf>,
     pub source: Option<String>,
 }
 
@@ -29,13 +31,15 @@ pub fn detect_gdal() -> GdalEnvironment {
             ogr2ogr: Some(ogr2ogr),
             ogrinfo: find_on_path("ogrinfo"),
             gdalwarp: find_on_path("gdalwarp"),
+            proj_data: None,
+            gdal_data: None,
             source: Some("System PATH".to_string()),
         };
     }
 
     // Check QGIS installations on Windows (C:\Program Files\QGIS *\bin)
     if let Ok(entries) = fs::read_dir(r"C:\Program Files") {
-        let mut qgis_bins: Vec<PathBuf> = entries
+        let mut qgis_roots: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())
             .filter(|p| {
@@ -45,11 +49,19 @@ pub fn detect_gdal() -> GdalEnvironment {
                         .map(|n| n.to_ascii_lowercase().starts_with("qgis"))
                         .unwrap_or(false)
             })
-            .map(|p| p.join("bin"))
-            .filter(|b| b.join("ogr2ogr.exe").is_file())
+            .filter(|p| p.join("bin").join("ogr2ogr.exe").is_file())
             .collect();
-        qgis_bins.sort();
-        if let Some(bin) = qgis_bins.pop() {
+        qgis_roots.sort();
+        if let Some(root) = qgis_roots.pop() {
+            let bin = root.join("bin");
+            let proj_data = root.join("share").join("proj");
+            let gdal_data = [
+                root.join("apps").join("gdal").join("share").join("gdal"),
+                root.join("share").join("gdal"),
+            ]
+            .into_iter()
+            .find(|p| p.is_dir());
+
             return GdalEnvironment {
                 ogr2ogr: Some(bin.join("ogr2ogr.exe")),
                 ogrinfo: bin
@@ -60,6 +72,8 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("gdalwarp.exe")
                     .is_file()
                     .then(|| bin.join("gdalwarp.exe")),
+                proj_data: proj_data.is_dir().then_some(proj_data),
+                gdal_data,
                 source: Some(format!("QGIS ({})", bin.display())),
             };
         }
@@ -69,6 +83,8 @@ pub fn detect_gdal() -> GdalEnvironment {
         ogr2ogr: None,
         ogrinfo: None,
         gdalwarp: None,
+        proj_data: None,
+        gdal_data: None,
         source: None,
     }
 }
@@ -124,8 +140,15 @@ fn collect_inputs(input: &Path, include_rasters: bool) -> Vec<(PathBuf, bool)> {
     items
 }
 
-fn run_cmd(bin: &Path, args: &[String]) -> Result<()> {
-    let status = Command::new(bin)
+fn run_cmd(gdal: &GdalEnvironment, bin: &Path, args: &[String]) -> Result<()> {
+    let mut cmd = Command::new(bin);
+    if let Some(proj) = &gdal.proj_data {
+        cmd.env("PROJ_DATA", proj).env("PROJ_LIB", proj);
+    }
+    if let Some(gd) = &gdal.gdal_data {
+        cmd.env("GDAL_DATA", gd);
+    }
+    let status = cmd
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -145,11 +168,12 @@ pub fn gdal_info(gdal: &GdalEnvironment, input: &Path) -> Result<()> {
     let items = collect_inputs(input, false);
     if items.is_empty() && input.is_dir() {
         // Might be a .gdb directory readable by ogrinfo directly
-        return run_cmd(ogrinfo, &["-so".into(), input.display().to_string()]);
+        return run_cmd(gdal, ogrinfo, &["-so".into(), input.display().to_string()]);
     }
     for (p, _) in items {
         println!("{} {}", "Dataset:".bold().cyan(), p.display());
         run_cmd(
+            gdal,
             ogrinfo,
             &["-al".into(), "-so".into(), p.display().to_string()],
         )?;
@@ -185,6 +209,7 @@ pub fn gdal_project(gdal: &GdalEnvironment, input: &Path, epsg: u32, out: &Path)
         let res = if *is_raster {
             match &gdal.gdalwarp {
                 Some(warp) => run_cmd(
+                    gdal,
                     warp,
                     &[
                         "-overwrite".into(),
@@ -198,6 +223,7 @@ pub fn gdal_project(gdal: &GdalEnvironment, input: &Path, epsg: u32, out: &Path)
             }
         } else {
             run_cmd(
+                gdal,
                 ogr2ogr,
                 &[
                     "-t_srs".into(),
@@ -259,6 +285,7 @@ pub fn gdal_clip(gdal: &GdalEnvironment, input: &Path, aoi: &Path, out: &Path) -
         let res = if *is_raster {
             match &gdal.gdalwarp {
                 Some(warp) => run_cmd(
+                    gdal,
                     warp,
                     &[
                         "-overwrite".into(),
@@ -273,6 +300,7 @@ pub fn gdal_clip(gdal: &GdalEnvironment, input: &Path, aoi: &Path, out: &Path) -
             }
         } else {
             run_cmd(
+                gdal,
                 ogr2ogr,
                 &[
                     "-clipsrc".into(),
@@ -327,7 +355,7 @@ pub fn gdal_merge(gdal: &GdalEnvironment, input: &Path, out: &Path) -> Result<()
         }
         args.push(out.display().to_string());
         args.push(src.display().to_string());
-        run_cmd(ogr2ogr, &args)?;
+        run_cmd(gdal, ogr2ogr, &args)?;
     }
     println!("OK Merged {} dataset(s) -> {}", items.len(), out.display());
     Ok(())
@@ -362,7 +390,7 @@ pub fn gdal_pack_gpkg(gdal: &GdalEnvironment, input: &Path, out: &Path) -> Resul
         }
         args.push(out_gpkg.display().to_string());
         args.push(src.display().to_string());
-        run_cmd(ogr2ogr, &args)?;
+        run_cmd(gdal, ogr2ogr, &args)?;
         println!(
             "[{}/{}] OK   {} -> {}",
             idx + 1,
@@ -380,6 +408,7 @@ pub fn gdal_unpack(gdal: &GdalEnvironment, input: &Path, out_dir: &Path) -> Resu
     };
     fs::create_dir_all(out_dir)?;
     run_cmd(
+        gdal,
         ogr2ogr,
         &[
             "-f".into(),
