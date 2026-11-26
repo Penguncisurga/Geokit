@@ -170,8 +170,8 @@ geokit map broken-links ./04_Projects
 - **`geokit raster index --type ndvi|ndwi|ndbi|savi|nbr --band-a <b1> --band-b <b2> --out <idx.tif>`** — Hitung indeks citra satelit (NDVI, NDWI, NDBI, SAVI, NBR) lengkap dengan opsi ekspor poligon kelas.
 - **`geokit raster contour <dem.tif> --interval 25 --out <kontur.shp> [--index-every 4]`** — Buat garis kontur dari DEM lengkap dengan kolom `INDEX_KTR` (kontur indeks standar BIG RBI).
 - **`geokit fetch osm --aoi <batas.shp> --layers road,river,building --out <folder>`** — Unduh otomatis data OpenStreetMap (jalan/sungai/bangunan) langsung sesuai AOI UTM/WGS84 jadi GeoJSON (**100% native Rust, tanpa ArcGIS**).
-- **`geokit fetch dem --aoi <batas.shp> --out <folder>`** — Unduh gratis DEM SRTM 30m (`.hgt`) sesuai AOI (**100% native Rust, tanpa API key**).
-- **`geokit webmap <layer.shp|.geojson> --field KELAS --out <peta.html>`** — Ekspor shapefile UTM/WGS84 atau GeoJSON menjadi **1 file `.html` peta interaktif** (Leaflet + citra satelit + popup + slider transparansi + grafik luas) yang bisa dibuka di HP/browser tanpa install GIS!
+- **`geokit fetch dem --aoi <batas.shp> --out <folder> [--clip-aoi]`** — Unduh gratis DEM SRTM 30m (`.hgt`) sesuai AOI (**100% native Rust, tanpa API key**); tambahkan `--clip-aoi` untuk otomatis *mosaic*, *reproject* ke zona UTM AOI, dan *clip* langsung menjadi `dem_aoi_clipped.tif`!
+- **`geokit webmap <layer1.shp> [layer2.shp ...] --field KELAS --out <peta.html>`** — Ekspor satu atau banyak shapefile UTM/WGS84 sekaligus menjadi **1 file `.html` peta interaktif multi-layer** (Leaflet + *checkbox layer switcher* + citra satelit + popup + slider transparansi + grafik luas) yang bisa dibuka di HP/browser tanpa install GIS!
 - **`geokit hydro delineate <dem.tif> --out <folder> [--threshold 1000] [--pour-point <outlet.shp>]`** — Pipeline delineasi DAS otomatis: `Fill` → `FlowDirection` → `FlowAccumulation` → `Jaringan Sungai (.shp)` → `Poligon DAS (.shp)`.
 - **`geokit hydro basin <dem.tif> --out <folder>`** — Delineasi otomatis seluruh poligon *Basin* dari DEM tanpa perlu titik outlet.
 
@@ -228,29 +228,36 @@ Untuk **ArcMap 10.x (`.mxd` / Python 2.7)** — *100% fitur didukung penuh*:
 
 ---
 
-### 7. Kontrol Layar Live ArcMap 10.1 – 10.8 (`geokit live` & MCP `geokit_live`)
+### 7. Kontrol Layar Live ArcMap 10.1–10.8 & ArcGIS Pro 2.x/3.x (`geokit live` & MCP `geokit_live`)
 
-Kontrol jendela **ArcMap 10.1 – 10.8.2 yang sedang terbuka secara *real-time*** (seperti QGIS MCP) — termasuk **seluruh 800+ tool di ArcToolbox** — lewat Python Add-In `geokit-arcmap.esriaddin` bawaan!
+Kontrol jendela **ArcMap 10.1 – 10.8.2 ATAU ArcGIS Pro 2.x / 3.x yang sedang terbuka secara *real-time*** (seperti QGIS MCP) — termasuk **seluruh 800+ tool di ArcToolbox** — lewat protokol TCP lokal (`127.0.0.1:9877`) yang seragam!
 
-**3 Langkah Setup untuk AI Agent Mana Pun (Claude Desktop, Antigravity, Cursor, Claude Code, Codex):**
-
+**Setup ArcMap 10.x (Python Add-In otomatis nyala):**
 1. **Tutup ArcMap**, lalu jalankan sekali:
    ```bash
    geokit live install-addin
    ```
-2. **Daftarkan `geokit` di konfigurasi MCP aplikasi AI kamu** (`claude_desktop_config.json`, Cursor, Antigravity, Codex):
-   ```json
-   {
-     "mcpServers": {
-       "geokit": {
-         "command": "geokit",
-         "args": ["mcp"]
-       }
-     }
-   }
+2. **Buka ArcMap 10.x** — Live Bridge otomatis nyala di port `9877`.
+
+**Setup ArcGIS Pro 2.x / 3.x (Toolbox 1-klik `.pyt` + simbologi CIM):**
+1. Ekstrak skrip bridge & Toolbox 1-klik:
+   ```bash
+   geokit live install-pro-bridge
    ```
-   *(Untuk Claude Code CLI: `claude mcp add geokit -- geokit mcp`)*
-3. **Buka ArcMap 10.x** — Live Bridge otomatis nyala di port `9877`, langsung bisa kamu kontrol lewat chat AI!
+2. Di ArcGIS Pro Catalog -> Toolboxes -> Add Toolbox -> buka `%USERPROFILE%\.geokit\pro\GeoKit_Live_Bridge.pyt` lalu jalankan **`Start GeoKit Live Bridge`** (atau jalankan 1 baris skrip yang dicetak di Python Window ArcGIS Pro).
+
+**Hubungkan ke AI Agent Mana Pun (Claude Desktop, Antigravity, Cursor, Claude Code, Codex):**
+```json
+{
+  "mcpServers": {
+    "geokit": {
+      "command": "geokit",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+*(Untuk Claude Code CLI: `claude mcp add geokit -- geokit mcp`)*
 
 **Contoh Perintah Live:**
 
@@ -274,8 +281,8 @@ geokit live style batas_kab --preset boundary --outline-style admin-kab --outlin
 geokit live style dem_kendal --mode raster --preset terrain
 geokit live order sungai --position top
 geokit live labels "Batas Administrasi Desa" --show true --field NAMOBJ --halo true --font-size 8.5
-# Layout 7-bagian standar PerKaBIG No. 3/2016 (A4 atau A3: Grid UTM vertikal, Utara+Skala km, Inset Diagram Lokasi, Proyeksi, Pembuat, KETERANGAN, Sumber)
-geokit live layout --template perkabig --paper a4 --title "PETA KERAWANAN BENCANA" --region "KABUPATEN KENDAL" --author "Laboratorium SIG" --inset-layer ./batas_provinsi.shp --source "1. DEM SRTM 30m & Pengolahan GeoKit" --zoom-layer batas_kab --hide-legend "hillshade,Basemap" --grid true
+# Layout 7-bagian PerKaBIG No. 3/2016 Pro (A4/A3, 2 inset resmi, Arah Utara 'U' BIG, dual-grid ticks biru RBI!)
+geokit live layout --template perkabig --paper a4 --title "PETA KERAWANAN BENCANA" --region "KABUPATEN KENDAL" --author "Laboratorium SIG" --inset-petunjuk ./batas_kabupaten.shp --inset-layer ./batas_provinsi.shp --grid-mode dual --north-style big --source "1. DEM SRTM 30m & Pengolahan GeoKit" --zoom-layer batas_kab --hide-legend "hillshade,Basemap" --grid true
 geokit live select "Batas Administrasi Desa" --where "KELAS = 'Hutan'"
 geokit live export --out ./peta_perkabig.png --dpi 200
 geokit live save --out ./peta_kerja.mxd

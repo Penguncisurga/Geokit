@@ -12,6 +12,7 @@ use walkdir::WalkDir;
 use crate::engine::abs_string;
 
 const ARCMAP_ADDIN_BYTES: &[u8] = include_bytes!("../../addin/arcmap/geokit-arcmap.esriaddin");
+const PRO_BRIDGE_SCRIPT: &str = include_str!("../../scripts/arcgis_pro_live_bridge.py");
 
 #[derive(Debug, Subcommand)]
 pub enum LiveCommand {
@@ -20,6 +21,12 @@ pub enum LiveCommand {
         /// ArcMap version (e.g. 10.5, 10.7, 10.8; defaults to auto-detecting all installed Desktop10.x)
         #[arg(long)]
         version: Option<String>,
+    },
+    /// Extract the ArcGIS Pro 2.x/3.x Live-UI TCP Bridge script & 1-click .pyt Toolbox (works with `geokit live`!)
+    InstallProBridge {
+        /// Optional target directory (defaults to %USERPROFILE%\.geokit\pro)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
     },
     /// Ping the live ArcMap 10.x window to check connection and active map state
     Ping {
@@ -468,6 +475,113 @@ fn install_addin(version: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn install_pro_bridge(out: Option<&Path>) -> Result<()> {
+    let target_dir = match out {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            let home = std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .context("Cannot determine home directory; pass `--out <dir>` explicitly.")?;
+            PathBuf::from(home).join(".geokit").join("pro")
+        }
+    };
+    std::fs::create_dir_all(&target_dir)
+        .with_context(|| format!("Failed to create {}", target_dir.display()))?;
+
+    let script_path = target_dir.join("geokit_pro_bridge.py");
+    std::fs::write(&script_path, PRO_BRIDGE_SCRIPT)
+        .with_context(|| format!("Failed to write {}", script_path.display()))?;
+
+    let pyt_path = target_dir.join("GeoKit_Live_Bridge.pyt");
+    let pyt_content = r#"# -*- coding: utf-8 -*-
+import os
+import sys
+import arcpy
+
+
+def _load_bridge():
+    folder = os.path.dirname(os.path.abspath(__file__))
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    import geokit_pro_bridge
+    return geokit_pro_bridge
+
+
+class Toolbox(object):
+    def __init__(self):
+        self.label = "GeoKit Live Bridge (ArcGIS Pro)"
+        self.alias = "geokit_live_bridge"
+        self.tools = [StartGeoKitBridge, StopGeoKitBridge]
+
+
+class StartGeoKitBridge(object):
+    def __init__(self):
+        self.label = "Start GeoKit Live Bridge"
+        self.description = "Start the GeoKit Live-UI TCP bridge inside ArcGIS Pro so `geokit live` and AI MCP agents can control the open map in real time."
+        self.canRunInBackground = False
+
+    def getParameterInfo(self):
+        p_port = arcpy.Parameter(
+            displayName="TCP Port",
+            name="port",
+            datatype="GPLong",
+            parameterType="Optional",
+            direction="Input",
+        )
+        p_port.value = 9877
+        return [p_port]
+
+    def execute(self, parameters, messages):
+        port = int(parameters[0].value or 9877)
+        bridge = _load_bridge()
+        bridge.start_bridge(port=port)
+        messages.addMessage(f"[geokit] ArcGIS Pro Live-UI Bridge listening on 127.0.0.1:{port}")
+        messages.addMessage("Test from terminal/AI: geokit live ping")
+
+
+class StopGeoKitBridge(object):
+    def __init__(self):
+        self.label = "Stop GeoKit Live Bridge"
+        self.description = "Stop the running GeoKit Live-UI TCP bridge inside ArcGIS Pro."
+        self.canRunInBackground = False
+
+    def getParameterInfo(self):
+        return []
+
+    def execute(self, parameters, messages):
+        bridge = _load_bridge()
+        bridge.stop_bridge()
+        messages.addMessage("[geokit] ArcGIS Pro Live-UI Bridge stopped.")
+"#;
+    std::fs::write(&pyt_path, pyt_content)
+        .with_context(|| format!("Failed to write {}", pyt_path.display()))?;
+
+    println!(
+        "{} Extracted ArcGIS Pro Live Bridge -> {}",
+        "[OK]".green().bold(),
+        script_path.display()
+    );
+    println!(
+        "{} Generated 1-click ArcGIS Pro Toolbox -> {}",
+        "[OK]".green().bold(),
+        pyt_path.display()
+    );
+    println!(
+        "\n{} How to start inside ArcGIS Pro 2.x / 3.x:",
+        "Next step:".cyan().bold()
+    );
+    println!(
+        "  Option 1 (1-click Toolbox): In ArcGIS Pro Catalog -> Toolboxes -> Add Toolbox -> select `{}` -> run `Start GeoKit Live Bridge`.",
+        pyt_path.display()
+    );
+    println!(
+        "  Option 2 (Python Window):   Run:\n    import sys; sys.path.insert(0, r\"{}\"); import geokit_pro_bridge; geokit_pro_bridge.start_bridge()",
+        target_dir.display()
+    );
+    println!("  Then verify from terminal or AI agent: `geokit live ping`");
+    Ok(())
+}
+
 const LIVE_ADD_EXTS: &[&str] = &["shp", "lyr", "tif", "tiff", "img", "ecw", "jp2"];
 
 /// Fixes common Windows Explorer copy-paste prefixes like
@@ -616,6 +730,7 @@ fn resolve_live_add_targets(raw: &Path) -> Result<Vec<PathBuf>> {
 pub fn run(cmd: LiveCommand) -> Result<()> {
     let resp = match cmd {
         LiveCommand::InstallAddin { version } => return install_addin(version.as_deref()),
+        LiveCommand::InstallProBridge { out } => return install_pro_bridge(out.as_deref()),
         LiveCommand::Ping { port } => send_live_request(port, &json!({ "action": "ping" }))?,
         LiveCommand::Layers { port } => {
             send_live_request(port, &json!({ "action": "list_layers" }))?

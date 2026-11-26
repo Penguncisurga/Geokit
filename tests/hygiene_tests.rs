@@ -394,3 +394,37 @@ fn test_gp_summary_and_webmap_native() {
     assert!(html_text.contains("Uji WebMap"));
     assert!(html_text.contains("Tinggi"));
 }
+
+#[test]
+fn test_install_pro_bridge_extracts_script_and_pyt() {
+    let dir = tempdir().unwrap();
+    let out_dir = dir.path().join("pro_bridge");
+
+    let res = geokit_bin()
+        .args([
+            "live",
+            "install-pro-bridge",
+            "--out",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        res.status.success(),
+        "install-pro-bridge stderr: {}",
+        String::from_utf8_lossy(&res.stderr)
+    );
+
+    let py_path = out_dir.join("geokit_pro_bridge.py");
+    let pyt_path = out_dir.join("GeoKit_Live_Bridge.pyt");
+    assert!(py_path.is_file(), "geokit_pro_bridge.py missing");
+    assert!(pyt_path.is_file(), "GeoKit_Live_Bridge.pyt missing");
+
+    let py_src = fs::read_to_string(&py_path).unwrap();
+    assert!(py_src.contains("def start_bridge("));
+    assert!(py_src.contains("ArcGISProject"));
+
+    let pyt_src = fs::read_to_string(&pyt_path).unwrap();
+    assert!(pyt_src.contains("StartGeoKitBridge"));
+    assert!(pyt_src.contains("StopGeoKitBridge"));
+}

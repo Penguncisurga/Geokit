@@ -4,6 +4,20 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-11-27
+
+### Added
+- **ArcGIS Pro 2.x / 3.x Live-UI TCP Bridge (`geokit live install-pro-bridge`)**:
+  - Brings real-time `geokit live` & MCP `geokit_live` control (`ping`, `layers`, `layer-info`, `add`, `remove`, `rename`, `visible`, `definition-query`, `symbology`, `style` with native CIM symbology, `labels`, `zoom`, `order`, `select`, `clear-selection`, `export`, `save`, `tools`, `tool-usage`, `run-gp`) to **ArcGIS Pro 2.x / 3.x** using the exact same `127.0.0.1:9877` protocol as ArcMap!
+  - Extracts `geokit_pro_bridge.py` plus a 1-click **`GeoKit_Live_Bridge.pyt`** Toolbox (`Start GeoKit Live Bridge` / `Stop GeoKit Live Bridge`) into `%USERPROFILE%\.geokit\pro\`.
+- **1-Command Auto-Mosaic, UTM Reproject & AOI Clip for SRTM DEM (`geokit fetch dem --clip-aoi`)**:
+  - `geokit fetch dem --aoi <batas.shp> --clip-aoi [--epsg 32749] --out <dir>` now automatically reuses cached `.hgt` tiles, mosaics multi-tile AOIs, auto-detects the AOI's UTM EPSG from `.prj`, reprojects to UTM, and clips strictly to the AOI boundary into `dem_aoi_clipped.tif`!
+- **Native `.hgt` SRTM Raster Support**: Added `.hgt` to `RASTER_EXTS` in both the ArcGIS Pro and ArcMap batch runners so SRTM elevation tiles work directly with `gp info`, `gp project`, `gp clip`, `raster mosaic`, `raster terrain`, and `raster contour`.
+- **MCP & Automated Tests**: Exposed `install-pro-bridge` on `geokit_live` and `clip_aoi`/`epsg` on `geokit_fetch`; added integration test `test_install_pro_bridge_extracts_script_and_pyt` (16/16 tests passing).
+
+### Fixed
+- **`geokit raster index --classes` RemapRange Overlap**: Fixed an off-by-0.001 boundary overlap in `cmd_raster_index` that triggered ArcPy `ERROR 010474` during N-class reclassification, and added automatic `AREA_HA` calculation on classified polygon output (`--polygon-out`).
+
 ## [2.4.0] - 2026-11-27
 
 ### Added

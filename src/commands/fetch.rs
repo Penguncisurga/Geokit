@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::gis::shp::read_wgs84_bbox;
+use crate::gis::shp::{detect_utm_from_prj, read_wgs84_bbox};
 
 #[derive(Debug, Subcommand)]
 pub enum FetchCommand {
@@ -25,7 +25,7 @@ pub enum FetchCommand {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Download free 30m SRTM elevation tiles (.hgt) from AWS Terrain Tiles covering an AOI (no API key or ArcGIS needed!)
+    /// Download free 30m SRTM elevation tiles (.hgt) from AWS Terrain Tiles covering an AOI (optional --clip-aoi auto-mosaics, reprojects UTM, and clips!)
     Dem {
         /// Optional AOI polygon (.shp or .geojson) to extract bounding box automatically
         #[arg(long)]
@@ -33,9 +33,15 @@ pub enum FetchCommand {
         /// Explicit WGS84 bounding box: "min_lon,min_lat,max_lon,max_lat"
         #[arg(long)]
         bbox: Option<String>,
-        /// Output directory for downloaded 30m SRTM .hgt DEM tiles
+        /// Output directory for downloaded 30m SRTM .hgt DEM tiles (and clipped GeoTIFF when --clip-aoi is set)
         #[arg(short, long)]
         out: PathBuf,
+        /// Auto-mosaic, reproject to AOI UTM zone (or --epsg), and clip strictly to --aoi into dem_aoi_clipped.tif
+        #[arg(long)]
+        clip_aoi: bool,
+        /// Target EPSG code when --clip-aoi is set (auto-detected from AOI .prj UTM zone if omitted)
+        #[arg(long)]
+        epsg: Option<u32>,
     },
 }
 
@@ -280,7 +286,13 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
             }
             Ok(())
         }
-        FetchCommand::Dem { aoi, bbox, out } => {
+        FetchCommand::Dem {
+            aoi,
+            bbox,
+            out,
+            clip_aoi,
+            epsg,
+        } => {
             let (min_lon, min_lat, max_lon, max_lat) =
                 resolve_bbox(aoi.as_deref(), bbox.as_deref())?;
             fs::create_dir_all(&out)?;
@@ -289,7 +301,7 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
             let lon_start = min_lon.floor() as i32;
             let lon_end = max_lon.floor() as i32;
 
-            let mut downloaded = 0usize;
+            let mut downloaded_tiles: Vec<PathBuf> = Vec::new();
             for lat in lat_start..=lat_end {
                 let ns = if lat >= 0 {
                     format!("N{:02}", lat)
@@ -308,24 +320,146 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
                     );
                     let gz_path = out.join(format!("{tile}.hgt.gz"));
                     let hgt_path = out.join(format!("{tile}.hgt"));
-                    println!(
-                        "{} Downloading SRTM 30m tile {tile}...",
-                        "[fetch dem]".cyan().bold()
-                    );
-                    curl_download(&url, &gz_path)?;
-                    decompress_gz(&gz_path, &hgt_path)?;
-                    println!(
-                        "{} SRTM 30m DEM ready -> {}",
-                        "[OK]".green().bold(),
-                        hgt_path.display()
-                    );
-                    downloaded += 1;
+                    if hgt_path.is_file() {
+                        println!(
+                            "{} Reusing existing SRTM tile -> {}",
+                            "[fetch dem]".cyan().bold(),
+                            hgt_path.display()
+                        );
+                    } else {
+                        println!(
+                            "{} Downloading SRTM 30m tile {tile}...",
+                            "[fetch dem]".cyan().bold()
+                        );
+                        curl_download(&url, &gz_path)?;
+                        decompress_gz(&gz_path, &hgt_path)?;
+                        println!(
+                            "{} SRTM 30m DEM ready -> {}",
+                            "[OK]".green().bold(),
+                            hgt_path.display()
+                        );
+                    }
+                    downloaded_tiles.push(hgt_path);
                 }
             }
+
+            if clip_aoi {
+                let Some(aoi_path) = aoi.as_deref() else {
+                    bail!("--clip-aoi requires --aoi <polygon.shp>.");
+                };
+                let target_epsg = epsg.or_else(|| {
+                    detect_utm_from_prj(aoi_path).map(|(z, south)| {
+                        if south {
+                            32700 + z as u32
+                        } else {
+                            32600 + z as u32
+                        }
+                    })
+                });
+                let exe = std::env::current_exe().context("Cannot locate geokit binary")?;
+
+                // Clean any previous temp/output TIFFs so mosaic only sees the downloaded .hgt tiles
+                let merged_tmp = out.join("_merged_srtm.tif");
+                let clipped_out = out.join("dem_aoi_clipped.tif");
+                let proj_tmp = target_epsg.map(|code| out.join(format!("_srtm_epsg{code}.tif")));
+                for stale in [Some(&merged_tmp), proj_tmp.as_ref(), Some(&clipped_out)]
+                    .into_iter()
+                    .flatten()
+                {
+                    let _ = fs::remove_file(stale);
+                }
+
+                // Step 1: Mosaic if multiple tiles
+                let working_dem = if downloaded_tiles.len() > 1 {
+                    println!(
+                        "{} Mosaicking {} SRTM tiles...",
+                        "[fetch dem]".cyan().bold(),
+                        downloaded_tiles.len()
+                    );
+                    let st = Command::new(&exe)
+                        .args([
+                            "raster",
+                            "mosaic",
+                            &out.to_string_lossy(),
+                            "--out",
+                            &merged_tmp.to_string_lossy(),
+                        ])
+                        .status()?;
+                    if !st.success() {
+                        bail!(
+                            "Auto-mosaic failed (ensure ArcGIS Pro, ArcMap, or GDAL is installed)."
+                        );
+                    }
+                    merged_tmp.clone()
+                } else {
+                    downloaded_tiles[0].clone()
+                };
+
+                // Step 2: Reproject to AOI UTM EPSG if detected/provided
+                let projected_dem =
+                    if let (Some(code), Some(ref proj_out)) = (target_epsg, &proj_tmp) {
+                        println!(
+                            "{} Reprojecting DEM to EPSG:{code}...",
+                            "[fetch dem]".cyan().bold()
+                        );
+                        let st = Command::new(&exe)
+                            .args([
+                                "gp",
+                                "project",
+                                &working_dem.to_string_lossy(),
+                                "--epsg",
+                                &code.to_string(),
+                                "--out",
+                                &proj_out.to_string_lossy(),
+                            ])
+                            .status()?;
+                        if !st.success() {
+                            bail!("Auto-reproject to EPSG:{code} failed.");
+                        }
+                        proj_out.clone()
+                    } else {
+                        working_dem.clone()
+                    };
+
+                // Step 3: Clip strictly to AOI polygon
+                println!(
+                    "{} Clipping DEM to AOI {}...",
+                    "[fetch dem]".cyan().bold(),
+                    aoi_path.display()
+                );
+                let st = Command::new(&exe)
+                    .args([
+                        "gp",
+                        "clip",
+                        &projected_dem.to_string_lossy(),
+                        "--aoi",
+                        &aoi_path.to_string_lossy(),
+                        "--out",
+                        &clipped_out.to_string_lossy(),
+                    ])
+                    .status()?;
+                if !st.success() {
+                    bail!("Auto-clip to AOI failed.");
+                }
+
+                // Clean up intermediate rasters so the output folder stays tidy
+                let _ = fs::remove_file(&merged_tmp);
+                if let Some(ref proj_out) = proj_tmp {
+                    let _ = fs::remove_file(proj_out);
+                }
+
+                println!(
+                    "{} Ready-to-use UTM clipped DEM -> {}",
+                    "[OK]".green().bold(),
+                    clipped_out.display()
+                );
+                return Ok(());
+            }
+
             println!(
-                "{} Downloaded {} SRTM 30m tile(s). Tip: run `geokit raster mosaic` / `geokit gp clip` to clip to your exact AOI.",
+                "{} Downloaded {} SRTM 30m tile(s). Tip: add `--clip-aoi` to auto-reproject & clip to your AOI!",
                 "Done:".green().bold(),
-                downloaded
+                downloaded_tiles.len()
             );
             Ok(())
         }

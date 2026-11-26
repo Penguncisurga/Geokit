@@ -19,7 +19,7 @@ except ImportError as exc:
 arcpy.env.overwriteOutput = True
 
 VECTOR_EXTS = set([".shp"])
-RASTER_EXTS = set([".tif", ".tiff", ".img", ".jp2", ".ecw", ".asc"])
+RASTER_EXTS = set([".tif", ".tiff", ".img", ".jp2", ".ecw", ".asc", ".hgt"])
 
 
 def sanitize_gdb_name(name):
@@ -1421,8 +1421,18 @@ def cmd_raster_index(payload):
     poly_out = payload.get("polygon_out")
     if n_classes or poly_out:
         n_cls = int(n_classes or 5)
+        try:
+            arcpy.CalculateStatistics_management(out_r)
+            rmin = float(str(arcpy.GetRasterProperties_management(out_r, "MINIMUM").getOutput(0)).replace(",", "."))
+            rmax = float(str(arcpy.GetRasterProperties_management(out_r, "MAXIMUM").getOutput(0)).replace(",", "."))
+        except Exception:
+            rmin, rmax = -1.0, 1.0
         step = 2.0 / float(n_cls)
-        ranges = [[-1.001 + i * step, -1.0 + (i + 1) * step + (0.001 if i == n_cls - 1 else 0.0), i + 1] for i in range(n_cls)]
+        ranges = []
+        for i in range(n_cls):
+            lo = (min(-1.0, rmin) - 0.001) if i == 0 else round(-1.0 + i * step, 6)
+            hi = (max(1.0, rmax) + 0.001) if i == n_cls - 1 else round(-1.0 + (i + 1) * step, 6)
+            ranges.append([lo, hi, i + 1])
         cls_tif = os.path.join(arcpy.env.scratchFolder, "geokit_idx_cls.tif")
         if arcpy.Exists(cls_tif):
             arcpy.Delete_management(cls_tif)
@@ -1439,10 +1449,15 @@ def cmd_raster_index(payload):
             arcpy.RasterToPolygon_conversion(cls_tif, raw_poly, "SIMPLIFY", "Value")
             arcpy.Dissolve_management(raw_poly, poly_out, ["gridcode"])
             arcpy.AddField_management(poly_out, "KELAS", "TEXT", field_length=32)
+            arcpy.AddField_management(poly_out, "AREA_HA", "DOUBLE")
             with arcpy.da.UpdateCursor(poly_out, ["gridcode", "KELAS"]) as cur:
                 for row in cur:
                     row[1] = "%s Kelas %s" % (idx_type.upper(), row[0])
                     cur.updateRow(row)
+            try:
+                arcpy.CalculateField_management(poly_out, "AREA_HA", "!shape.area@hectares!", "PYTHON_9.3")
+            except Exception:
+                pass
             print("OK Classified %s polygon (%d classes) -> %s" % (idx_type.upper(), n_cls, poly_out))
     return 0
 

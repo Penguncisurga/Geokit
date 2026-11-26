@@ -407,7 +407,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_live",
-            "description": "Control an open ArcMap 10.1-10.8 window in real time via the GeoKit Live-UI Add-In bridge. Supports full ArcToolbox discovery (tools/tool-usage) and execution (run-gp with auto extension checkout), plus live cartography (add, remove, visible, zoom, select, clear-selection, layer-info, definition-query, symbology, style, order, layout, labels, export, save).",
+            "description": "Control an open ArcMap 10.1-10.8 OR ArcGIS Pro 2.x/3.x window in real time via the GeoKit Live-UI TCP bridge. Supports full ArcToolbox discovery (tools/tool-usage) and execution (run-gp with auto extension checkout), plus live cartography (add, remove, visible, zoom, select, clear-selection, layer-info, definition-query, symbology, style, rename, order, layout, labels, export, save, install-addin, install-pro-bridge).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -435,7 +435,8 @@ fn tool_definitions() -> Value {
                             "tools",
                             "tool-usage",
                             "run-gp",
-                            "install-addin"
+                            "install-addin",
+                            "install-pro-bridge"
                         ]
                     },
                     "path": { "type": "string", "description": "Dataset path or folder (for add)" },
@@ -550,7 +551,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_fetch",
-            "description": "Download free public spatial data (OpenStreetMap roads/rivers/buildings/boundary/poi or 30m SRTM DEM tiles) for any AOI shapefile, GeoJSON, or WGS84 bbox (100% native Rust, zero ArcGIS needed).",
+            "description": "Download free public spatial data (OpenStreetMap roads/rivers/buildings/boundary/poi or 30m SRTM DEM tiles with optional auto-mosaic, UTM reproject & AOI clip) for any AOI shapefile, GeoJSON, or WGS84 bbox.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -558,6 +559,8 @@ fn tool_definitions() -> Value {
                     "aoi": { "type": "string", "description": "Optional AOI .shp or .geojson file path" },
                     "bbox": { "type": "string", "description": "Optional WGS84 bbox 'min_lon,min_lat,max_lon,max_lat'" },
                     "layers": { "type": "string", "description": "Comma-separated OSM layers: road,river,building,boundary,poi (for osm)" },
+                    "clip_aoi": { "type": "boolean", "description": "Auto-mosaic, reproject to AOI UTM zone, and clip SRTM DEM into dem_aoi_clipped.tif (for dem)" },
+                    "epsg": { "type": "integer", "description": "Optional target EPSG code override when clip_aoi is true (e.g. 32749)" },
                     "out": { "type": "string", "description": "Output directory path" }
                 },
                 "required": ["source", "out"]
@@ -1131,6 +1134,12 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(lyrs) = str_arg(args, "layers") {
                 cli_args.extend(["--layers".into(), lyrs.into()]);
+            }
+            if bool_arg(args, "clip_aoi") {
+                cli_args.push("--clip-aoi".into());
+            }
+            if let Some(epsg) = args.get("epsg").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--epsg".into(), epsg.to_string()]);
             }
         }
         "geokit_webmap" => {
