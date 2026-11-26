@@ -28,10 +28,33 @@ GIS projects quickly accumulate messy folders, broken shapefiles, illegal filena
 
 ## Installation
 
-### Option 1: Download Prebuilt Binary
+### Option 1: Install with Your AI Assistant *(Easiest for Beginners!)*
+Just copy-paste this prompt into **Claude Code, Antigravity, Cursor, Codex, or Gemini CLI**:
+
+```text
+Install geokit from https://github.com/Penguncisurga/Geokit for me:
+1. Run the one-line installer (`install.ps1` on Windows or `install.sh` on Linux/macOS) to download the latest binary and add it to PATH.
+2. Run `geokit doctor` to verify my ArcGIS Pro, ArcMap 10.x, or QGIS/GDAL setup.
+3. If ArcMap 10.x is installed, make sure ArcMap is closed and run `geokit live install-addin`.
+4. Register `geokit mcp` in my MCP config so you can control my GIS tools directly.
+```
+
+### Option 2: One-Line Installer *(No Rust Required)*
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Penguncisurga/Geokit/main/install.ps1 | iex
+```
+
+**Linux / macOS (Apple Silicon):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Penguncisurga/Geokit/main/install.sh | sh
+```
+
+### Option 3: Download Prebuilt Binary Manually
 Download the latest binary (`geokit-windows-x86_64.exe`, `geokit-linux-x86_64`, or `geokit-macos-arm64`) and verify against `SHA256SUMS.txt` from [GitHub Releases](https://github.com/Penguncisurga/Geokit/releases), rename to `geokit.exe` (or `geokit`), and place it on your `PATH`.
 
-### Option 2: Build from Source
+### Option 4: Build from Source
 Requires [Rust](https://rustup.rs/):
 
 ```bash

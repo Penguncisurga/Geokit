@@ -28,10 +28,33 @@ Proyek GIS sering dipenuhi folder yang berantakan, shapefile yang komponennya hi
 
 ## Instalasi
 
-### Opsi 1: Unduh Binary Siap Pakai
+### Opsi 1: Minta AI Kamu yang Pasangkan *(Paling Mudah untuk Pemula!)*
+Cukup *copy-paste* prompt ini ke **Claude Code, Antigravity, Cursor, Codex, atau Gemini CLI**:
+
+```text
+Tolong pasangkan geokit dari https://github.com/Penguncisurga/Geokit:
+1. Jalankan one-line installer (`install.ps1` di Windows atau `install.sh` di Linux/macOS) agar binary terbaru terpasang ke PATH.
+2. Jalankan `geokit doctor` untuk mengecek ArcGIS Pro, ArcMap 10.x, atau QGIS/GDAL di komputer saya.
+3. Jika ArcMap 10.x terdeteksi, pastikan ArcMap sedang tutup lalu jalankan `geokit live install-addin`.
+4. Daftarkan `geokit mcp` di konfigurasi MCP saya supaya kamu bisa langsung mengontrol ArcMap/ArcGIS saya.
+```
+
+### Opsi 2: Installer 1-Baris *(Tanpa Install Rust)*
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Penguncisurga/Geokit/main/install.ps1 | iex
+```
+
+**Linux / macOS (Apple Silicon):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Penguncisurga/Geokit/main/install.sh | sh
+```
+
+### Opsi 3: Unduh Binary Manual
 Unduh binary terbaru (`geokit-windows-x86_64.exe`, `geokit-linux-x86_64`, atau `geokit-macos-arm64`) di halaman [GitHub Releases](https://github.com/Penguncisurga/Geokit/releases), ubah namanya menjadi `geokit.exe`, lalu simpan di folder yang masuk `PATH`.
 
-### Opsi 2: Build dari Source
+### Opsi 4: Build dari Source
 Membutuhkan [Rust](https://rustup.rs/):
 
 ```bash
