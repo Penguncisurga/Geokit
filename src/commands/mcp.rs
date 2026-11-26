@@ -173,7 +173,7 @@ fn get_prompt(name: &str, args: &Value) -> Option<Value> {
                     - Gunakan `geokit_gp` (`action=\"classify\"`) pada `TOTAL_SKOR` untuk membuat kolom `KELAS_RAWAN` (mis. Rendah / Sedang / Tinggi).\n\
                     - Hitung luas per kelas dengan `geokit_gp` (`action=\"dissolve\"`, `field=\"KELAS_RAWAN\"`) dan `action=\"calc-geom\"` (`unit=\"ha\"`).\n\
                  7. **Quality Assurance**: jalankan `geokit_qa` pada folder output untuk memastikan CRS seragam, geometri valid, dan tidak ada NULL.\n\
-                 8. **Tampilkan & Laporan**: jika ArcMap sedang terbuka (`geokit_live` `action=\"ping\"`), tambahkan hasil ke layar (`action=\"add\"`), zoom, dan ekspor pratinjau PNG. Ringkas tabel luas (Ha & %) untuk user."
+                 8. **Simbologi Proper & Tampilkan**: jika ArcMap sedang terbuka (`geokit_live` `action=\"ping\"`), tambahkan hasil ke layar (`action=\"add\"`), **WAJIB beri warna proper tanpa outline** dengan `geokit_live` (`action=\"style\"`, `field=\"KELAS_RWN\"`, `preset=\"hazard\"`, `transparency=30`), atur urutan layer (`action=\"order\"`), zoom, dan ekspor pratinjau PNG. Untuk proyek ArcGIS Pro `.aprx`, gunakan `geokit_map_links` (`action=\"style\"`) & `geokit_layout` (`action=\"update\"` lalu `export`). Ringkas tabel luas (Ha & %) untuk user."
             ),
         ),
         "peta_persebaran" => (
@@ -317,16 +317,20 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_layout",
-            "description": "List or batch export layouts from ArcGIS Pro (.aprx) or ArcMap (.mxd) projects to PDF, PNG, or JPG.",
+            "description": "List, update text/extent, or batch export layouts from ArcGIS Pro (.aprx) or ArcMap (.mxd) projects to PDF, PNG, or JPG.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "export"] },
+                    "action": { "type": "string", "enum": ["list", "export", "update"] },
                     "input": { "type": "string", "description": "Path to .aprx, .mxd, or folder" },
-                    "out": { "type": "string", "description": "Output directory (for export)" },
+                    "out": { "type": "string", "description": "Output directory (for export) or copy path (for update)" },
                     "format": { "type": "string", "enum": ["pdf", "png", "jpg"] },
                     "dpi": { "type": "integer", "description": "Export DPI (default: 300)" },
                     "filter": { "type": "string", "description": "Filter layout names (for .aprx)" },
+                    "title": { "type": "string", "description": "Map title text (for update)" },
+                    "subtitle": { "type": "string", "description": "Map subtitle text (for update)" },
+                    "source": { "type": "string", "description": "Data source credit text (for update)" },
+                    "zoom_layer": { "type": "string", "description": "Layer name to zoom map frame to (for update)" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap"] }
                 },
                 "required": ["action", "input"]
@@ -334,15 +338,20 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_map_links",
-            "description": "Detect or fix broken layer data sources in ArcGIS Pro (.aprx) or ArcMap (.mxd) projects.",
+            "description": "Detect/fix broken links in .aprx/.mxd OR add layers and apply automatic publication-grade symbology (hazard/hazard5/blue/earth/category, no-outline, transparency) in ArcGIS Pro (.aprx).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["broken-links", "fix-links"] },
+                    "action": { "type": "string", "enum": ["broken-links", "fix-links", "add-layer", "style"] },
                     "input": { "type": "string", "description": "Path to .aprx, .mxd, or folder" },
                     "find": { "type": "string", "description": "Old path prefix to find (for fix-links)" },
                     "replace": { "type": "string", "description": "New path prefix (for fix-links)" },
-                    "out": { "type": "string", "description": "Optional output copy path (for fix-links)" },
+                    "layer": { "type": "string", "description": "Layer path (for add-layer) or layer name (for style)" },
+                    "field": { "type": "string", "description": "Attribute field to symbolize (for style)" },
+                    "preset": { "type": "string", "enum": ["hazard", "hazard5", "blue", "earth", "category"], "description": "Color ramp preset (for style)" },
+                    "transparency": { "type": "integer", "description": "Transparency 0-100 (for style, default: 25)" },
+                    "classes": { "type": "string", "description": "Optional comma-separated ordered class names (for style)" },
+                    "out": { "type": "string", "description": "Optional output copy path" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap"] }
                 },
                 "required": ["action", "input"]
@@ -397,6 +406,9 @@ fn tool_definitions() -> Value {
                             "visible",
                             "definition-query",
                             "symbology",
+                            "style",
+                            "order",
+                            "layout",
                             "labels",
                             "zoom",
                             "select",
@@ -409,10 +421,19 @@ fn tool_definitions() -> Value {
                             "install-addin"
                         ]
                     },
-                    "path": { "type": "string", "description": "Dataset path (for add)" },
+                    "path": { "type": "string", "description": "Dataset path or folder (for add)" },
                     "layer": { "type": "string", "description": "Layer name in ArcMap TOC" },
                     "show": { "type": "boolean", "description": "True/false toggle (for visible or labels)" },
-                    "field": { "type": "string", "description": "Label field name e.g. NAMOBJ (for labels)" },
+                    "field": { "type": "string", "description": "Field name e.g. KELAS_RWN or NAMOBJ (for style or labels)" },
+                    "preset": { "type": "string", "enum": ["hazard", "hazard5", "blue", "earth", "category"], "description": "Built-in borderless color preset (for style)" },
+                    "transparency": { "type": "integer", "description": "Transparency 0-100 (for style)" },
+                    "classes": { "type": "string", "description": "Optional comma-separated ordered class names (for style)" },
+                    "position": { "type": "string", "enum": ["top", "bottom"], "description": "Layer stack position (for order)" },
+                    "view": { "type": "string", "enum": ["layout", "data"], "description": "View mode (for layout)" },
+                    "title": { "type": "string", "description": "Layout title text (for layout)" },
+                    "subtitle": { "type": "string", "description": "Layout subtitle text (for layout)" },
+                    "source": { "type": "string", "description": "Layout source credit text (for layout)" },
+                    "zoom_layer": { "type": "string", "description": "Layer name to zoom to (for layout)" },
                     "lyr": { "type": "string", "description": "Path to .lyr symbology file (for symbology)" },
                     "where": { "type": "string", "description": "SQL WHERE clause (for select or definition-query)" },
                     "out": { "type": "string", "description": "Output file path (for export or save)" },
@@ -649,6 +670,18 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             if let Some(f) = str_arg(args, "filter") {
                 cli_args.extend(["--filter".into(), f.into()]);
             }
+            if let Some(t) = str_arg(args, "title") {
+                cli_args.extend(["--title".into(), t.into()]);
+            }
+            if let Some(st) = str_arg(args, "subtitle") {
+                cli_args.extend(["--subtitle".into(), st.into()]);
+            }
+            if let Some(s) = str_arg(args, "source") {
+                cli_args.extend(["--source".into(), s.into()]);
+            }
+            if let Some(zl) = str_arg(args, "zoom_layer") {
+                cli_args.extend(["--zoom-layer".into(), zl.into()]);
+            }
         }
         "geokit_map_links" => {
             let (Some(action), Some(input)) = (str_arg(args, "action"), str_arg(args, "input"))
@@ -661,6 +694,21 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(r) = str_arg(args, "replace") {
                 cli_args.extend(["--replace".into(), r.into()]);
+            }
+            if let Some(l) = str_arg(args, "layer") {
+                cli_args.extend(["--layer".into(), l.into()]);
+            }
+            if let Some(fld) = str_arg(args, "field") {
+                cli_args.extend(["--field".into(), fld.into()]);
+            }
+            if let Some(pr) = str_arg(args, "preset") {
+                cli_args.extend(["--preset".into(), pr.into()]);
+            }
+            if let Some(tr) = args.get("transparency").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--transparency".into(), tr.to_string()]);
+            }
+            if let Some(cl) = str_arg(args, "classes") {
+                cli_args.extend(["--classes".into(), cl.into()]);
             }
             if let Some(out) = str_arg(args, "out") {
                 cli_args.extend(["--out".into(), out.into()]);
@@ -732,6 +780,33 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(field) = str_arg(args, "field") {
                 cli_args.extend(["--field".into(), field.into()]);
+            }
+            if let Some(pr) = str_arg(args, "preset") {
+                cli_args.extend(["--preset".into(), pr.into()]);
+            }
+            if let Some(tr) = args.get("transparency").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--transparency".into(), tr.to_string()]);
+            }
+            if let Some(cl) = str_arg(args, "classes") {
+                cli_args.extend(["--classes".into(), cl.into()]);
+            }
+            if let Some(pos) = str_arg(args, "position") {
+                cli_args.extend(["--position".into(), pos.into()]);
+            }
+            if let Some(v) = str_arg(args, "view") {
+                cli_args.extend(["--view".into(), v.into()]);
+            }
+            if let Some(t) = str_arg(args, "title") {
+                cli_args.extend(["--title".into(), t.into()]);
+            }
+            if let Some(st) = str_arg(args, "subtitle") {
+                cli_args.extend(["--subtitle".into(), st.into()]);
+            }
+            if let Some(s) = str_arg(args, "source") {
+                cli_args.extend(["--source".into(), s.into()]);
+            }
+            if let Some(zl) = str_arg(args, "zoom_layer") {
+                cli_args.extend(["--zoom-layer".into(), zl.into()]);
             }
             if let Some(lyr) = str_arg(args, "lyr") {
                 cli_args.extend(["--lyr".into(), lyr.into()]);

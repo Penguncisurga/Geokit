@@ -794,6 +794,8 @@ def cmd_gp_run(payload):
     auto_checkout_extension(tool)
     fn = getattr(arcpy, tool, None)
     if fn is None:
+        fn = getattr(arcpy.gp, tool, None)
+    if fn is None:
         print(f"Unknown ArcPy tool '{tool}'. Run `geokit gp tools <keyword>` to search.", file=sys.stderr)
         return 1
     res = fn(*args)
@@ -866,6 +868,148 @@ def cmd_map_add_layer(payload):
     else:
         aprx.save()
         print(f"OK Added '{added.name}' to map '{m.name}' and saved -> {aprx_path}")
+    return 0
+
+
+def cmd_map_style(payload):
+    aprx_path = payload["input"]
+    aprx = arcpy.mp.ArcGISProject(aprx_path)
+    map_name = payload.get("map_name")
+    maps = aprx.listMaps(map_name) if map_name else aprx.listMaps()
+    if not maps:
+        print("No matching map found in .aprx project.", file=sys.stderr)
+        return 1
+    m = maps[0]
+    target_name = (payload.get("layer") or "").lower()
+    lyr = None
+    for cand in m.listLayers():
+        if cand.name.lower() == target_name or target_name in cand.name.lower():
+            lyr = cand
+            break
+    if lyr is None:
+        print(f"Layer '{payload.get('layer')}' not found in map '{m.name}'.", file=sys.stderr)
+        return 1
+
+    field = payload.get("field") or ""
+    preset = (payload.get("preset") or "hazard").lower()
+    transparency = int(payload.get("transparency") or 0)
+    no_outline = bool(payload.get("no_outline", True))
+    classes_raw = payload.get("classes")
+
+    palettes = {
+        "hazard": [[46, 125, 50, 100], [251, 192, 45, 100], [211, 47, 47, 100]],
+        "hazard3": [[46, 125, 50, 100], [251, 192, 45, 100], [211, 47, 47, 100]],
+        "hazard5": [[27, 94, 32, 100], [102, 187, 106, 100], [253, 216, 53, 100], [251, 140, 0, 100], [198, 40, 40, 100]],
+        "blue": [[144, 202, 249, 100], [30, 136, 229, 100], [13, 71, 161, 100]],
+        "earth": [[161, 136, 127, 100], [156, 204, 101, 100], [46, 125, 50, 100]],
+        "category": [
+            [31, 120, 180, 100], [51, 160, 44, 100], [227, 26, 28, 100], [255, 127, 0, 100],
+            [106, 61, 154, 100], [177, 89, 40, 100], [166, 206, 227, 100], [178, 223, 138, 100],
+            [251, 154, 153, 100], [253, 191, 111, 100], [202, 178, 214, 100], [255, 255, 153, 100],
+        ],
+    }
+    colors = palettes.get(preset, palettes["hazard"])
+
+    sym = lyr.symbology
+    sym.updateRenderer("UniqueValueRenderer")
+    sym.renderer.fields = [field]
+
+    severity_rank = {
+        "sangat rendah": 1, "very low": 1, "aman": 1, "tidak rawan": 1,
+        "rendah": 2, "low": 2, "agak rendah": 2,
+        "sedang": 3, "medium": 3, "moderate": 3,
+        "tinggi": 4, "high": 4, "agak tinggi": 4,
+        "sangat tinggi": 5, "very high": 5, "ekstrem": 5,
+    }
+    custom_order = [c.strip().lower() for c in classes_raw.split(",") if c.strip()] if classes_raw else []
+
+    def _item_rank(it):
+        low = str(it.label).strip().lower()
+        if custom_order and low in custom_order:
+            return (0, custom_order.index(low), low)
+        if low in severity_rank:
+            return (1, severity_rank[low], low)
+        try:
+            return (2, float(low), low)
+        except ValueError:
+            return (3, 0, low)
+
+    for grp in sym.renderer.groups:
+        items_sorted = sorted(grp.items, key=_item_rank)
+        for idx, item in enumerate(items_sorted):
+            rgba = colors[idx % len(colors)]
+            item.symbol.color = {"RGB": rgba}
+            if no_outline:
+                item.symbol.outlineColor = {"RGB": [0, 0, 0, 0]}
+                try:
+                    item.symbol.outlineWidth = 0
+                except Exception:
+                    pass
+    lyr.symbology = sym
+    if transparency > 0:
+        lyr.transparency = transparency
+
+    out_path = payload.get("out")
+    if out_path:
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        aprx.saveACopy(out_path)
+        print(f"OK Styled '{lyr.name}' ({preset}, field={field}, transparency={transparency}%) -> {out_path}")
+    else:
+        aprx.save()
+        print(f"OK Styled '{lyr.name}' ({preset}, field={field}, transparency={transparency}%) -> {aprx_path}")
+    return 0
+
+
+def cmd_layout_update(payload):
+    aprx_path = payload["input"]
+    aprx = arcpy.mp.ArcGISProject(aprx_path)
+    layout_name = payload.get("layout_name")
+    layouts = aprx.listLayouts(layout_name) if layout_name else aprx.listLayouts()
+    if not layouts:
+        print("No matching layout found in .aprx project.", file=sys.stderr)
+        return 1
+    lyt = layouts[0]
+    title = payload.get("title")
+    subtitle = payload.get("subtitle")
+    source = payload.get("source")
+    zoom_layer = payload.get("zoom_layer")
+
+    updated = 0
+    for el in lyt.listElements("TEXT_ELEMENT"):
+        ename = (el.name or "").lower()
+        etext = (el.text or "").lower()
+        if title and ("title" in ename or "judul" in ename or "title" in etext or "judul" in etext):
+            el.text = title
+            updated += 1
+        elif subtitle and ("subtitle" in ename or "subjudul" in ename or "subtitle" in etext or "subjudul" in etext):
+            el.text = subtitle
+            updated += 1
+        elif source and ("source" in ename or "sumber" in ename or "source" in etext or "sumber" in etext):
+            el.text = source
+            updated += 1
+
+    if zoom_layer:
+        mfs = lyt.listElements("MAPFRAME_ELEMENT")
+        if mfs:
+            mf = mfs[0]
+            target = zoom_layer.lower()
+            for cand in mf.map.listLayers():
+                if cand.name.lower() == target or target in cand.name.lower():
+                    mf.camera.setExtent(mf.getLayerExtent(cand, False, True))
+                    break
+
+    out_path = payload.get("out")
+    if out_path:
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        aprx.saveACopy(out_path)
+        print(f"OK Updated layout '{lyt.name}' ({updated} text element(s)) -> {out_path}")
+    else:
+        aprx.save()
+        print(f"OK Updated layout '{lyt.name}' ({updated} text element(s)) -> {aprx_path}")
     return 0
 
 
@@ -1362,9 +1506,11 @@ HANDLERS = {
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
     "layout_map_series": cmd_layout_map_series,
+    "layout_update": cmd_layout_update,
     "map_broken_links": cmd_map_broken_links,
     "map_fix_links": cmd_map_fix_links,
     "map_add_layer": cmd_map_add_layer,
+    "map_style": cmd_map_style,
     "raster_mosaic": cmd_raster_mosaic,
     "raster_terrain": cmd_raster_terrain,
     "raster_zonal_stats": cmd_raster_zonal_stats,

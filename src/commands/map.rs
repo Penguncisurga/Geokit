@@ -47,6 +47,35 @@ pub enum MapCommand {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+    /// Apply automatic publication-grade symbology (colors, no-outline, transparency) to a layer in an ArcGIS Pro (.aprx) map
+    Style {
+        /// Path to an .aprx project file
+        input: PathBuf,
+        /// Layer name inside the map
+        #[arg(long)]
+        layer: String,
+        /// Attribute field to symbolize (e.g. KELAS_RWN, TUTUPAN_LAHAN)
+        #[arg(long)]
+        field: String,
+        /// Color preset: hazard (Green-Yellow-Red 3-class), hazard5 (5-class), blue, earth, or category
+        #[arg(long, default_value = "hazard")]
+        preset: String,
+        /// Layer transparency percentage 0-100 (default: 25)
+        #[arg(long, default_value_t = 25)]
+        transparency: u8,
+        /// Remove polygon black outlines for clean thematic fill (default: true)
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        no_outline: bool,
+        /// Optional comma-separated ordered class names (e.g. "Rendah,Sedang,Tinggi")
+        #[arg(long)]
+        classes: Option<String>,
+        /// Target map name inside the .aprx (defaults to first map)
+        #[arg(long)]
+        map: Option<String>,
+        /// Optional output .aprx path (saves a copy instead of modifying in-place)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -59,6 +88,11 @@ struct MapPayload {
     layer: Option<String>,
     map_name: Option<String>,
     lyrx: Option<String>,
+    field: Option<String>,
+    preset: Option<String>,
+    transparency: Option<u8>,
+    no_outline: Option<bool>,
+    classes: Option<String>,
     json: Option<bool>,
 }
 
@@ -72,7 +106,7 @@ pub fn run(
         MapCommand::BrokenLinks { input, .. } | MapCommand::FixLinks { input, .. } => {
             backend == EngineBackend::Arcmap || is_mxd_target(input)
         }
-        MapCommand::AddLayer { .. } => false,
+        MapCommand::AddLayer { .. } | MapCommand::Style { .. } => false,
     };
 
     let payload = match cmd {
@@ -130,6 +164,34 @@ pub fn run(
                 layer: Some(abs_string(&layer)),
                 map_name: map,
                 lyrx: lyrx.as_deref().map(abs_string),
+                ..Default::default()
+            }
+        }
+        MapCommand::Style {
+            input,
+            layer,
+            field,
+            preset,
+            transparency,
+            no_outline,
+            classes,
+            map,
+            out,
+        } => {
+            if !input.is_file() {
+                bail!("Input .aprx file does not exist: {}", input.display());
+            }
+            MapPayload {
+                action: "map_style".into(),
+                input: abs_string(&input),
+                out: out.as_deref().map(abs_string),
+                layer: Some(layer),
+                map_name: map,
+                field: Some(field),
+                preset: Some(preset),
+                transparency: Some(transparency.min(100)),
+                no_outline: Some(no_outline),
+                classes,
                 ..Default::default()
             }
         }

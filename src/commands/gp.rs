@@ -167,6 +167,7 @@ pub enum GpCommand {
         /// Exact ArcPy tool name (e.g. Buffer_analysis, Slope_sa, FeatureToPoint_management)
         tool: String,
         /// Positional arguments passed directly to the ArcPy tool
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
     /// Convert a CSV table with X/Y (or Lon/Lat) columns into a point shapefile, .gpkg, or .gdb feature class

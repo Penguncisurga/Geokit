@@ -12,6 +12,11 @@ use walkdir::WalkDir;
 use crate::engine::abs_string;
 
 const ARCMAP_ADDIN_BYTES: &[u8] = include_bytes!("../../addin/arcmap/geokit-arcmap.esriaddin");
+const STYLE_HAZARD_3: &[u8] = include_bytes!("../../styles/arcmap/hazard_3class.lyr");
+const STYLE_HAZARD_5: &[u8] = include_bytes!("../../styles/arcmap/hazard_5class.lyr");
+const STYLE_BLUE_3: &[u8] = include_bytes!("../../styles/arcmap/blue_3class.lyr");
+const STYLE_EARTH_3: &[u8] = include_bytes!("../../styles/arcmap/earth_3class.lyr");
+const STYLE_CATEGORY: &[u8] = include_bytes!("../../styles/arcmap/category_multi.lyr");
 
 #[derive(Debug, Subcommand)]
 pub enum LiveCommand {
@@ -154,11 +159,61 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
+    /// Apply a built-in proper cartographic style (borderless colors + transparency) live in ArcMap
+    Style {
+        /// Target layer name in ArcMap Table of Contents
+        layer: String,
+        /// Attribute field to symbolize (e.g. KELAS_RWN, TUTUPAN_LAHAN)
+        #[arg(long)]
+        field: String,
+        /// Color preset: hazard (Green-Yellow-Red 3-class), hazard5 (5-class), blue, earth, or category (12-class)
+        #[arg(long, default_value = "hazard")]
+        preset: String,
+        /// Layer transparency percentage 0-100 (e.g. 30 to blend with hillshade/basemap)
+        #[arg(long, default_value_t = 25)]
+        transparency: u8,
+        /// Optional comma-separated ordered class names (e.g. "Rendah,Sedang,Tinggi")
+        #[arg(long)]
+        classes: Option<String>,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Move a layer to the top or bottom of the ArcMap Table of Contents
+    Order {
+        /// Layer name in ArcMap Table of Contents
+        layer: String,
+        /// Target stack position: top or bottom
+        #[arg(long, default_value = "top")]
+        position: String,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Switch between Layout/Data view and update layout text elements (title/subtitle/source) live in ArcMap
+    Layout {
+        /// View mode: layout or data
+        #[arg(long)]
+        view: Option<String>,
+        /// Map title text (updates layout title text element)
+        #[arg(long)]
+        title: Option<String>,
+        /// Subtitle text (updates layout subtitle text element)
+        #[arg(long)]
+        subtitle: Option<String>,
+        /// Data source credit text (updates layout source text element)
+        #[arg(long)]
+        source: Option<String>,
+        /// Optional layer name to zoom the map frame extent to
+        #[arg(long)]
+        zoom_layer: Option<String>,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
     /// Run ANY ArcToolbox tool inside the live ArcMap window (auto-checks out Spatial/3D/Network extensions)
     RunGp {
         /// ArcPy tool name (e.g. Buffer_analysis, Clip_analysis, Slope_sa, Dissolve_management)
         tool: String,
         /// Tool arguments in order
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
@@ -463,6 +518,24 @@ fn resolve_live_add_targets(raw: &Path) -> Result<Vec<PathBuf>> {
     Ok(vec![path])
 }
 
+fn extract_embedded_style(preset: &str) -> Result<(PathBuf, &'static str)> {
+    let (fname, bytes, code_field) = match preset.to_ascii_lowercase().as_str() {
+        "hazard" | "hazard3" | "rdylgn" => ("hazard_3class.lyr", STYLE_HAZARD_3, "GK_CODE"),
+        "hazard5" | "rdylgn5" => ("hazard_5class.lyr", STYLE_HAZARD_5, "GK_CODE8"),
+        "blue" | "blues" => ("blue_3class.lyr", STYLE_BLUE_3, "GK_CODE"),
+        "earth" | "suitability" | "green" => ("earth_3class.lyr", STYLE_EARTH_3, "GK_CODE"),
+        "category" | "unique" | "categorical" => ("category_multi.lyr", STYLE_CATEGORY, "GK_CODE8"),
+        other => bail!(
+            "Unknown style preset '{other}'. Available presets: hazard, hazard5, blue, earth, category."
+        ),
+    };
+    let dir = std::env::temp_dir().join("geokit_styles");
+    std::fs::create_dir_all(&dir)?;
+    let dst = dir.join(fname);
+    std::fs::write(&dst, bytes)?;
+    Ok((dst, code_field))
+}
+
 pub fn run(cmd: LiveCommand) -> Result<()> {
     let resp = match cmd {
         LiveCommand::InstallAddin { version } => return install_addin(version.as_deref()),
@@ -582,6 +655,55 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
         LiveCommand::ToolUsage { tool, port } => {
             send_live_request(port, &json!({ "action": "tool_usage", "tool": tool }))?
         }
+        LiveCommand::Style {
+            layer,
+            field,
+            preset,
+            transparency,
+            classes,
+            port,
+        } => {
+            let (lyr_path, code_field) = extract_embedded_style(&preset)?;
+            send_live_request(
+                port,
+                &json!({
+                    "action": "style_layer",
+                    "layer": layer,
+                    "field": field,
+                    "preset": preset,
+                    "lyr_file": abs_string(&lyr_path),
+                    "code_field": code_field,
+                    "transparency": transparency.min(100),
+                    "classes": classes,
+                }),
+            )?
+        }
+        LiveCommand::Order {
+            layer,
+            position,
+            port,
+        } => send_live_request(
+            port,
+            &json!({ "action": "order_layer", "layer": layer, "position": position }),
+        )?,
+        LiveCommand::Layout {
+            view,
+            title,
+            subtitle,
+            source,
+            zoom_layer,
+            port,
+        } => send_live_request(
+            port,
+            &json!({
+                "action": "layout_update",
+                "view": view,
+                "title": title,
+                "subtitle": subtitle,
+                "source": source,
+                "zoom_layer": zoom_layer,
+            }),
+        )?,
         LiveCommand::RunGp { tool, args, port } => send_live_request(
             port,
             &json!({ "action": "run_gp", "tool": tool, "args": args, "add_to_map": true }),

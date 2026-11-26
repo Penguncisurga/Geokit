@@ -1,6 +1,6 @@
 [package]
 name = "geokit"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2021"
 authors = ["Penguncisurga <satriobagusbudianto@gmail.com>"]
 description = "Fast GIS CLI & built-in MCP server for spatial data hygiene, batch ArcGIS Pro / ArcMap 10.x / GDAL geoprocessing, layouts, raster terrain, and watershed (DAS) hydrology"

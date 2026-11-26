@@ -234,6 +234,172 @@ def _handle_command_on_ui_thread(req):
         _force_refresh()
         return {"ok": True, "layer": lyr.name, "applied_symbology": lyr_file}
 
+    if action == "style_layer":
+        name = req.get("layer", "")
+        field = req.get("field", "")
+        lyr_file = req.get("lyr_file", "")
+        code_field = req.get("code_field") or "GK_CODE"
+        preset = (req.get("preset") or "hazard").lower()
+        transparency = req.get("transparency")
+        classes_raw = req.get("classes")
+
+        if not lyr_file or not os.path.exists(lyr_file):
+            return {"ok": False, "error": "Style template .lyr not found: %s" % lyr_file}
+        lyr = _find_layer(mxd, df, name)
+        if not lyr:
+            return {"ok": False, "error": "Layer not found: %s" % name}
+        if not lyr.isFeatureLayer:
+            return {"ok": False, "error": "Layer '%s' is not a feature layer." % lyr.name}
+
+        existing = dict((f.name.lower(), f.name) for f in arcpy.ListFields(lyr))
+        actual_field = existing.get(field.lower()) if field else None
+        if field and not actual_field:
+            return {"ok": False, "error": "Field '%s' not found on layer '%s'" % (field, lyr.name)}
+
+        if classes_raw:
+            ordered = [c.strip() for c in classes_raw.split(",") if c.strip()]
+        elif actual_field:
+            seen = []
+            with arcpy.da.SearchCursor(lyr, [actual_field]) as cur:
+                for row in cur:
+                    v = row[0]
+                    if v is not None:
+                        s = unicode(v).strip()
+                        if s and s not in seen:
+                            seen.append(s)
+            severity_rank = {
+                "sangat rendah": 1, "very low": 1, "aman": 1, "tidak rawan": 1,
+                "rendah": 2, "low": 2, "agak rendah": 2,
+                "sedang": 3, "medium": 3, "moderate": 3, "menengah": 3,
+                "tinggi": 4, "high": 4, "agak tinggi": 4,
+                "sangat tinggi": 5, "very high": 5, "ekstrem": 5,
+            }
+            def _sort_key(val):
+                low = val.lower()
+                if low in severity_rank:
+                    return (0, severity_rank[low], low)
+                try:
+                    return (1, float(val), low)
+                except ValueError:
+                    return (2, 0, low)
+            ordered = sorted(seen, key=_sort_key)
+        else:
+            ordered = ["1", "2", "3"]
+
+        if actual_field:
+            actual_code = existing.get(code_field.lower())
+            if not actual_code:
+                arcpy.AddField_management(lyr, code_field, "TEXT", field_length=8)
+                actual_code = code_field
+            max_slots = 3 if code_field == "GK_CODE" else 12
+            val_to_code = {}
+            for idx, cls_name in enumerate(ordered[:max_slots], 1):
+                val_to_code[cls_name.lower()] = str(idx)
+            with arcpy.da.UpdateCursor(lyr, [actual_field, actual_code]) as cur:
+                for row in cur:
+                    raw_v = row[0]
+                    k = unicode(raw_v).strip().lower() if raw_v is not None else ""
+                    row[1] = val_to_code.get(k, "1")
+                    cur.updateRow(row)
+
+        src_lyr = arcpy.mapping.Layer(lyr_file)
+        arcpy.mapping.UpdateLayer(df, lyr, src_lyr, True)
+        try:
+            if hasattr(lyr, "symbology") and hasattr(lyr.symbology, "classValues"):
+                cv = list(lyr.symbology.classValues)
+                if len(cv) == len(ordered):
+                    lyr.symbology.classLabels = ordered
+                elif len(cv) > 0:
+                    labels = list(lyr.symbology.classLabels)
+                    for idx, cls_name in enumerate(ordered):
+                        code_str = str(idx + 1)
+                        if code_str in cv:
+                            pos = cv.index(code_str)
+                            if pos < len(labels):
+                                labels[pos] = cls_name
+                    lyr.symbology.classLabels = labels
+        except Exception:
+            pass
+
+        if transparency is not None:
+            try:
+                lyr.transparency = int(transparency)
+            except Exception:
+                pass
+
+        _force_refresh()
+        return {
+            "ok": True,
+            "layer": lyr.name,
+            "preset": preset,
+            "field": actual_field,
+            "classes": ordered,
+            "transparency": lyr.transparency if lyr.supports("TRANSPARENCY") else 0,
+        }
+
+    if action == "order_layer":
+        name = req.get("layer", "")
+        position = (req.get("position") or "top").lower()
+        lyr = _find_layer(mxd, df, name)
+        if not lyr:
+            return {"ok": False, "error": "Layer not found: %s" % name}
+        all_lyrs = [l for l in arcpy.mapping.ListLayers(mxd, "", df) if not l.isGroupLayer]
+        if len(all_lyrs) >= 2:
+            if position == "bottom":
+                ref = all_lyrs[-1]
+                if ref.longName != lyr.longName:
+                    arcpy.mapping.MoveLayer(df, ref, lyr, "AFTER")
+            else:
+                ref = all_lyrs[0]
+                if ref.longName != lyr.longName:
+                    arcpy.mapping.MoveLayer(df, ref, lyr, "BEFORE")
+        _force_refresh()
+        return {"ok": True, "layer": lyr.name, "position": position}
+
+    if action == "layout_update":
+        view = (req.get("view") or "").lower()
+        title = req.get("title")
+        subtitle = req.get("subtitle")
+        source = req.get("source")
+        zoom_layer = req.get("zoom_layer")
+
+        if view == "layout":
+            mxd.activeView = "PAGE_LAYOUT"
+        elif view == "data":
+            mxd.activeView = df.name
+
+        updated_elements = []
+        elems = arcpy.mapping.ListLayoutElements(mxd, "TEXT_ELEMENT")
+        for el in elems:
+            ename = (el.name or "").lower()
+            etext = (el.text or "").lower()
+            if title and ("title" in ename or "judul" in ename or "title" in etext or "judul" in etext):
+                el.text = title
+                updated_elements.append({"element": el.name or "title", "text": title})
+            elif subtitle and ("subtitle" in ename or "subjudul" in ename or "subtitle" in etext or "subjudul" in etext):
+                el.text = subtitle
+                updated_elements.append({"element": el.name or "subtitle", "text": subtitle})
+            elif source and ("source" in ename or "sumber" in ename or "source" in etext or "sumber" in etext):
+                el.text = source
+                updated_elements.append({"element": el.name or "source", "text": source})
+
+        if title and not updated_elements and len(elems) > 0:
+            elems[0].text = title
+            updated_elements.append({"element": elems[0].name or "text_0", "text": title})
+
+        if zoom_layer:
+            zl = _find_layer(mxd, df, zoom_layer)
+            if zl:
+                df.extent = zl.getExtent(True)
+
+        _force_refresh()
+        return {
+            "ok": True,
+            "active_view": mxd.activeView,
+            "updated_elements": updated_elements,
+            "zoomed_to": zoom_layer,
+        }
+
     if action == "set_labels":
         name = req.get("layer", "")
         show = bool(req.get("show", True))
@@ -360,6 +526,8 @@ def _handle_command_on_ui_thread(req):
             return {"ok": False, "error": "Missing 'tool' name (e.g. Buffer_analysis)"}
         _auto_checkout_extension(tool)
         fn = getattr(arcpy, tool, None)
+        if fn is None:
+            fn = getattr(arcpy.gp, tool, None)
         if fn is None:
             return {
                 "ok": False,

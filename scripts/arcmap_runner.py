@@ -312,6 +312,21 @@ def cmd_dissolve(payload):
     return 1 if failures else 0
 
 
+def _safe_shape_type(src):
+    try:
+        return arcpy.Describe(src).shapeType
+    except Exception:
+        tmp = "geokit_desc_tmp_lyr"
+        if arcpy.Exists(tmp):
+            arcpy.Delete_management(tmp)
+        arcpy.MakeFeatureLayer_management(src, tmp)
+        try:
+            return arcpy.Describe(tmp).shapeType
+        finally:
+            if arcpy.Exists(tmp):
+                arcpy.Delete_management(tmp)
+
+
 def cmd_calc_geom(payload):
     items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
     unit_req = (payload.get("unit") or "").lower()
@@ -319,7 +334,7 @@ def cmd_calc_geom(payload):
     failures = 0
     for idx, src in enumerate(items, 1):
         try:
-            shape_type = arcpy.Describe(src).shapeType
+            shape_type = _safe_shape_type(src)
             if shape_type == "Polygon":
                 unit = unit_req or "ha"
                 area_map = {
@@ -687,6 +702,8 @@ def cmd_gp_run(payload):
     args = payload.get("args") or []
     auto_checkout_extension(tool)
     fn = getattr(arcpy, tool, None)
+    if fn is None:
+        fn = getattr(arcpy.gp, tool, None)
     if fn is None:
         sys.stderr.write("Unknown ArcPy tool '%s'. Run `geokit gp tools <keyword>` to search.\n" % tool)
         return 1
@@ -1148,6 +1165,51 @@ def cmd_union(payload):
     return 0
 
 
+def cmd_layout_update(payload):
+    mxd_path = payload["input"]
+    mxd = arcpy.mapping.MapDocument(mxd_path)
+    title = payload.get("title")
+    subtitle = payload.get("subtitle")
+    source = payload.get("source")
+    zoom_layer = payload.get("zoom_layer")
+
+    updated = 0
+    for el in arcpy.mapping.ListLayoutElements(mxd, "TEXT_ELEMENT"):
+        ename = (el.name or "").lower()
+        etext = (el.text or "").lower()
+        if title and ("title" in ename or "judul" in ename or "title" in etext or "judul" in etext):
+            el.text = title
+            updated += 1
+        elif subtitle and ("subtitle" in ename or "subjudul" in ename or "subtitle" in etext or "subjudul" in etext):
+            el.text = subtitle
+            updated += 1
+        elif source and ("source" in ename or "sumber" in ename or "source" in etext or "sumber" in etext):
+            el.text = source
+            updated += 1
+
+    if zoom_layer:
+        dfs = arcpy.mapping.ListDataFrames(mxd)
+        if dfs:
+            df = dfs[0]
+            target = zoom_layer.lower()
+            for cand in arcpy.mapping.ListLayers(mxd, "", df):
+                if cand.name.lower() == target or target in cand.name.lower():
+                    df.extent = cand.getExtent(True)
+                    break
+
+    out_path = payload.get("out")
+    if out_path:
+        parent = os.path.dirname(out_path)
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent)
+        mxd.saveACopy(out_path)
+        print("OK Updated MXD layout (%d text element(s)) -> %s" % (updated, out_path))
+    else:
+        mxd.save()
+        print("OK Updated MXD layout (%d text element(s)) -> %s" % (updated, mxd_path))
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -1174,6 +1236,7 @@ HANDLERS = {
     "qa_check": cmd_qa_check,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
+    "layout_update": cmd_layout_update,
     "map_broken_links": cmd_map_broken_links,
     "map_fix_links": cmd_map_fix_links,
     "raster_mosaic": cmd_raster_mosaic,

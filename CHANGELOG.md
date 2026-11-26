@@ -4,6 +4,22 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-11-26
+
+### Added
+- **Publication-Grade Automatic Cartography (`geokit live style` & `geokit map style`)**:
+  - Built-in borderless color presets: `hazard` (Green `#2E7D32` → Yellow `#FBC02D` → Red `#D32F2F`), `hazard5` (5-class RdYlGn), `blue`, `earth`, and `category` (12-class ColorBrewer) with configurable `--transparency` and automatic severity sorting (`Rendah / Sedang / Tinggi`, `Low / Medium / High`).
+  - Embeds 5 zero-outline ArcMap 10.x `.lyr` templates directly inside `geokit.exe` (`styles/arcmap/*.lyr`) — works on every ArcMap 10.1–10.8 installation with zero external Python packages!
+  - Pure `arcpy.mp` CIM styling for ArcGIS Pro (`.aprx`) via `geokit map style`.
+- **Live Layer Stacking & Layout Automation**:
+  - `geokit live order <layer> --position top|bottom` to arrange layers cleanly (e.g. streams above hazard polygons).
+  - `geokit live layout [--view layout|data] [--title ...] [--subtitle ...] [--source ...] [--zoom-layer ...]` and `geokit layout update <aprx|mxd>` for automated title/subtitle/source updates and map frame zooming.
+
+### Fixed
+- `geokit gp run` and `geokit live run-gp` now accept negative numeric arguments (e.g. `"-50 50 5;..."`) directly without requiring `--`.
+- Added `arcpy.gp.<tool>` fallback in `gp run` / `live run-gp` so Spatial Analyst tools such as `Reclassify_sa` work directly.
+- Fixed ArcMap 10.x `gp calc-geom` `Describe().shapeType` errors when datasets live inside directories containing a dot (e.g. `.gemini`).
+
 ## [1.6.0] - 2026-11-26
 
 ### Added

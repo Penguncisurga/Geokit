@@ -104,8 +104,9 @@ If the user has ArcMap 10.1–10.8 open:
 ```bash
 geokit live ping
 geokit live add ./output/kerawanan_final.shp
-geokit live zoom kerawanan_final
-geokit live labels kerawanan_final --show true --field KELAS_RAWAN
+geokit live style kerawanan_final --field KELAS_RAWAN --preset hazard --transparency 30
+geokit live order sungai --position top
+geokit live layout --view layout --title "PETA KERAWANAN BANJIR" --zoom-layer kerawanan_final
 geokit live export --out ./output/preview.png --dpi 200
 ```
 

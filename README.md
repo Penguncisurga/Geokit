@@ -296,6 +296,9 @@ geokit live add ./01_Vector/batas_desa.shp
 geokit live zoom batas_desa
 geokit live definition-query batas_desa --where "KECAMATAN = 'Boja'"
 geokit live symbology batas_desa --lyr ./styles/batas_desa.lyr
+geokit live style kerawanan_banjir --field KELAS_RWN --preset hazard --transparency 30
+geokit live order sungai --position top
+geokit live layout --view layout --title "PETA KERAWANAN BANJIR" --zoom-layer kerawanan_banjir
 geokit live labels batas_desa --show true --field NAMOBJ
 geokit live select batas_desa --where "KELAS = 'Hutan'"
 geokit live export --out ./current_view.png --dpi 200

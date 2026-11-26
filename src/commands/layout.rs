@@ -53,6 +53,29 @@ pub enum LayoutCommand {
         #[arg(long)]
         multiple_files: bool,
     },
+    /// Update layout text elements (title, subtitle, source) and map frame extent in an .aprx or .mxd project
+    Update {
+        /// Path to an .aprx or .mxd project file
+        input: PathBuf,
+        /// Layout name inside .aprx (defaults to first layout)
+        #[arg(long)]
+        layout: Option<String>,
+        /// New map title text
+        #[arg(long)]
+        title: Option<String>,
+        /// New subtitle text
+        #[arg(long)]
+        subtitle: Option<String>,
+        /// New data source text
+        #[arg(long)]
+        source: Option<String>,
+        /// Optional layer name to zoom the map frame extent to
+        #[arg(long)]
+        zoom_layer: Option<String>,
+        /// Optional output copy path (saves a copy instead of modifying in-place)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -65,6 +88,10 @@ struct LayoutPayload {
     filter: Option<String>,
     layout_name: Option<String>,
     multiple_files: Option<bool>,
+    title: Option<String>,
+    subtitle: Option<String>,
+    source: Option<String>,
+    zoom_layer: Option<String>,
     json: Option<bool>,
 }
 
@@ -75,7 +102,9 @@ pub fn run(
     backend: EngineBackend,
 ) -> Result<()> {
     let use_arcmap = match &cmd {
-        LayoutCommand::List { input, .. } | LayoutCommand::Export { input, .. } => {
+        LayoutCommand::List { input, .. }
+        | LayoutCommand::Export { input, .. }
+        | LayoutCommand::Update { input, .. } => {
             backend == EngineBackend::Arcmap || is_mxd_target(input)
         }
         LayoutCommand::MapSeries { .. } => false,
@@ -146,6 +175,30 @@ pub fn run(
                 dpi: Some(resolution),
                 layout_name: layout,
                 multiple_files: Some(multiple_files),
+                ..Default::default()
+            }
+        }
+        LayoutCommand::Update {
+            input,
+            layout,
+            title,
+            subtitle,
+            source,
+            zoom_layer,
+            out,
+        } => {
+            if !input.is_file() {
+                bail!("Input project file does not exist: {}", input.display());
+            }
+            LayoutPayload {
+                action: "layout_update".into(),
+                input: abs_string(&input),
+                out: out.as_deref().map(abs_string),
+                layout_name: layout,
+                title,
+                subtitle,
+                source,
+                zoom_layer,
                 ..Default::default()
             }
         }
