@@ -18,6 +18,11 @@ import traceback
 import arcpy
 import pythonaddins
 
+try:
+    import arcobjects as _ao
+except Exception:
+    _ao = None
+
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("GEOKIT_LIVE_PORT", "9877"))
 LOG_PATH = os.path.join(tempfile.gettempdir(), "geokit_arcmap_bridge.log")
@@ -236,106 +241,204 @@ def _handle_command_on_ui_thread(req):
 
     if action == "style_layer":
         name = req.get("layer", "")
-        field = req.get("field", "")
-        lyr_file = req.get("lyr_file", "")
-        code_field = req.get("code_field") or "GK_CODE"
+        field = req.get("field") or ""
+        mode = (req.get("mode") or "auto").lower()
         preset = (req.get("preset") or "hazard").lower()
-        transparency = req.get("transparency")
+        custom_colors = req.get("colors")
+        single_color = req.get("color")
         classes_raw = req.get("classes")
+        classes_count = int(req.get("classes_count") or 5)
+        break_method = (req.get("break_method") or "quantile").lower()
+        outline_color = req.get("outline_color")
+        outline_width = float(req.get("outline_width") or 0.0)
+        outline_style = (req.get("outline_style") or "solid").lower()
+        line_width = float(req.get("width") or 1.4)
+        marker_size = float(req.get("size") or 7.0)
+        marker_style = (req.get("marker") or "circle").lower()
+        hollow = bool(req.get("hollow", False))
+        transparency = req.get("transparency")
 
-        if not lyr_file or not os.path.exists(lyr_file):
-            return {"ok": False, "error": "Style template .lyr not found: %s" % lyr_file}
         lyr = _find_layer(mxd, df, name)
         if not lyr:
             return {"ok": False, "error": "Layer not found: %s" % name}
-        if not lyr.isFeatureLayer:
-            return {"ok": False, "error": "Layer '%s' is not a feature layer." % lyr.name}
 
-        existing = dict((f.name.lower(), f.name) for f in arcpy.ListFields(lyr))
-        actual_field = existing.get(field.lower()) if field else None
-        if field and not actual_field:
-            return {"ok": False, "error": "Field '%s' not found on layer '%s'" % (field, lyr.name)}
+        if _ao is None:
+            return {"ok": False, "error": "ArcObjects COM module failed to load inside Add-In."}
 
-        if classes_raw:
-            ordered = [c.strip() for c in classes_raw.split(",") if c.strip()]
-        elif actual_field:
-            seen = []
-            with arcpy.da.SearchCursor(lyr, [actual_field]) as cur:
-                for row in cur:
-                    v = row[0]
-                    if v is not None:
-                        s = unicode(v).strip()
-                        if s and s not in seen:
-                            seen.append(s)
-            severity_rank = {
-                "sangat rendah": 1, "very low": 1, "aman": 1, "tidak rawan": 1,
-                "rendah": 2, "low": 2, "agak rendah": 2,
-                "sedang": 3, "medium": 3, "moderate": 3, "menengah": 3,
-                "tinggi": 4, "high": 4, "agak tinggi": 4,
-                "sangat tinggi": 5, "very high": 5, "ekstrem": 5,
-            }
-            def _sort_key(val):
-                low = val.lower()
-                if low in severity_rank:
-                    return (0, severity_rank[low], low)
-                try:
-                    return (1, float(val), low)
-                except ValueError:
-                    return (2, 0, low)
-            ordered = sorted(seen, key=_sort_key)
-        else:
-            ordered = ["1", "2", "3"]
+        mxdoc = _ao.get_current_mxdoc()
+        com_lyr, com_name = _ao.find_com_layer(mxdoc, lyr.name)
+        if not com_lyr:
+            _ao._release(mxdoc)
+            return {"ok": False, "error": "COM layer not found in FocusMap: %s" % lyr.name}
 
-        if actual_field:
-            actual_code = existing.get(code_field.lower())
-            if not actual_code:
-                arcpy.AddField_management(lyr, code_field, "TEXT", field_length=8)
-                actual_code = code_field
-            max_slots = 3 if code_field == "GK_CODE" else 12
-            val_to_code = {}
-            for idx, cls_name in enumerate(ordered[:max_slots], 1):
-                val_to_code[cls_name.lower()] = str(idx)
-            with arcpy.da.UpdateCursor(lyr, [actual_field, actual_code]) as cur:
-                for row in cur:
-                    raw_v = row[0]
-                    k = unicode(raw_v).strip().lower() if raw_v is not None else ""
-                    row[1] = val_to_code.get(k, "1")
-                    cur.updateRow(row)
-
-        src_lyr = arcpy.mapping.Layer(lyr_file)
-        arcpy.mapping.UpdateLayer(df, lyr, src_lyr, True)
         try:
-            if hasattr(lyr, "symbology") and hasattr(lyr.symbology, "classValues"):
-                cv = list(lyr.symbology.classValues)
-                if len(cv) == len(ordered):
-                    lyr.symbology.classLabels = ordered
-                elif len(cv) > 0:
-                    labels = list(lyr.symbology.classLabels)
-                    for idx, cls_name in enumerate(ordered):
-                        code_str = str(idx + 1)
-                        if code_str in cv:
-                            pos = cv.index(code_str)
-                            if pos < len(labels):
-                                labels[pos] = cls_name
-                    lyr.symbology.classLabels = labels
-        except Exception:
-            pass
+            # 1. Raster styling via IRasterStretchColorRampRenderer + MultiPartColorRamp
+            if lyr.isRasterLayer or mode == "raster":
+                raster_preset = preset if preset not in ("stream", "road", "boundary", "point") else "terrain"
+                stops = _ao.apply_raster_stretch(
+                    mxdoc, com_lyr, preset=raster_preset,
+                    custom_colors=custom_colors, transparency=transparency,
+                )
+                _force_refresh()
+                return {
+                    "ok": True,
+                    "engine": "ArcObjects COM",
+                    "layer": lyr.name,
+                    "mode": "raster",
+                    "preset": raster_preset,
+                    "color_stops": ["#%02X%02X%02X" % c for c in stops],
+                    "transparency": transparency,
+                }
 
-        if transparency is not None:
+            if not lyr.isFeatureLayer:
+                return {"ok": False, "error": "Layer '%s' is neither a feature layer nor a raster layer." % lyr.name}
+
             try:
-                lyr.transparency = int(transparency)
+                shape_type = arcpy.Describe(lyr).shapeType
             except Exception:
-                pass
+                shape_type = "Polygon"
 
-        _force_refresh()
-        return {
-            "ok": True,
-            "layer": lyr.name,
-            "preset": preset,
-            "field": actual_field,
-            "classes": ordered,
-            "transparency": lyr.transparency if lyr.supports("TRANSPARENCY") else 0,
-        }
+            # 2. Single-symbol mode (streams, roads, hollow boundaries, points, or when no field specified)
+            if mode == "single" or (not field) or preset in ("stream", "road", "boundary", "point"):
+                cols = _ao.apply_single_symbol(
+                    mxdoc, com_lyr, shape_type,
+                    color_hex=single_color, preset=preset,
+                    outline_color=outline_color, outline_width=outline_width,
+                    outline_style=outline_style, width=line_width,
+                    marker_size=marker_size, marker_style=marker_style,
+                    hollow=hollow, transparency=transparency,
+                )
+                _force_refresh()
+                return {
+                    "ok": True,
+                    "engine": "ArcObjects COM",
+                    "layer": lyr.name,
+                    "mode": "single",
+                    "preset": preset,
+                    "shape_type": shape_type,
+                    "colors": ["#%02X%02X%02X" % c for c in cols],
+                    "transparency": transparency,
+                }
+
+            existing = dict((f.name.lower(), f.name) for f in arcpy.ListFields(lyr))
+            actual_field = existing.get(field.lower())
+            if not actual_field:
+                return {"ok": False, "error": "Field '%s' not found on layer '%s'" % (field, lyr.name)}
+
+            # 3. Graduated ClassBreaksRenderer (continuous numeric data, N classes)
+            if mode == "graduated":
+                nums = []
+                with arcpy.da.SearchCursor(lyr, [actual_field]) as cur:
+                    for row in cur:
+                        if row[0] is not None:
+                            try:
+                                nums.append(float(row[0]))
+                            except (ValueError, TypeError):
+                                pass
+                if not nums:
+                    return {"ok": False, "error": "No numeric values found in field '%s'" % actual_field}
+                nums.sort()
+                vmin, vmax = nums[0], nums[-1]
+                n_cls = max(2, min(classes_count, len(set(nums))))
+                if break_method == "equal" or len(nums) <= n_cls:
+                    step = (vmax - vmin) / float(n_cls) if vmax > vmin else 1.0
+                    highs = [vmin + step * (i + 1) for i in range(n_cls)]
+                    highs[-1] = vmax
+                else:
+                    highs = []
+                    for i in range(1, n_cls + 1):
+                        q_idx = min(len(nums) - 1, int(round((float(i) / float(n_cls)) * (len(nums) - 1))))
+                        highs.append(nums[q_idx])
+                    highs[-1] = vmax
+                if classes_raw:
+                    lbls = [c.strip() for c in classes_raw.split(",") if c.strip()]
+                else:
+                    lbls = []
+                    prev = vmin
+                    for hi in highs:
+                        lbls.append("%.2f - %.2f" % (prev, hi))
+                        prev = hi
+                while len(lbls) < len(highs):
+                    lbls.append("Class %d" % (len(lbls) + 1))
+
+                cols = _ao.apply_class_breaks(
+                    mxdoc, com_lyr, shape_type, actual_field, vmin, highs, lbls[:len(highs)],
+                    preset=preset, custom_colors=custom_colors,
+                    outline_color=outline_color, outline_width=outline_width,
+                    outline_style=outline_style, width=line_width,
+                    marker_size=marker_size, marker_style=marker_style,
+                    transparency=transparency,
+                )
+                _force_refresh()
+                return {
+                    "ok": True,
+                    "engine": "ArcObjects COM",
+                    "layer": lyr.name,
+                    "mode": "graduated",
+                    "field": actual_field,
+                    "break_method": break_method,
+                    "breaks": highs,
+                    "labels": lbls[:len(highs)],
+                    "colors": ["#%02X%02X%02X" % c for c in cols],
+                    "transparency": transparency,
+                }
+
+            # 4. Unlimited-class UniqueValueRenderer (exact N values directly on field, zero junk slots!)
+            if classes_raw:
+                ordered = [c.strip() for c in classes_raw.split(",") if c.strip()]
+            else:
+                seen = []
+                with arcpy.da.SearchCursor(lyr, [actual_field]) as cur:
+                    for row in cur:
+                        v = row[0]
+                        if v is not None:
+                            s = unicode(v).strip()
+                            if s and s not in seen:
+                                seen.append(s)
+                severity_rank = {
+                    "sangat rendah": 1, "very low": 1, "aman": 1, "tidak rawan": 1, "sangat sesuai": 1,
+                    "rendah": 2, "low": 2, "agak rendah": 2, "cukup sesuai": 2,
+                    "sedang": 3, "medium": 3, "moderate": 3, "menengah": 3, "sesuai marginal": 3,
+                    "tinggi": 4, "high": 4, "agak tinggi": 4, "tidak sesuai": 4,
+                    "sangat tinggi": 5, "very high": 5, "ekstrem": 5, "sangat rawan": 5,
+                }
+                def _sort_key(val):
+                    low = val.lower()
+                    if low in severity_rank:
+                        return (0, severity_rank[low], low)
+                    try:
+                        return (1, float(val), low)
+                    except ValueError:
+                        return (2, 0, low)
+                ordered = sorted(seen, key=_sort_key)
+
+            if not ordered:
+                return {"ok": False, "error": "No non-empty values found in field '%s'" % actual_field}
+
+            cols = _ao.apply_unique_values(
+                mxdoc, com_lyr, shape_type, actual_field, ordered,
+                preset=preset, custom_colors=custom_colors,
+                outline_color=outline_color, outline_width=outline_width,
+                outline_style=outline_style, width=line_width,
+                marker_size=marker_size, marker_style=marker_style,
+                transparency=transparency,
+            )
+            _force_refresh()
+            return {
+                "ok": True,
+                "engine": "ArcObjects COM",
+                "layer": lyr.name,
+                "mode": "unique",
+                "preset": preset,
+                "field": actual_field,
+                "class_count": len(ordered),
+                "classes": ordered,
+                "colors": ["#%02X%02X%02X" % c for c in cols],
+                "transparency": transparency,
+            }
+        finally:
+            _ao._release(com_lyr)
+            _ao._release(mxdoc)
 
     if action == "order_layer":
         name = req.get("layer", "")
@@ -392,11 +495,25 @@ def _handle_command_on_ui_thread(req):
             if zl:
                 df.extent = zl.getExtent(True)
 
+        hidden_legend = []
+        hide_legend_raw = req.get("hide_legend")
+        if hide_legend_raw and _ao is not None:
+            try:
+                mxdoc = _ao.get_current_mxdoc()
+                try:
+                    names = [n.strip() for n in hide_legend_raw.split(",") if n.strip()]
+                    hidden_legend = _ao.hide_legend_layers(mxdoc, names)
+                finally:
+                    _ao._release(mxdoc)
+            except Exception:
+                pass
+
         _force_refresh()
         return {
             "ok": True,
             "active_view": mxd.activeView,
             "updated_elements": updated_elements,
+            "hidden_legend_items": hidden_legend,
             "zoomed_to": zoom_layer,
         }
 

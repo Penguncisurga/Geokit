@@ -12,11 +12,6 @@ use walkdir::WalkDir;
 use crate::engine::abs_string;
 
 const ARCMAP_ADDIN_BYTES: &[u8] = include_bytes!("../../addin/arcmap/geokit-arcmap.esriaddin");
-const STYLE_HAZARD_3: &[u8] = include_bytes!("../../styles/arcmap/hazard_3class.lyr");
-const STYLE_HAZARD_5: &[u8] = include_bytes!("../../styles/arcmap/hazard_5class.lyr");
-const STYLE_BLUE_3: &[u8] = include_bytes!("../../styles/arcmap/blue_3class.lyr");
-const STYLE_EARTH_3: &[u8] = include_bytes!("../../styles/arcmap/earth_3class.lyr");
-const STYLE_CATEGORY: &[u8] = include_bytes!("../../styles/arcmap/category_multi.lyr");
 
 #[derive(Debug, Subcommand)]
 pub enum LiveCommand {
@@ -159,20 +154,56 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Apply a built-in proper cartographic style (borderless colors + transparency) live in ArcMap
+    /// Full ArcObjects COM cartography styling live in ArcMap (unlimited N classes, custom RGB, lines, points, boundaries, rasters!)
     Style {
         /// Target layer name in ArcMap Table of Contents
         layer: String,
-        /// Attribute field to symbolize (e.g. KELAS_RWN, TUTUPAN_LAHAN)
+        /// Attribute field to symbolize (omit for single-symbol lines/points/boundaries or rasters)
         #[arg(long)]
-        field: String,
-        /// Color preset: hazard (Green-Yellow-Red 3-class), hazard5 (5-class), blue, earth, or category (12-class)
+        field: Option<String>,
+        /// Renderer mode: auto, unique (N categories), graduated (numeric breaks), single, or raster
+        #[arg(long, default_value = "auto")]
+        mode: String,
+        /// Color preset: hazard, hazard5, hazard-pastel, viridis, blue, earth, terrain, gray, category, stream, road, boundary, point
         #[arg(long, default_value = "hazard")]
         preset: String,
-        /// Layer transparency percentage 0-100 (e.g. 30 to blend with hillshade/basemap)
-        #[arg(long, default_value_t = 25)]
-        transparency: u8,
-        /// Optional comma-separated ordered class names (e.g. "Rendah,Sedang,Tinggi")
+        /// Custom comma-separated hex color stops (e.g. "#2E7D32,#81C784,#FFF176,#FFA726,#D32F2F")
+        #[arg(long)]
+        colors: Option<String>,
+        /// Single hex color (for single/stream/road/point/boundary mode, e.g. "#0288D1")
+        #[arg(long)]
+        color: Option<String>,
+        /// Number of classes for graduated numeric breaks (default: 5)
+        #[arg(long, default_value_t = 5)]
+        classes_count: usize,
+        /// Break method for graduated mode: quantile or equal (default: quantile)
+        #[arg(long, default_value = "quantile")]
+        break_method: String,
+        /// Outline color in hex (e.g. "#37474F" or "#FFFFFF")
+        #[arg(long)]
+        outline_color: Option<String>,
+        /// Outline width in points (default: 0.0 = clean borderless fill)
+        #[arg(long, default_value_t = 0.0)]
+        outline_width: f64,
+        /// Line/outline dash style: solid, dash, dot, dashdot (default: solid)
+        #[arg(long, default_value = "solid")]
+        outline_style: String,
+        /// Line width in points for polyline layers (default: 1.4)
+        #[arg(long, default_value_t = 1.4)]
+        width: f64,
+        /// Marker size in points for point layers (default: 7.0)
+        #[arg(long, default_value_t = 7.0)]
+        size: f64,
+        /// Marker shape for point layers: circle, square, diamond, cross, x (default: circle)
+        #[arg(long, default_value = "circle")]
+        marker: String,
+        /// Hollow polygon fill (transparent inside, outline only — great for admin boundaries)
+        #[arg(long)]
+        hollow: bool,
+        /// Layer transparency percentage 0-100 (e.g. 30 to blend over hillshade/basemap)
+        #[arg(long)]
+        transparency: Option<u8>,
+        /// Optional comma-separated ordered class names (e.g. "Sangat Rendah,Rendah,Sedang,Tinggi,Sangat Tinggi")
         #[arg(long)]
         classes: Option<String>,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
@@ -188,7 +219,7 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Switch between Layout/Data view and update layout text elements (title/subtitle/source) live in ArcMap
+    /// Switch between Layout/Data view, update text elements, zoom, and hide noisy layers from the legend
     Layout {
         /// View mode: layout or data
         #[arg(long)]
@@ -205,6 +236,9 @@ pub enum LiveCommand {
         /// Optional layer name to zoom the map frame extent to
         #[arg(long)]
         zoom_layer: Option<String>,
+        /// Comma-separated layer names to remove from the Layout Legend (e.g. "hillshade,Basemap")
+        #[arg(long)]
+        hide_legend: Option<String>,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
@@ -518,24 +552,6 @@ fn resolve_live_add_targets(raw: &Path) -> Result<Vec<PathBuf>> {
     Ok(vec![path])
 }
 
-fn extract_embedded_style(preset: &str) -> Result<(PathBuf, &'static str)> {
-    let (fname, bytes, code_field) = match preset.to_ascii_lowercase().as_str() {
-        "hazard" | "hazard3" | "rdylgn" => ("hazard_3class.lyr", STYLE_HAZARD_3, "GK_CODE"),
-        "hazard5" | "rdylgn5" => ("hazard_5class.lyr", STYLE_HAZARD_5, "GK_CODE8"),
-        "blue" | "blues" => ("blue_3class.lyr", STYLE_BLUE_3, "GK_CODE"),
-        "earth" | "suitability" | "green" => ("earth_3class.lyr", STYLE_EARTH_3, "GK_CODE"),
-        "category" | "unique" | "categorical" => ("category_multi.lyr", STYLE_CATEGORY, "GK_CODE8"),
-        other => bail!(
-            "Unknown style preset '{other}'. Available presets: hazard, hazard5, blue, earth, category."
-        ),
-    };
-    let dir = std::env::temp_dir().join("geokit_styles");
-    std::fs::create_dir_all(&dir)?;
-    let dst = dir.join(fname);
-    std::fs::write(&dst, bytes)?;
-    Ok((dst, code_field))
-}
-
 pub fn run(cmd: LiveCommand) -> Result<()> {
     let resp = match cmd {
         LiveCommand::InstallAddin { version } => return install_addin(version.as_deref()),
@@ -658,26 +674,45 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
         LiveCommand::Style {
             layer,
             field,
+            mode,
             preset,
+            colors,
+            color,
+            classes_count,
+            break_method,
+            outline_color,
+            outline_width,
+            outline_style,
+            width,
+            size,
+            marker,
+            hollow,
             transparency,
             classes,
             port,
-        } => {
-            let (lyr_path, code_field) = extract_embedded_style(&preset)?;
-            send_live_request(
-                port,
-                &json!({
-                    "action": "style_layer",
-                    "layer": layer,
-                    "field": field,
-                    "preset": preset,
-                    "lyr_file": abs_string(&lyr_path),
-                    "code_field": code_field,
-                    "transparency": transparency.min(100),
-                    "classes": classes,
-                }),
-            )?
-        }
+        } => send_live_request(
+            port,
+            &json!({
+                "action": "style_layer",
+                "layer": layer,
+                "field": field,
+                "mode": mode,
+                "preset": preset,
+                "colors": colors,
+                "color": color,
+                "classes_count": classes_count,
+                "break_method": break_method,
+                "outline_color": outline_color,
+                "outline_width": outline_width,
+                "outline_style": outline_style,
+                "width": width,
+                "size": size,
+                "marker": marker,
+                "hollow": hollow,
+                "transparency": transparency.map(|t| t.min(100)),
+                "classes": classes,
+            }),
+        )?,
         LiveCommand::Order {
             layer,
             position,
@@ -692,6 +727,7 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
             subtitle,
             source,
             zoom_layer,
+            hide_legend,
             port,
         } => send_live_request(
             port,
@@ -702,6 +738,7 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
                 "subtitle": subtitle,
                 "source": source,
                 "zoom_layer": zoom_layer,
+                "hide_legend": hide_legend,
             }),
         )?,
         LiveCommand::RunGp { tool, args, port } => send_live_request(

@@ -4,6 +4,20 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-26
+
+### Added
+- **Zero-Dependency Native ArcObjects COM Cartography Engine (`Install/arcobjects.py`) for ArcMap 10.1–10.8**:
+  - Breaks past `arcpy.mapping`'s read-only symbology restrictions directly in-process via pure-Python `ctypes` COM vtables (no `comtypes`, no `pywin32`, no `.lyr` template hacks, and no `GK_CODE` helper fields!).
+  - **Unlimited-Class `UniqueValueRenderer` (`--mode unique`)**: dynamically renders **2, 3, 5, 7, 15, or 50+ classes** directly on any field with smooth RGB interpolation across modern palettes (`hazard`, `hazard5`, `hazard-pastel`, `viridis`, `blue`, `earth`, `terrain`, `category`) or custom hex stops (`--colors "#hex1,#hex2,..."`), with zero junk legend slots.
+  - **Graduated Numeric Breaks (`--mode graduated`)**: automatic `quantile` or `equal`-interval `ClassBreaksRenderer` with configurable `--classes-count N`.
+  - **Full Line, Point & Boundary Styling (`--mode single`)**: `--preset stream` (cartographic blue rivers), `--preset road`, `--preset boundary` (hollow fill + dashed/solid dark outline), `--preset point` (white-halo markers), plus custom `--color`, `--width`, `--size`, `--marker`, `--outline-color`, `--outline-width`, `--outline-style`, and `--hollow`.
+  - **Raster Stretch Color Ramps (`--mode raster`)**: direct `IRasterStretchColorRampRenderer` + `IMultiPartColorRamp` (CIELAB smooth gradients) for DEM, Slope, and continuous raster layers!
+  - **Layout Legend Cleanup (`geokit live layout --hide-legend`)**: automatically removes background layers (e.g. `hillshade`, `Basemap`) from Layout Legends via `ILegend.RemoveItem`.
+
+### Fixed
+- Fixed Windows MSVC debug CI stack overflow by running CLI execution on a 32 MB stack thread (`src/main.rs`) and parsing MCP tool schemas via `serde_json::from_str` (`src/commands/mcp.rs`).
+
 ## [1.7.0] - 2026-11-26
 
 ### Added

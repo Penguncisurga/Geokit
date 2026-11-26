@@ -425,8 +425,20 @@ fn tool_definitions() -> Value {
                     "path": { "type": "string", "description": "Dataset path or folder (for add)" },
                     "layer": { "type": "string", "description": "Layer name in ArcMap TOC" },
                     "show": { "type": "boolean", "description": "True/false toggle (for visible or labels)" },
-                    "field": { "type": "string", "description": "Field name e.g. KELAS_RWN or NAMOBJ (for style or labels)" },
-                    "preset": { "type": "string", "enum": ["hazard", "hazard5", "blue", "earth", "category"], "description": "Built-in borderless color preset (for style)" },
+                    "field": { "type": "string", "description": "Field name e.g. KELAS_RWN or NAMOBJ (for style or labels; omit for single-symbol or raster)" },
+                    "mode": { "type": "string", "enum": ["auto", "unique", "graduated", "single", "raster"], "description": "ArcObjects renderer mode (for style)" },
+                    "preset": { "type": "string", "enum": ["hazard", "hazard5", "hazard-pastel", "viridis", "blue", "earth", "terrain", "gray", "category", "stream", "road", "boundary", "point"], "description": "Modern cartographic palette or single-symbol preset (for style)" },
+                    "colors": { "type": "string", "description": "Custom comma-separated hex color stops e.g. '#2E7D32,#FFF176,#D32F2F' (for style)" },
+                    "color": { "type": "string", "description": "Single hex color e.g. '#0288D1' (for single/stream/road/boundary/point)" },
+                    "classes_count": { "type": "integer", "description": "Number of numeric classes for graduated mode (default: 5)" },
+                    "break_method": { "type": "string", "enum": ["quantile", "equal"], "description": "Break method for graduated mode" },
+                    "outline_color": { "type": "string", "description": "Outline hex color e.g. '#37474F'" },
+                    "outline_width": { "type": "number", "description": "Outline width in pt (0.0 = borderless)" },
+                    "outline_style": { "type": "string", "enum": ["solid", "dash", "dot", "dashdot"], "description": "Line/outline dash style" },
+                    "width": { "type": "number", "description": "Line width in pt for polylines" },
+                    "size": { "type": "number", "description": "Marker size in pt for points" },
+                    "marker": { "type": "string", "enum": ["circle", "square", "diamond", "cross", "x"], "description": "Marker shape for points" },
+                    "hollow": { "type": "boolean", "description": "Hollow polygon fill (outline only)" },
                     "transparency": { "type": "integer", "description": "Transparency 0-100 (for style)" },
                     "classes": { "type": "string", "description": "Optional comma-separated ordered class names (for style)" },
                     "position": { "type": "string", "enum": ["top", "bottom"], "description": "Layer stack position (for order)" },
@@ -435,6 +447,7 @@ fn tool_definitions() -> Value {
                     "subtitle": { "type": "string", "description": "Layout subtitle text (for layout)" },
                     "source": { "type": "string", "description": "Layout source credit text (for layout)" },
                     "zoom_layer": { "type": "string", "description": "Layer name to zoom to (for layout)" },
+                    "hide_legend": { "type": "string", "description": "Comma-separated layer names to remove from Layout Legend e.g. 'hillshade,Basemap'" },
                     "lyr": { "type": "string", "description": "Path to .lyr symbology file (for symbology)" },
                     "where": { "type": "string", "description": "SQL WHERE clause (for select or definition-query)" },
                     "out": { "type": "string", "description": "Output file path (for export or save)" },
@@ -784,8 +797,44 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             if let Some(field) = str_arg(args, "field") {
                 cli_args.extend(["--field".into(), field.into()]);
             }
+            if let Some(m) = str_arg(args, "mode") {
+                cli_args.extend(["--mode".into(), m.into()]);
+            }
             if let Some(pr) = str_arg(args, "preset") {
                 cli_args.extend(["--preset".into(), pr.into()]);
+            }
+            if let Some(cs) = str_arg(args, "colors") {
+                cli_args.extend(["--colors".into(), cs.into()]);
+            }
+            if let Some(c) = str_arg(args, "color") {
+                cli_args.extend(["--color".into(), c.into()]);
+            }
+            if let Some(cc) = args.get("classes_count").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--classes-count".into(), cc.to_string()]);
+            }
+            if let Some(bm) = str_arg(args, "break_method") {
+                cli_args.extend(["--break-method".into(), bm.into()]);
+            }
+            if let Some(oc) = str_arg(args, "outline_color") {
+                cli_args.extend(["--outline-color".into(), oc.into()]);
+            }
+            if let Some(ow) = args.get("outline_width").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--outline-width".into(), ow.to_string()]);
+            }
+            if let Some(os) = str_arg(args, "outline_style") {
+                cli_args.extend(["--outline-style".into(), os.into()]);
+            }
+            if let Some(w) = args.get("width").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--width".into(), w.to_string()]);
+            }
+            if let Some(sz) = args.get("size").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--size".into(), sz.to_string()]);
+            }
+            if let Some(mk) = str_arg(args, "marker") {
+                cli_args.extend(["--marker".into(), mk.into()]);
+            }
+            if bool_arg(args, "hollow") {
+                cli_args.push("--hollow".into());
             }
             if let Some(tr) = args.get("transparency").and_then(|v| v.as_u64()) {
                 cli_args.extend(["--transparency".into(), tr.to_string()]);
@@ -810,6 +859,9 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(zl) = str_arg(args, "zoom_layer") {
                 cli_args.extend(["--zoom-layer".into(), zl.into()]);
+            }
+            if let Some(hl) = str_arg(args, "hide_legend") {
+                cli_args.extend(["--hide-legend".into(), hl.into()]);
             }
             if let Some(lyr) = str_arg(args, "lyr") {
                 cli_args.extend(["--lyr".into(), lyr.into()]);
