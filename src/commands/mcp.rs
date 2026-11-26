@@ -223,7 +223,7 @@ fn tool_definitions() -> Value {
                     "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats"] },
                     "input": { "type": "string", "description": "Input raster or folder" },
                     "out": { "type": "string", "description": "Output file or directory" },
-                    "engine": { "type": "string", "enum": ["auto", "arcgis", "gdal"] },
+                    "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"] },
                     "zones": { "type": "string", "description": "Zone polygon path (for zonal-stats)" },
                     "zone_field": { "type": "string", "description": "Zone field name (for zonal-stats)" }
                 },
@@ -232,13 +232,14 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_hydro",
-            "description": "Run automated DEM watershed (DAS) delineation or basin extraction via ArcGIS Spatial Analyst.",
+            "description": "Run automated DEM watershed (DAS) delineation or basin extraction via ArcGIS Pro or ArcMap 10.x Spatial Analyst.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": { "type": "string", "enum": ["delineate", "basin"] },
                     "dem": { "type": "string", "description": "Input DEM raster path" },
                     "out": { "type": "string", "description": "Output directory" },
+                    "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap"] },
                     "threshold": { "type": "integer", "description": "Stream accumulation threshold (for delineate)" },
                     "pour_point": { "type": "string", "description": "Optional outlet point shapefile (for delineate)" }
                 },

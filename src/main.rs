@@ -171,9 +171,11 @@ fn main() -> Result<()> {
             commands::map::run(command, effective_propy, &cfg, effective_engine)
         }
         Commands::Raster { command } => {
-            commands::raster::run(command, effective_propy, effective_engine)
+            commands::raster::run(command, effective_propy, &cfg, effective_engine)
         }
-        Commands::Hydro { command } => commands::hydro::run(command, effective_propy),
+        Commands::Hydro { command } => {
+            commands::hydro::run(command, effective_propy, &cfg, effective_engine)
+        }
         Commands::Mcp => commands::mcp::run(),
     }
 }

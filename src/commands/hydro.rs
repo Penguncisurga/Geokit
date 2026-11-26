@@ -3,7 +3,10 @@ use clap::Subcommand;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::engine::{abs_string, run_arcpy_job};
+use crate::config::GeokitConfig;
+use crate::engine::{
+    abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
+};
 
 #[derive(Debug, Subcommand)]
 pub enum HydroCommand {
@@ -44,7 +47,14 @@ struct HydroPayload {
     snap_dist: Option<f64>,
 }
 
-pub fn run(cmd: HydroCommand, override_propy: Option<&Path>) -> Result<()> {
+pub fn run(
+    cmd: HydroCommand,
+    override_propy: Option<&Path>,
+    cfg: &GeokitConfig,
+    backend: EngineBackend,
+) -> Result<()> {
+    let resolved = resolve_backend(backend, override_propy, cfg.arcgis.arcmap_python.as_deref());
+
     let payload = match cmd {
         HydroCommand::Delineate {
             dem,
@@ -85,5 +95,9 @@ pub fn run(cmd: HydroCommand, override_propy: Option<&Path>) -> Result<()> {
         }
     };
 
-    run_arcpy_job(override_propy, &payload)
+    if resolved == ResolvedBackend::Arcmap {
+        run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+    } else {
+        run_arcpy_job(override_propy, &payload)
+    }
 }

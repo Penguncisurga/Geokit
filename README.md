@@ -221,9 +221,10 @@ Add to your MCP client configuration:
 }
 ```
 
-**ArcMap 10.x (`.mxd` / Python 2.7) Support:**
-- Passing an `.mxd` file to `geokit layout export` or `geokit map broken-links` / `fix-links` automatically routes to ArcMap 10.x (`arcpy.mapping`).
-- Pass `--engine arcmap` to run batch `geokit gp` commands using ArcMap 10.x Python 2.7 (`C:\Python27\ArcGIS10.x\python.exe`, or set `GEOKIT_ARCMAP_PYTHON`).
+**ArcMap 10.x (`.mxd` / Python 2.7) Full Support:**
+- On ArcMap-only machines (without ArcGIS Pro), `--engine auto` automatically selects **ArcMap 10.x** (`ArcGIS Pro → ArcMap 10.x → GDAL`) for **all** `gp`, `raster`, `hydro`, `layout`, and `map` commands!
+- Passing an `.mxd` file (or folder of `.mxd` files) to `geokit layout` or `geokit map` automatically routes to ArcMap (`arcpy.mapping`).
+- Pass `--engine arcmap` (or set `engine = "arcmap"` in `geokit.toml`) to force ArcMap 10.x Python 2.7 even when ArcGIS Pro is also installed.
 
 ---
 

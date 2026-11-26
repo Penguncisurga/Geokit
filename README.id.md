@@ -174,9 +174,10 @@ Tambahkan ke konfigurasi MCP client kamu:
 }
 ```
 
-Untuk **ArcMap 10.x (`.mxd` / Python 2.7)**:
-- File `.mxd` pada `geokit layout export` dan `geokit map broken-links` / `fix-links` otomatis dijalankan lewat Python 2.7 ArcMap (`arcpy.mapping`).
-- Gunakan `--engine arcmap` pada `geokit gp ...` untuk menjalankan geoprocessing lewat ArcMap 10.x.
+Untuk **ArcMap 10.x (`.mxd` / Python 2.7)** — *100% fitur didukung penuh*:
+- Di komputer yang **hanya punya ArcMap 10.x** (tanpa ArcGIS Pro), `--engine auto` otomatis memilih **ArcMap 10.x** (`ArcGIS Pro → ArcMap 10.x → GDAL`) untuk semua perintah `gp`, `raster`, `hydro`, `layout`, dan `map`.
+- File atau folder `.mxd` pada `geokit layout` dan `geokit map` otomatis dijalankan lewat Python 2.7 ArcMap (`arcpy.mapping`).
+- Gunakan `--engine arcmap` (atau set `engine = "arcmap"` di `geokit.toml`) untuk memilih ArcMap 10.x secara eksplisit.
 
 ---
 

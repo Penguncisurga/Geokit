@@ -4,6 +4,13 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-26
+
+### Added
+- Full **ArcMap 10.x (Python 2.7)** feature parity: added `raster mosaic`, `raster terrain`, `raster zonal-stats`, `hydro delineate`, and `hydro basin` to `scripts/arcmap_runner.py`.
+- Smart `--engine auto` fallback order: **ArcGIS Pro → ArcMap 10.x → GDAL**, so ArcMap-only users never need to pass `--engine arcmap` manually.
+- Added `arcmap` engine option to `geokit_raster` and `geokit_hydro` MCP tools.
+
 ## [1.0.0] - 2026-11-26
 
 ### Added

@@ -3,8 +3,11 @@ use clap::Subcommand;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+use crate::config::GeokitConfig;
 use crate::engine::gdal::{detect_gdal, gdal_mosaic, gdal_terrain};
-use crate::engine::{abs_string, detect_arcgis, run_arcpy_job, EngineBackend};
+use crate::engine::{
+    abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
+};
 
 #[derive(Debug, Subcommand)]
 pub enum RasterCommand {
@@ -64,29 +67,20 @@ struct RasterPayload {
     zone_field: Option<String>,
 }
 
-fn should_use_gdal(backend: EngineBackend, override_propy: Option<&Path>) -> bool {
-    match backend {
-        EngineBackend::Gdal => true,
-        EngineBackend::Arcgis | EngineBackend::Arcmap => false,
-        EngineBackend::Auto => {
-            detect_arcgis(override_propy).arcgis_pro_propy.is_none() && detect_gdal().is_available()
-        }
-    }
-}
-
 pub fn run(
     cmd: RasterCommand,
     override_propy: Option<&Path>,
+    cfg: &GeokitConfig,
     backend: EngineBackend,
 ) -> Result<()> {
-    let use_gdal = should_use_gdal(backend, override_propy);
+    let resolved = resolve_backend(backend, override_propy, cfg.arcgis.arcmap_python.as_deref());
 
     match cmd {
         RasterCommand::Mosaic { input, out } => {
             if !input.exists() {
                 bail!("Input directory does not exist: {}", input.display());
             }
-            if use_gdal {
+            if resolved == ResolvedBackend::Gdal {
                 let gdal = detect_gdal();
                 return gdal_mosaic(&gdal, &input, &out);
             }
@@ -100,7 +94,11 @@ pub fn run(
                 zones: None,
                 zone_field: None,
             };
-            run_arcpy_job(override_propy, &payload)
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
         }
         RasterCommand::Terrain {
             input,
@@ -118,7 +116,7 @@ pub fn run(
             let do_aspect = all || none_selected || aspect;
             let do_hillshade = all || none_selected || hillshade;
 
-            if use_gdal {
+            if resolved == ResolvedBackend::Gdal {
                 let gdal = detect_gdal();
                 return gdal_terrain(&gdal, &input, &out, do_slope, do_aspect, do_hillshade);
             }
@@ -132,7 +130,11 @@ pub fn run(
                 zones: None,
                 zone_field: None,
             };
-            run_arcpy_job(override_propy, &payload)
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
         }
         RasterCommand::ZonalStats {
             input,
@@ -156,7 +158,11 @@ pub fn run(
                 zones: Some(abs_string(&zones)),
                 zone_field: Some(zone_field),
             };
-            run_arcpy_job(override_propy, &payload)
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
         }
     }
 }

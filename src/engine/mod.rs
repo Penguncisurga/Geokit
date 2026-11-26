@@ -17,6 +17,40 @@ pub enum EngineBackend {
     Gdal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedBackend {
+    Arcgis,
+    Arcmap,
+    Gdal,
+}
+
+/// Resolves `--engine auto` with priority: ArcGIS Pro -> ArcMap 10.x -> GDAL.
+pub fn resolve_backend(
+    backend: EngineBackend,
+    override_propy: Option<&Path>,
+    override_arcmap: Option<&Path>,
+) -> ResolvedBackend {
+    match backend {
+        EngineBackend::Arcgis => ResolvedBackend::Arcgis,
+        EngineBackend::Arcmap => ResolvedBackend::Arcmap,
+        EngineBackend::Gdal => ResolvedBackend::Gdal,
+        EngineBackend::Auto => {
+            let env_info = detect_arcgis(override_propy);
+            if env_info.arcgis_pro_propy.is_some() {
+                ResolvedBackend::Arcgis
+            } else if override_arcmap.map(|p| p.exists()).unwrap_or(false)
+                || env_info.arcmap_python.is_some()
+            {
+                ResolvedBackend::Arcmap
+            } else if gdal::detect_gdal().is_available() {
+                ResolvedBackend::Gdal
+            } else {
+                ResolvedBackend::Arcgis
+            }
+        }
+    }
+}
+
 const ARCPY_RUNNER_SCRIPT: &str = include_str!("../../scripts/arcpy_runner.py");
 const ARCMAP_RUNNER_SCRIPT: &str = include_str!("../../scripts/arcmap_runner.py");
 
