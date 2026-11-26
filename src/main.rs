@@ -178,7 +178,20 @@ fn resolve_engine(cli_engine: Option<EngineBackend>, cfg_engine: Option<&str>) -
     }
 }
 
+/// Runs the CLI on a dedicated thread with a large stack. The default 1 MB main-thread stack on
+/// Windows (MSVC) is not enough for clap's deeply nested derive parser in unoptimized builds.
 fn main() -> Result<()> {
+    let handle = std::thread::Builder::new()
+        .name("geokit-main".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(real_main)?;
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!("geokit main thread panicked"),
+    }
+}
+
+fn real_main() -> Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
     let (cfg, cfg_path) = config::load_config(&cwd)?;
