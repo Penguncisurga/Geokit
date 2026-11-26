@@ -11,6 +11,7 @@ import json
 import os
 import Queue
 import socket
+import sys
 import tempfile
 import threading
 import traceback
@@ -18,10 +19,16 @@ import traceback
 import arcpy
 import pythonaddins
 
+_ADDIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if _ADDIN_DIR and _ADDIN_DIR not in sys.path:
+    sys.path.insert(0, _ADDIN_DIR)
+
+_AO_ERR = None
 try:
     import arcobjects as _ao
-except Exception:
+except Exception as _exc:
     _ao = None
+    _AO_ERR = str(_exc)
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("GEOKIT_LIVE_PORT", "9877"))
@@ -263,7 +270,7 @@ def _handle_command_on_ui_thread(req):
             return {"ok": False, "error": "Layer not found: %s" % name}
 
         if _ao is None:
-            return {"ok": False, "error": "ArcObjects COM module failed to load inside Add-In."}
+            return {"ok": False, "error": "ArcObjects COM module failed to load inside Add-In: %s" % _AO_ERR}
 
         mxdoc = _ao.get_current_mxdoc()
         com_lyr, com_name = _ao.find_com_layer(mxdoc, lyr.name)
