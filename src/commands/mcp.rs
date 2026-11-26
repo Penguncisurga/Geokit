@@ -245,6 +245,28 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["action", "dem", "out"]
             }
+        },
+        {
+            "name": "geokit_live",
+            "description": "Control an open ArcMap 10.x window live via the GeoKit Python Add-In bridge (ping, layers, add, remove, visible, zoom, select, clear-selection, export, run-gp).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["ping", "layers", "add", "remove", "visible", "zoom", "select", "clear-selection", "export", "run-gp", "install-addin"]
+                    },
+                    "path": { "type": "string", "description": "Dataset path (for add)" },
+                    "layer": { "type": "string", "description": "Layer name in ArcMap TOC (for remove, visible, zoom, select, clear-selection)" },
+                    "show": { "type": "boolean", "description": "Visibility true/false (for visible)" },
+                    "where": { "type": "string", "description": "SQL WHERE clause (for select)" },
+                    "out": { "type": "string", "description": "Output image/PDF path (for export)" },
+                    "dpi": { "type": "integer", "description": "Export DPI (for export)" },
+                    "tool": { "type": "string", "description": "ArcPy tool name e.g. Buffer_analysis (for run-gp)" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "ArcPy tool arguments (for run-gp)" }
+                },
+                "required": ["action"]
+            }
         }
     ])
 }
@@ -429,6 +451,40 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(pp) = str_arg(args, "pour_point") {
                 cli_args.extend(["--pour-point".into(), pp.into()]);
+            }
+        }
+        "geokit_live" => {
+            let Some(action) = str_arg(args, "action") else {
+                return ("Missing required argument: action".into(), true);
+            };
+            cli_args.extend(["live".into(), action.into()]);
+            if let Some(path) = str_arg(args, "path") {
+                cli_args.push(path.into());
+            }
+            if let Some(layer) = str_arg(args, "layer") {
+                cli_args.push(layer.into());
+            }
+            if let Some(show) = args.get("show").and_then(|v| v.as_bool()) {
+                cli_args.extend(["--show".into(), show.to_string()]);
+            }
+            if let Some(w) = str_arg(args, "where") {
+                cli_args.extend(["--where".into(), w.into()]);
+            }
+            if let Some(out) = str_arg(args, "out") {
+                cli_args.extend(["--out".into(), out.into()]);
+            }
+            if let Some(dpi) = args.get("dpi").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--dpi".into(), dpi.to_string()]);
+            }
+            if let Some(tool) = str_arg(args, "tool") {
+                cli_args.push(tool.into());
+            }
+            if let Some(arr) = args.get("args").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        cli_args.push(s.into());
+                    }
+                }
             }
         }
         _ => return (format!("Unknown tool: {name}"), true),

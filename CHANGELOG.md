@@ -4,6 +4,13 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-26
+
+### Added
+- **ArcMap 10.x Live-UI Bridge (`geokit-arcmap.esriaddin` + `geokit live` + MCP `geokit_live`)**: real-time control of an open ArcMap window (like QGIS MCP!) over localhost TCP (`127.0.0.1:9877`) using main-thread `SetTimer` dispatch.
+- One-command installer: `geokit live install-addin` writes the embedded `.esriaddin` directly into `Documents\ArcGIS\AddIns\Desktop10.x`.
+- Live commands: `ping`, `layers`, `add`, `remove`, `visible`, `zoom`, `select`, `clear-selection`, `export`, and `run-gp` (auto-adds GP output straight onto the active map).
+
 ## [1.1.0] - 2026-11-26
 
 ### Added

@@ -228,6 +228,27 @@ Add to your MCP client configuration:
 
 ---
 
+### 7. Live-UI Control for ArcMap 10.x (`geokit live` & MCP `geokit_live`)
+
+Control an **open ArcMap 10.x window in real time** (just like QGIS MCP) via the embedded `geokit-arcmap.esriaddin` Python Add-In!
+
+```bash
+# 1. Install the embedded ArcMap Python Add-In (one-time setup)
+geokit live install-addin
+
+# 2. Restart ArcMap 10.x once, then control the open map live:
+geokit live ping
+geokit live layers
+geokit live add ./01_Vector/batas_desa.shp
+geokit live zoom batas_desa
+geokit live select batas_desa --where "KELAS = 'Hutan'"
+geokit live visible batas_desa --show false
+geokit live export --out ./current_view.png --dpi 200
+geokit live run-gp Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
+```
+
+---
+
 ## Roadmap
 
 - [x] `geokit layout list` & `geokit layout export` — Batch export `.aprx` & `.mxd` layouts to PDF/PNG/JPG

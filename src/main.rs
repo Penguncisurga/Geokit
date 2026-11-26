@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use commands::gp::GpCommand;
 use commands::hydro::HydroCommand;
 use commands::layout::LayoutCommand;
+use commands::live::LiveCommand;
 use commands::map::MapCommand;
 use commands::raster::RasterCommand;
 use engine::EngineBackend;
@@ -118,6 +119,11 @@ enum Commands {
         #[command(subcommand)]
         command: HydroCommand,
     },
+    /// Control a currently open ArcMap 10.x window live (add/remove/zoom/select/export/run-gp)
+    Live {
+        #[command(subcommand)]
+        command: LiveCommand,
+    },
     /// Run geokit as a Model Context Protocol (MCP) JSON-RPC 2.0 server over stdio
     Mcp,
 }
@@ -176,6 +182,7 @@ fn main() -> Result<()> {
         Commands::Hydro { command } => {
             commands::hydro::run(command, effective_propy, &cfg, effective_engine)
         }
+        Commands::Live { command } => commands::live::run(command),
         Commands::Mcp => commands::mcp::run(),
     }
 }

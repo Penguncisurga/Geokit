@@ -5,6 +5,7 @@ pub mod gp;
 pub mod hydro;
 pub mod init;
 pub mod layout;
+pub mod live;
 pub mod map;
 pub mod mcp;
 pub mod organize;

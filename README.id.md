@@ -181,6 +181,27 @@ Untuk **ArcMap 10.x (`.mxd` / Python 2.7)** — *100% fitur didukung penuh*:
 
 ---
 
+### 7. Kontrol Layar Live ArcMap 10.x (`geokit live` & MCP `geokit_live`)
+
+Kontrol jendela **ArcMap 10.x yang sedang terbuka secara *real-time*** (seperti QGIS MCP) menggunakan Python Add-In `geokit-arcmap.esriaddin` bawaan!
+
+```bash
+# 1. Pasang Add-In ArcMap cukup 1 perintah (sekali saja)
+geokit live install-addin
+
+# 2. Tutup & buka ulang ArcMap 10.x sekali, lalu kontrol langsung secara live:
+geokit live ping
+geokit live layers
+geokit live add ./01_Vector/batas_desa.shp
+geokit live zoom batas_desa
+geokit live select batas_desa --where "KELAS = 'Hutan'"
+geokit live visible batas_desa --show false
+geokit live export --out ./tampilan_aktif.png --dpi 200
+geokit live run-gp Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
+```
+
+---
+
 ## Lisensi
 
 Proyek ini dirilis dengan [Lisensi MIT](LICENSE).

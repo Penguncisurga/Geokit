@@ -1,0 +1,32 @@
+<ESRI.Configuration xmlns="http://schemas.esri.com/Desktop/AddIns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Name>GeoKit ArcMap Live Bridge</Name>
+  <AddInID>{9a5c7e14-4f2b-4d88-b6a3-8c1e9f0d2b41}</AddInID>
+  <Description>Live-UI TCP bridge enabling real-time control of ArcMap 10.x from geokit CLI and MCP AI agents.</Description>
+  <Version>1.2.0</Version>
+  <Image />
+  <Author>Penguncisurga</Author>
+  <Company>geokit</Company>
+  <Date>11/26/2026</Date>
+  <Targets>
+    <Target name="Desktop" version="10.1" />
+  </Targets>
+  <AddIn language="PYTHON" library="geokit_addin.py" namespace="geokit_addin">
+    <ArcMap>
+      <Commands>
+        <Button caption="GeoKit Live Status" category="GeoKit" class="GeoKitStatusButton" id="geokit_addin.status_btn" message="Show GeoKit Live-UI Bridge status (127.0.0.1:9877)" tip="GeoKit Live Status">
+          <Help heading="GeoKit Live Bridge">Shows whether the GeoKit Live-UI TCP bridge is running and listening on 127.0.0.1:9877.</Help>
+        </Button>
+      </Commands>
+      <Extensions>
+        <Extension autoLoad="true" category="GeoKit" class="GeoKitLiveExtension" description="Starts the GeoKit Live-UI TCP bridge inside ArcMap" id="geokit_addin.live_ext" name="GeoKit Live Bridge" productName="GeoKit" showInExtensionDialog="true" />
+      </Extensions>
+      <Toolbars>
+        <Toolbar caption="GeoKit Live" category="GeoKit" id="geokit_addin.toolbar" showInitially="true">
+          <Items>
+            <Button refID="geokit_addin.status_btn" />
+          </Items>
+        </Toolbar>
+      </Toolbars>
+    </ArcMap>
+  </AddIn>
+</ESRI.Configuration>
