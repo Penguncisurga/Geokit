@@ -834,6 +834,320 @@ def cmd_qa_check(payload):
     return 0
 
 
+def _cast_value(raw_str, field_type):
+    if raw_str is None:
+        return None
+    ft = field_type.upper()
+    if ft in ("LONG", "SHORT"):
+        return int(float(raw_str))
+    if ft in ("DOUBLE", "FLOAT"):
+        return float(raw_str)
+    return str(raw_str)
+
+
+def _parse_classify_rules(rules_str, field_type=None):
+    raw_rules = [r.strip() for r in rules_str.split(";") if r.strip()]
+    if not raw_rules:
+        raise ValueError("No valid rules found. Example: 'Hutan=1;Sawah=3' or '<=8:1;8-15:2;>15:3'")
+
+    parsed = []
+    out_samples = []
+    for r in raw_rules:
+        if "=" in r and not r.startswith("<=") and not r.startswith(">="):
+            lhs, rhs = r.split("=", 1)
+        elif ":" in r:
+            lhs, rhs = r.split(":", 1)
+        else:
+            raise ValueError("Invalid rule syntax '%s'. Use 'key=val' or 'range:val'." % r)
+        lhs = lhs.strip()
+        rhs = rhs.strip()
+        out_samples.append(rhs)
+
+        if lhs.startswith("<="):
+            parsed.append(("le", float(lhs[2:].strip()), None, rhs))
+        elif lhs.startswith(">="):
+            parsed.append(("ge", float(lhs[2:].strip()), None, rhs))
+        elif lhs.startswith("<"):
+            parsed.append(("lt", float(lhs[1:].strip()), None, rhs))
+        elif lhs.startswith(">"):
+            parsed.append(("gt", float(lhs[1:].strip()), None, rhs))
+        else:
+            range_match = None
+            for idx in range(1, len(lhs)):
+                if lhs[idx] == "-":
+                    try:
+                        lo = float(lhs[:idx].strip())
+                        hi = float(lhs[idx + 1:].strip())
+                        range_match = (lo, hi)
+                        break
+                    except ValueError:
+                        pass
+            if range_match is not None:
+                parsed.append(("range", range_match[0], range_match[1], rhs))
+            else:
+                parsed.append(("eq", lhs.lower(), None, rhs))
+
+    if not field_type:
+        all_int = True
+        all_float = True
+        for s in out_samples:
+            try:
+                int(s)
+            except ValueError:
+                all_int = False
+            try:
+                float(s)
+            except ValueError:
+                all_float = False
+        if all_int:
+            field_type = "LONG"
+        elif all_float:
+            field_type = "DOUBLE"
+        else:
+            field_type = "TEXT"
+    else:
+        field_type = field_type.upper()
+
+    typed_rules = [(op, a, b, _cast_value(rhs, field_type)) for op, a, b, rhs in parsed]
+    return typed_rules, field_type
+
+
+def _match_classify_rule(val, rules):
+    if val is None:
+        return None, False
+    for op, a, b, out_val in rules:
+        if op == "eq":
+            if unicode(val).strip().lower() == a:
+                return out_val, True
+            try:
+                if float(val) == float(a):
+                    return out_val, True
+            except (ValueError, TypeError):
+                pass
+        else:
+            try:
+                num = float(val)
+            except (ValueError, TypeError):
+                continue
+            if op == "le" and num <= a:
+                return out_val, True
+            if op == "lt" and num < a:
+                return out_val, True
+            if op == "ge" and num >= a:
+                return out_val, True
+            if op == "gt" and num > a:
+                return out_val, True
+            if op == "range" and a <= num <= b:
+                return out_val, True
+    return None, False
+
+
+def cmd_values(payload):
+    import math
+    from collections import Counter
+
+    items = collect_datasets(payload["input"], include_rasters=True)
+    target_field = payload.get("field")
+    limit = int(payload.get("limit") or 50)
+    results = []
+
+    for ds_path, kind in items:
+        entry = {"name": os.path.basename(ds_path), "path": ds_path, "kind": kind}
+        if kind == "raster":
+            try:
+                arcpy.CalculateStatistics_management(ds_path)
+            except Exception:
+                pass
+            stats = {}
+            for prop in ("MINIMUM", "MAXIMUM", "MEAN", "STD"):
+                try:
+                    val = arcpy.GetRasterProperties_management(ds_path, prop).getOutput(0)
+                    stats[prop.lower()] = float(val.replace(",", "."))
+                except Exception:
+                    stats[prop.lower()] = None
+            entry["raster_stats"] = stats
+        else:
+            fields = [f for f in arcpy.ListFields(ds_path) if f.type not in ("Geometry", "OID", "Blob", "Raster")]
+            if target_field:
+                fields = [f for f in fields if f.name.lower() == target_field.lower()]
+                if not fields:
+                    sys.stderr.write("Field '%s' not found in %s\n" % (target_field, ds_path))
+                    return 1
+            field_names = [f.name for f in fields]
+            numeric_types = set(["Integer", "SmallInteger", "Single", "Double"])
+            counters = dict((f.name, Counter()) for f in fields)
+            num_vals = dict((f.name, []) for f in fields if f.type in numeric_types)
+            null_counts = dict((f.name, 0) for f in fields)
+            total_rows = 0
+
+            if field_names:
+                with arcpy.da.SearchCursor(ds_path, field_names) as cur:
+                    for row in cur:
+                        total_rows += 1
+                        for idx, f in enumerate(fields):
+                            v = row[idx]
+                            if v is None or (isinstance(v, basestring) and not v.strip()):
+                                null_counts[f.name] += 1
+                            else:
+                                if f.type in numeric_types:
+                                    num_vals[f.name].append(float(v))
+                                counters[f.name][v] += 1
+
+            field_summaries = []
+            for f in fields:
+                c = counters[f.name]
+                fs = {
+                    "field": f.name,
+                    "type": f.type,
+                    "total_rows": total_rows,
+                    "null_count": null_counts[f.name],
+                    "distinct_count": len(c),
+                }
+                if f.type in numeric_types and num_vals[f.name]:
+                    vals = num_vals[f.name]
+                    mean = sum(vals) / float(len(vals))
+                    var = sum((x - mean) ** 2 for x in vals) / float(len(vals))
+                    fs["min"] = min(vals)
+                    fs["max"] = max(vals)
+                    fs["mean"] = round(mean, 4)
+                    fs["std"] = round(math.sqrt(var), 4)
+                if len(c) <= limit or f.type not in numeric_types:
+                    fs["top_values"] = [{"value": unicode(k), "count": cnt} for k, cnt in c.most_common(limit)]
+                field_summaries.append(fs)
+            entry["fields"] = field_summaries
+        results.append(entry)
+
+    if payload.get("json"):
+        print(json.dumps(results, indent=2))
+        return 0
+
+    for item in results:
+        print("Dataset: %s (%s)" % (item["name"], item["kind"]))
+        if item["kind"] == "raster":
+            st = item["raster_stats"]
+            print("  Raster stats: min=%s  max=%s  mean=%s  std=%s" % (st["minimum"], st["maximum"], st["mean"], st["std"]))
+        else:
+            for fs in item["fields"]:
+                head = "  - %s (%s): %d unique, %d null" % (fs["field"], fs["type"], fs["distinct_count"], fs["null_count"])
+                if "min" in fs:
+                    head += " | min=%s, max=%s, mean=%s, std=%s" % (fs["min"], fs["max"], fs["mean"], fs["std"])
+                print(head)
+                if fs.get("top_values"):
+                    preview = ", ".join("%s (%d)" % (tv["value"], tv["count"]) for tv in fs["top_values"][:12])
+                    more = (" ... (+%d more)" % (len(fs["top_values"]) - 12)) if len(fs["top_values"]) > 12 else ""
+                    print("      Values: %s%s" % (preview, more))
+    return 0
+
+
+def cmd_classify(payload):
+    ds_path = payload["input"]
+    src_field = payload["field"]
+    out_field = payload["out_field"]
+    rules_str = payload["rules"]
+    req_type = payload.get("field_type")
+    default_raw = payload.get("default_value")
+
+    rules, field_type = _parse_classify_rules(rules_str, req_type)
+    default_val = _cast_value(default_raw, field_type) if default_raw is not None else None
+
+    existing = dict((f.name.lower(), f.name) for f in arcpy.ListFields(ds_path))
+    actual_src = existing.get(src_field.lower())
+    if not actual_src:
+        sys.stderr.write("Source field '%s' not found in %s\n" % (src_field, ds_path))
+        return 1
+
+    actual_out = existing.get(out_field.lower())
+    if not actual_out:
+        if field_type == "TEXT":
+            arcpy.AddField_management(ds_path, out_field, "TEXT", field_length=64)
+        else:
+            arcpy.AddField_management(ds_path, out_field, field_type)
+        actual_out = out_field
+
+    matched = 0
+    unmatched = 0
+    with arcpy.da.UpdateCursor(ds_path, [actual_src, actual_out]) as cur:
+        for row in cur:
+            val, hit = _match_classify_rule(row[0], rules)
+            if hit:
+                row[1] = val
+                matched += 1
+            else:
+                if default_val is not None:
+                    row[1] = default_val
+                unmatched += 1
+            cur.updateRow(row)
+
+    print("OK Classified '%s' -> '%s' (%s): %d matched, %d unmatched/defaulted." % (actual_src, actual_out, field_type, matched, unmatched))
+    return 0
+
+
+def cmd_calc_field(payload):
+    import math
+
+    ds_path = payload["input"]
+    out_field = payload["field"]
+    expr = payload["expr"]
+    field_type = (payload.get("field_type") or "DOUBLE").upper()
+
+    existing = dict((f.name.lower(), f.name) for f in arcpy.ListFields(ds_path))
+    actual_out = existing.get(out_field.lower())
+    if not actual_out:
+        if field_type == "TEXT":
+            arcpy.AddField_management(ds_path, out_field, "TEXT", field_length=128)
+        else:
+            arcpy.AddField_management(ds_path, out_field, field_type)
+        actual_out = out_field
+
+    all_fields = [f.name for f in arcpy.ListFields(ds_path) if f.type not in ("Geometry", "Blob", "Raster")]
+    out_idx = all_fields.index(actual_out)
+    safe_funcs = {
+        "abs": abs, "min": min, "max": max, "round": round,
+        "int": int, "float": float, "str": str, "len": len,
+        "sqrt": math.sqrt, "log": math.log, "pow": math.pow, "math": math,
+    }
+
+    updated = 0
+    with arcpy.da.UpdateCursor(ds_path, all_fields) as cur:
+        for row in cur:
+            env = dict(safe_funcs)
+            for idx, fname in enumerate(all_fields):
+                v = row[idx]
+                env[fname] = v
+                env.setdefault(fname.upper(), v)
+                env.setdefault(fname.lower(), v)
+            val = eval(expr, {"__builtins__": {}}, env)
+            row[out_idx] = _cast_value(val, field_type) if val is not None else None
+            cur.updateRow(row)
+            updated += 1
+
+    print("OK Calculated field '%s' (%s) = %s on %d feature(s)." % (actual_out, field_type, expr, updated))
+    return 0
+
+
+def cmd_union(payload):
+    raw_inputs = payload.get("inputs") or [payload["input"]]
+    out_path = payload["out"]
+    layers = []
+    for item in raw_inputs:
+        if os.path.isdir(item):
+            for ds_p, kind in collect_datasets(item, include_rasters=False):
+                if kind == "vector":
+                    layers.append(ds_p)
+        else:
+            layers.append(item)
+
+    if len(layers) < 2:
+        sys.stderr.write("Union requires at least 2 vector layers (found %d).\n" % len(layers))
+        return 1
+
+    ensure_output_container(out_path, is_batch=False)
+    arcpy.Union_analysis(layers, out_path, "ALL")
+    cnt = int(arcpy.GetCount_management(out_path).getOutput(0))
+    print("OK Unioned %d layer(s) -> %s (%d feature(s))" % (len(layers), out_path, cnt))
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -853,6 +1167,10 @@ HANDLERS = {
     "gp_run": cmd_gp_run,
     "xy2shp": cmd_xy2shp,
     "convert": cmd_convert,
+    "values": cmd_values,
+    "classify": cmd_classify,
+    "calc_field": cmd_calc_field,
+    "union": cmd_union,
     "qa_check": cmd_qa_check,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,

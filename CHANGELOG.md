@@ -4,6 +4,15 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-11-26
+
+### Added
+- **Attribute & Raster Inspection (`geokit gp values`)**: inspect unique category values with frequency counts, NULL counts, and numeric/raster statistics (`min`, `max`, `mean`, `std`) across ArcGIS Pro and ArcMap 10.x (`--json` supported).
+- **One-Command Scoring & Classification (`geokit gp classify`)**: classify or score any attribute field into a new score/class column using category mappings (`"Hutan=1;Sawah=3"`) or numeric ranges (`"<=8:1;8-15:2;>15:3"`), with automatic output field type inference (`LONG`, `DOUBLE`, `TEXT`).
+- **Safe Expression Field Calculator (`geokit gp calc-field`)**: compute weighted overlay totals and math formulas (e.g. `"0.4 * SKOR_LERENG + 0.3 * SKOR_TANAH + 0.3 * SKOR_HUJAN"`) via `arcpy.da.UpdateCursor` without CLI quote-escaping bugs.
+- **Multi-Layer Overlay (`geokit gp union`)**: union 2+ polygon layers (or an entire folder/`.gdb`) into a single combined feature class for multi-parameter hazard/suitability analysis.
+- **Built-in AI GIS Playbooks (MCP Prompts + `AGENT_GUIDE.md`)**: added standard MCP `prompts/list` & `prompts/get` support to `geokit mcp` with 3 end-to-end GIS SOP workflows (`peta_kerawanan`, `peta_persebaran`, `analisis_das`), plus [AGENT_GUIDE.md](AGENT_GUIDE.md).
+
 ## [1.5.1] - 2026-11-26
 
 ### Improved

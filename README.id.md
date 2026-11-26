@@ -6,7 +6,7 @@
 
 > **CLI GIS cepat & MCP Server bawaan berbasis Rust untuk merapikan struktur data spasial, batch geoprocessing (ArcGIS Pro / ArcMap 10.x / GDAL), export layout, raster, dan hidrologi DAS.**
 
-[Read in English (README.md)](README.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+[Read in English (README.md)](README.md) · [Panduan SOP AI Agent (AGENT_GUIDE.md)](AGENT_GUIDE.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ---
 
@@ -121,6 +121,10 @@ geokit clean ./proyek_das
 - **`geokit gp xy2shp <tabel.csv> --x-field lon --y-field lat --epsg 4326 --out <titik.shp>`** — Konversi tabel CSV koordinat X/Y (Lon/Lat) langsung menjadi titik `.shp`, `.gpkg`, atau `.gdb` (ArcGIS Pro, ArcMap, atau GDAL).
 - **`geokit gp convert <input> --to shp|gpkg|geojson|kml|fgb --out <out>`** — Batch konversi format vektor antar SHP, GeoPackage, GeoJSON, KML, dan FlatGeobuf.
 - **`geokit qa <input> [--expected-epsg 32748] [--check-nulls DESA,KELAS] [--check-overlaps]`** — Quality Assurance spasial: cek keseragaman CRS, geometri rusak (*CheckGeometry*), field wajib yang kosong/NULL, dan poligon tumpang tindih (*overlap*).
+- **`geokit gp values <input> [--field <kolom>] [--json]`** — Intip daftar *unique values* beserta jumlah fiturnya serta statistik numerik/raster (`min`, `max`, `mean`, `std`).
+- **`geokit gp classify <input> --field <asal> --out-field <tujuan> --rules "<aturan>"`** — Skoring & klasifikasi otomatis berbasis kategori (`"Hutan=1;Sawah=3"`) atau rentang angka (`"<=8:1;8-15:2;>15:3"`).
+- **`geokit gp calc-field <input> --field <tujuan> --expr "<rumus>"`** — Hitung total skor berbobot/rumus matematika antar kolom dengan aman (`"0.4 * SKOR_LERENG + 0.6 * SKOR_TANAH"`).
+- **`geokit gp union <layer1> <layer2> [...] --out <out>`** — Overlay (*Union*) beberapa layer poligon (atau seluruh folder/`.gdb`) sekaligus untuk analisis kerawanan/kesesuaian multi-parameter.
 
 > **Backend GDAL / QGIS:** Gunakan `--engine gdal` (atau otomatis via `--engine auto` jika ArcGIS Pro tidak terpasang) untuk menjalankan `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), dan `unpack` lewat `ogr2ogr` / `gdalwarp` (otomatis terdeteksi dari `PATH` maupun folder QGIS di Windows).
 
@@ -186,7 +190,7 @@ Kamu bisa mengubah nama folder `organize`, default EPSG untuk `gp project`, defa
 
 ### 6. Built-in MCP Server (`geokit mcp`) & Dukungan ArcMap 10.x (`.mxd`)
 
-`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio` dengan **15 tool GIS**, sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa langsung memakai seluruh fitur `geokit` tanpa perlu membuka GUI ArcGIS!
+`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio` dengan **15 tool GIS** dan **3 SOP Playbook Prompt bawaan** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — lihat [AGENT_GUIDE.md](AGENT_GUIDE.md)), sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa mengolah folder bahan mentah menjadi peta analisis lengkap secara otomatis!
 
 Tambahkan ke konfigurasi MCP client kamu:
 

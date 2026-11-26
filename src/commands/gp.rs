@@ -197,6 +197,63 @@ pub enum GpCommand {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Inspect unique attribute values, category counts, and numeric/raster statistics (min/max/mean/std)
+    Values {
+        /// Input shapefile, raster, .gdb feature class, folder, or .gdb
+        input: PathBuf,
+        /// Specific attribute field name (omit to summarize all fields / raster bands)
+        #[arg(long)]
+        field: Option<String>,
+        /// Maximum unique values returned per field (default: 50)
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reclassify/score an attribute field into a new score or class field (categories or numeric ranges)
+    Classify {
+        /// Input shapefile or .gdb feature class
+        input: PathBuf,
+        /// Source field name to read values from
+        #[arg(long)]
+        field: String,
+        /// Output field name to create/update (e.g. SKOR_LERENG or KELAS_RAWAN)
+        #[arg(long)]
+        out_field: String,
+        /// Semicolon-separated mapping rules, e.g. "Hutan=1;Sawah=3;Permukiman=5" or "<=8:1;8-15:2;>15:3"
+        #[arg(long)]
+        rules: String,
+        /// Output field type: LONG, DOUBLE, or TEXT (auto-detected from rules if omitted)
+        #[arg(long)]
+        field_type: Option<String>,
+        /// Optional fallback value when a row does not match any rule
+        #[arg(long)]
+        default: Option<String>,
+    },
+    /// Add/calculate a field using a safe Python math expression (e.g. "0.4 * SKOR_A + 0.6 * SKOR_B")
+    CalcField {
+        /// Input shapefile or .gdb feature class
+        input: PathBuf,
+        /// Output field name to create/update
+        #[arg(long)]
+        field: String,
+        /// Expression referencing existing fields (e.g. "0.4 * SKOR_LERENG + 0.3 * SKOR_TANAH + 0.3 * SKOR_HUJAN")
+        #[arg(long)]
+        expr: String,
+        /// Output field type: DOUBLE, LONG, or TEXT (default: DOUBLE)
+        #[arg(long, default_value = "DOUBLE")]
+        field_type: String,
+    },
+    /// Overlay (Union) multiple polygon layers or all polygon layers in a folder/.gdb into one dataset
+    Union {
+        /// Input polygon files (2 or more) OR a single folder / .gdb containing polygon layers
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        /// Output union shapefile or .gdb feature class
+        #[arg(short, long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -218,6 +275,13 @@ struct GpPayload {
     x_field: Option<String>,
     y_field: Option<String>,
     target_format: Option<String>,
+    out_field: Option<String>,
+    rules: Option<String>,
+    expr: Option<String>,
+    field_type: Option<String>,
+    default_value: Option<String>,
+    limit: Option<usize>,
+    inputs: Option<Vec<String>>,
     json: Option<bool>,
 }
 
@@ -542,6 +606,108 @@ pub fn run(
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
                 target_format: Some(fmt),
+                ..Default::default()
+            }
+        }
+        GpCommand::Values {
+            input,
+            field,
+            limit,
+            json,
+        } => {
+            let is_gdb_fc = input.ancestors().skip(1).any(|a| {
+                a.is_dir()
+                    && a.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("gdb"))
+                        .unwrap_or(false)
+            });
+            if !input.exists() && !is_gdb_fc {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "values".into(),
+                input: abs_string(&input),
+                field,
+                limit: Some(limit),
+                json: Some(json),
+                ..Default::default()
+            }
+        }
+        GpCommand::Classify {
+            input,
+            field,
+            out_field,
+            rules,
+            field_type,
+            default,
+        } => {
+            let is_gdb_fc = input.ancestors().skip(1).any(|a| {
+                a.is_dir()
+                    && a.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("gdb"))
+                        .unwrap_or(false)
+            });
+            if !input.exists() && !is_gdb_fc {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "classify".into(),
+                input: abs_string(&input),
+                field: Some(field),
+                out_field: Some(out_field),
+                rules: Some(rules),
+                field_type,
+                default_value: default,
+                ..Default::default()
+            }
+        }
+        GpCommand::CalcField {
+            input,
+            field,
+            expr,
+            field_type,
+        } => {
+            let is_gdb_fc = input.ancestors().skip(1).any(|a| {
+                a.is_dir()
+                    && a.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("gdb"))
+                        .unwrap_or(false)
+            });
+            if !input.exists() && !is_gdb_fc {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "calc_field".into(),
+                input: abs_string(&input),
+                field: Some(field),
+                expr: Some(expr),
+                field_type: Some(field_type),
+                ..Default::default()
+            }
+        }
+        GpCommand::Union { inputs, out } => {
+            let mut abs_inputs = Vec::new();
+            for p in &inputs {
+                let is_gdb_fc = p.ancestors().skip(1).any(|a| {
+                    a.is_dir()
+                        && a.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.eq_ignore_ascii_case("gdb"))
+                            .unwrap_or(false)
+                });
+                if !p.exists() && !is_gdb_fc {
+                    bail!("Input path does not exist: {}", p.display());
+                }
+                abs_inputs.push(abs_string(p));
+            }
+            GpPayload {
+                action: "union".into(),
+                input: abs_inputs[0].clone(),
+                inputs: Some(abs_inputs),
+                out: Some(abs_string(&out)),
                 ..Default::default()
             }
         }

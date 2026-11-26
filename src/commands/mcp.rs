@@ -51,7 +51,7 @@ pub fn run() -> Result<()> {
                 "id": id,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "capabilities": { "tools": {} },
+                    "capabilities": { "tools": {}, "prompts": {} },
                     "serverInfo": {
                         "name": "geokit",
                         "version": env!("CARGO_PKG_VERSION")
@@ -63,6 +63,30 @@ pub fn run() -> Result<()> {
                 "id": id,
                 "result": {}
             }),
+            "prompts/list" => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "prompts": prompt_definitions() }
+            }),
+            "prompts/get" => {
+                let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                match get_prompt(name, &args) {
+                    Some(res) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": res
+                    }),
+                    None => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32602, "message": format!("Unknown prompt: {name}") }
+                    }),
+                }
+            }
             "tools/list" => json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -96,6 +120,104 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn prompt_definitions() -> Value {
+    json!([
+        {
+            "name": "peta_kerawanan",
+            "description": "SOP pembuatan Peta Kerawanan / Kesesuaian Lahan (banjir, longsor, kekeringan, kesesuaian) dari folder bahan mentah menggunakan skoring & overlay berbobot.",
+            "arguments": [
+                { "name": "folder", "description": "Path folder bahan data vector/raster", "required": true },
+                { "name": "tema", "description": "Tema peta, mis. Kerawanan Longsor / Kerawanan Banjir", "required": false }
+            ]
+        },
+        {
+            "name": "peta_persebaran",
+            "description": "SOP pembuatan Peta Persebaran (titik lokasi dari CSV/shapefile atau choropleth poligon tematik) dari folder bahan mentah.",
+            "arguments": [
+                { "name": "folder", "description": "Path folder bahan data vector/CSV", "required": true },
+                { "name": "tema", "description": "Tema peta persebaran, mis. Fasilitas Kesehatan / Stasiun Hujan", "required": false }
+            ]
+        },
+        {
+            "name": "analisis_das",
+            "description": "SOP Analisis Hidrologi & Delineasi DAS (Watershed, jaringan sungai, slope/hillshade, dan zonal statistics) dari DEM.",
+            "arguments": [
+                { "name": "folder", "description": "Path folder yang berisi DEM dan batas wilayah", "required": true }
+            ]
+        }
+    ])
+}
+
+fn get_prompt(name: &str, args: &Value) -> Option<Value> {
+    let folder = str_arg(args, "folder").unwrap_or("<folder_bahan>");
+    let tema = str_arg(args, "tema").unwrap_or("Kerawanan Bencana");
+    let (desc, text) = match name {
+        "peta_kerawanan" => (
+            "SOP Peta Kerawanan / Kesesuaian Lahan",
+            format!(
+                "Kamu adalah analis GIS senior menggunakan `geokit` MCP.\n\
+                 Target: buat peta **{tema}** dari folder `{folder}`.\n\n\
+                 Ikuti SOP wajib ini secara berurutan:\n\
+                 1. **Audit & Inventaris**: jalankan `geokit_audit` pada `{folder}` dan `geokit_gp` (`action=\"info\"`) untuk melihat semua layer, CRS/EPSG, dan nama field. JANGAN pernah menebak nama file atau nama field.\n\
+                 2. **Intip Nilai Atribut & Statistik**: jalankan `geokit_gp` (`action=\"values\"`) pada tiap layer parameter (mis. lereng, tanah, curah hujan, tutupan lahan) untuk membaca unique values & min/max sebelum menyusun aturan skoring.\n\
+                 3. **Standarisasi & Pre-processing**:\n\
+                    - Samakan semua layer ke CRS proyeksi metrik (mis. UTM zona setempat) dengan `geokit_gp` (`action=\"project\"`).\n\
+                    - Jika ada DEM, buat slope via `geokit_raster` (`action=\"terrain\"`) lalu konversi/reklasifikasi jika perlu.\n\
+                    - Clip semua parameter ke batas studi (`action=\"clip\"`) dan perbaiki geometri (`action=\"repair\"`).\n\
+                 4. **Skoring per Parameter**: gunakan `geokit_gp` (`action=\"classify\"`) untuk memberi skor (mis. 1–5) pada tiap layer parameter (`out_field=\"SKOR_...\"`).\n\
+                 5. **Overlay Multi-Parameter**: gabungkan semua layer parameter dengan `geokit_gp` (`action=\"union\"`).\n\
+                 6. **Hitung Total Skor Berbobot & Kelas Kerawanan**:\n\
+                    - Gunakan `geokit_gp` (`action=\"calc-field\"`) untuk menghitung `TOTAL_SKOR` sesuai bobot literatur (jumlah bobot = 1.0).\n\
+                    - Gunakan `geokit_gp` (`action=\"classify\"`) pada `TOTAL_SKOR` untuk membuat kolom `KELAS_RAWAN` (mis. Rendah / Sedang / Tinggi).\n\
+                    - Hitung luas per kelas dengan `geokit_gp` (`action=\"dissolve\"`, `field=\"KELAS_RAWAN\"`) dan `action=\"calc-geom\"` (`unit=\"ha\"`).\n\
+                 7. **Quality Assurance**: jalankan `geokit_qa` pada folder output untuk memastikan CRS seragam, geometri valid, dan tidak ada NULL.\n\
+                 8. **Tampilkan & Laporan**: jika ArcMap sedang terbuka (`geokit_live` `action=\"ping\"`), tambahkan hasil ke layar (`action=\"add\"`), zoom, dan ekspor pratinjau PNG. Ringkas tabel luas (Ha & %) untuk user."
+            ),
+        ),
+        "peta_persebaran" => (
+            "SOP Peta Persebaran",
+            format!(
+                "Kamu adalah analis GIS senior menggunakan `geokit` MCP.\n\
+                 Target: buat peta persebaran **{tema}** dari folder `{folder}`.\n\n\
+                 Ikuti SOP wajib ini:\n\
+                 1. **Audit & Inventaris**: jalankan `geokit_audit` pada `{folder}` dan `geokit_gp` (`action=\"info\"`) untuk menemukan file CSV, shapefile, atau raster.\n\
+                 2. **Konversi CSV ke Titik** (jika bahan berupa CSV koordinat): gunakan `geokit_gp` (`action=\"xy2shp\"`) dengan kolom X/Y yang benar dan `epsg=4326` (atau sesuai data).\n\
+                 3. **Cek Nilai Atribut**: jalankan `geokit_gp` (`action=\"values\"`) untuk melihat kategori/distribusi atribut.\n\
+                 4. **Samakan CRS & Integrasi Wilayah**: proyeksikan ke CRS seragam (`action=\"project\"`), lalu jika perlu gabungkan informasi kecamatan/desa ke titik menggunakan `action=\"spatial-join\"` (`match=\"within\"`).\n\
+                 5. **QA & Ringkasan**: jalankan `geokit_qa` lalu `geokit_report` jika user butuh laporan inventaris.\n\
+                 6. **Tampilkan di ArcMap** (jika terbuka): gunakan `geokit_live` (`add`, `labels`, `zoom`, `export`)."
+            ),
+        ),
+        "analisis_das" => (
+            "SOP Analisis Hidrologi & Delineasi DAS",
+            format!(
+                "Kamu adalah analis GIS hidrologi menggunakan `geokit` MCP.\n\
+                 Target: analisis DAS dari folder `{folder}`.\n\n\
+                 Ikuti SOP wajib ini:\n\
+                 1. **Audit & Cek CRS DEM**: jalankan `geokit_audit` dan `geokit_gp` (`action=\"info\"`) + `action=\"values\"` pada DEM.\n\
+                 2. **Proyeksikan DEM ke UTM**: jika DEM masih WGS84 derajat (EPSG:4326), wajib reproject ke UTM metrik setempat (`geokit_gp` `action=\"project\"`) agar perhitungan aliran & luas akurat.\n\
+                 3. **Delineasi DAS & Sungai**: jalankan `geokit_hydro` (`action=\"delineate\"` jika ada titik outlet, atau `action=\"basin\"` untuk seluruh basin).\n\
+                 4. **Turunan Topografi & Statistik**: buat slope/hillshade dengan `geokit_raster` (`action=\"terrain\"`), hitung luas DAS (`geokit_gp` `action=\"calc-geom\"` `unit=\"ha\"`), dan statistik elevasi per sub-DAS (`geokit_raster` `action=\"zonal-stats\"`).\n\
+                 5. **QA & Visualisasi**: cek kualitas dengan `geokit_qa`, lalu tampilkan hasilnya ke ArcMap via `geokit_live` bila terbuka."
+            ),
+        ),
+        _ => return None,
+    };
+
+    Some(json!({
+        "description": desc,
+        "messages": [
+            {
+                "role": "user",
+                "content": {
+                    "type": "text",
+                    "text": text
+                }
+            }
+        ]
+    }))
 }
 
 fn tool_definitions() -> Value {
@@ -156,22 +278,29 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_gp",
-            "description": "Run batch geoprocessing OR dynamically discover/run ANY installed ArcGIS Pro / ArcMap tool (tools, tool-usage, run, info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join, xy2shp, convert).",
+            "description": "Run batch geoprocessing, attribute inspection/scoring/classification/union, OR dynamically discover/run ANY installed ArcGIS Pro / ArcMap tool (values, classify, calc-field, union, info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join, xy2shp, convert, tools, tool-usage, run).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["info", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
+                        "enum": ["info", "values", "classify", "calc-field", "union", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
                     },
                     "input": { "type": "string", "description": "Input file, folder, .gdb, or keyword pattern (for tools)" },
+                    "inputs": { "type": "array", "items": { "type": "string" }, "description": "List of input polygon paths (for union)" },
                     "out": { "type": "string", "description": "Output file, folder, or .gdb (when required)" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"], "description": "Backend engine" },
                     "epsg": { "type": "integer", "description": "Target EPSG code (for project or xy2shp)" },
                     "aoi": { "type": "string", "description": "AOI polygon path (for clip)" },
                     "dist": { "type": "string", "description": "Buffer distance e.g. '50 Meters' (for buffer)" },
                     "dissolve": { "type": "boolean", "description": "Dissolve overlapping buffers (for buffer)" },
-                    "field": { "type": "string", "description": "Field name(s) (for dissolve or calc-geom)" },
+                    "field": { "type": "string", "description": "Field name(s) (for values, classify source, calc-field target, dissolve, or calc-geom)" },
+                    "out_field": { "type": "string", "description": "Target output field name (for classify)" },
+                    "rules": { "type": "string", "description": "Semicolon-separated classification/scoring rules e.g. 'Hutan=1;Sawah=3' or '<=8:1;8-15:2;>15:3' (for classify)" },
+                    "expr": { "type": "string", "description": "Safe Python math expression e.g. '0.4 * SKOR_A + 0.6 * SKOR_B' (for calc-field)" },
+                    "field_type": { "type": "string", "enum": ["LONG", "DOUBLE", "TEXT"], "description": "Output field type (for classify or calc-field)" },
+                    "default_value": { "type": "string", "description": "Fallback value for unmatched rows (for classify)" },
+                    "limit": { "type": "integer", "description": "Max unique values per field (for values, default: 50)" },
                     "unit": { "type": "string", "description": "Unit: ha, m2, km2, km, m (for calc-geom)" },
                     "with": { "type": "string", "description": "Overlay layer path (for intersect)" },
                     "mask": { "type": "string", "description": "Mask/erase layer path (for erase)" },
@@ -421,6 +550,13 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             if let Some(input) = str_arg(args, "input") {
                 cli_args.push(input.into());
             }
+            if let Some(inputs) = args.get("inputs").and_then(|v| v.as_array()) {
+                for item in inputs {
+                    if let Some(s) = item.as_str() {
+                        cli_args.push(s.into());
+                    }
+                }
+            }
             if let Some(tool) = str_arg(args, "tool") {
                 cli_args.push(tool.into());
             }
@@ -472,6 +608,27 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(to_fmt) = str_arg(args, "to") {
                 cli_args.extend(["--to".into(), to_fmt.into()]);
+            }
+            if let Some(of) = str_arg(args, "out_field") {
+                cli_args.extend(["--out-field".into(), of.into()]);
+            }
+            if let Some(r) = str_arg(args, "rules") {
+                cli_args.extend(["--rules".into(), r.into()]);
+            }
+            if let Some(e) = str_arg(args, "expr") {
+                cli_args.extend(["--expr".into(), e.into()]);
+            }
+            if let Some(ft) = str_arg(args, "field_type") {
+                cli_args.extend(["--field-type".into(), ft.into()]);
+            }
+            if let Some(dv) = str_arg(args, "default_value") {
+                cli_args.extend(["--default".into(), dv.into()]);
+            }
+            if let Some(lim) = args.get("limit").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--limit".into(), lim.to_string()]);
+            }
+            if action == "values" {
+                cli_args.push("--json".into());
             }
         }
         "geokit_layout" => {

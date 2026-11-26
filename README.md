@@ -6,7 +6,7 @@
 
 > **Fast GIS CLI & built-in MCP server written in Rust for spatial data hygiene, batch ArcGIS Pro / ArcMap 10.x / GDAL geoprocessing, layouts, raster terrain, and watershed (DAS) hydrology.**
 
-[Baca dalam Bahasa Indonesia (README.id.md)](README.id.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+[Baca dalam Bahasa Indonesia (README.id.md)](README.id.md) · [AI Agent Playbook (AGENT_GUIDE.md)](AGENT_GUIDE.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ---
 
@@ -129,6 +129,10 @@ geokit clean ./project_das
 | `geokit gp xy2shp <table.csv> --x-field lon --y-field lat --epsg 4326 --out <points.shp>` | Convert a CSV with X/Y (Lon/Lat) coordinates into `.shp`, `.gpkg`, or `.gdb` points (ArcGIS Pro, ArcMap, or GDAL). |
 | `geokit gp convert <input> --to shp\|gpkg\|geojson\|kml\|fgb --out <out>` | Batch convert vector datasets between SHP, GeoPackage, GeoJSON, KML, and FlatGeobuf. |
 | `geokit qa <input> [--expected-epsg 32748] [--check-nulls DESA,KELAS] [--check-overlaps]` | Spatial Quality Assurance check: CRS uniformity, invalid geometry, required NULL/empty fields, and polygon overlaps. |
+| `geokit gp values <input> [--field <name>] [--json]` | Inspect unique attribute values/counts and numeric or raster statistics (`min`, `max`, `mean`, `std`). |
+| `geokit gp classify <input> --field <src> --out-field <dst> --rules "<rules>"` | Score or classify categories (`"Hutan=1;Sawah=3"`) or numeric ranges (`"<=8:1;8-15:2;>15:3"`). |
+| `geokit gp calc-field <input> --field <dst> --expr "<formula>"` | Calculate weighted overlay totals or math expressions safely across fields (`"0.4 * A + 0.6 * B"`). |
+| `geokit gp union <layer1> <layer2> [...] --out <out>` | Union multiple polygon layers (or all layers in a folder/`.gdb`) for multi-parameter overlay analysis. |
 
 > **GDAL / QGIS Backend:** Pass `--engine gdal` (or leave default `--engine auto` on machines without ArcGIS Pro) to run `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), and `unpack` using `ogr2ogr` / `gdalwarp` — automatically detected from `PATH` or QGIS on Windows!
 
@@ -233,7 +237,7 @@ tabular = "05_Tabular"
 
 ### 6. Built-in MCP Server (`geokit mcp`) & ArcMap 10.x Support
 
-`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio` exposing **15 GIS tools**, allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run all `geokit` workflows natively without opening the ArcGIS GUI.
+`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio` exposing **15 GIS tools** and **3 built-in GIS SOP Playbook Prompts** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — see [AGENT_GUIDE.md](AGENT_GUIDE.md)), allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run end-to-end GIS workflows natively.
 
 Add to your MCP client configuration:
 

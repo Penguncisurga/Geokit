@@ -149,6 +149,16 @@ fn test_mcp_server_stdio_handshake_and_tools() {
             r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"geokit_doctor","arguments":{{}}}}}}"#
         )
         .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":4,"method":"prompts/list","params":{{}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{{"name":"peta_kerawanan","arguments":{{"folder":"D:\\Proyek"}}}}}}"#
+        )
+        .unwrap();
     }
 
     let output = child.wait_with_output().unwrap();
@@ -159,7 +169,7 @@ fn test_mcp_server_stdio_handshake_and_tools() {
         .lines()
         .filter(|l| !l.trim().is_empty())
         .collect();
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 5);
 
     let init_resp: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(init_resp["result"]["serverInfo"]["name"], "geokit");
@@ -170,6 +180,17 @@ fn test_mcp_server_stdio_handshake_and_tools() {
 
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
+
+    let prompts_resp: serde_json::Value = serde_json::from_str(lines[3]).unwrap();
+    let prompts = prompts_resp["result"]["prompts"].as_array().unwrap();
+    assert_eq!(prompts.len(), 3);
+
+    let prompt_get: serde_json::Value = serde_json::from_str(lines[4]).unwrap();
+    let prompt_text = prompt_get["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(prompt_text.contains("D:\\Proyek"));
+    assert!(prompt_text.contains("classify"));
 }
 
 #[test]
