@@ -319,3 +319,78 @@ fn test_report_markdown_html_and_json() {
         serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
     assert!(parsed["datasets"].as_array().unwrap().len() >= 2);
 }
+
+#[test]
+fn test_gp_summary_and_webmap_native() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let geojson_path = root.join("kerawanan.geojson");
+    let sample = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": { "KELAS": "Rendah", "AREA_HA": 120.5 },
+          "geometry": { "type": "Polygon", "coordinates": [[[110.1,-7.0],[110.2,-7.0],[110.2,-6.9],[110.1,-6.9],[110.1,-7.0]]] }
+        },
+        {
+          "type": "Feature",
+          "properties": { "KELAS": "Tinggi", "AREA_HA": 279.5 },
+          "geometry": { "type": "Polygon", "coordinates": [[[110.2,-7.0],[110.3,-7.0],[110.3,-6.9],[110.2,-6.9],[110.2,-7.0]]] }
+        }
+      ]
+    }"#;
+    fs::write(&geojson_path, sample).unwrap();
+
+    let md_out = root.join("rekap.md");
+    let sum_res = geokit_bin()
+        .args([
+            "gp",
+            "summary",
+            geojson_path.to_str().unwrap(),
+            "--group-by",
+            "KELAS",
+            "--out",
+            md_out.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sum_res.status.success(),
+        "summary stderr: {}",
+        String::from_utf8_lossy(&sum_res.stderr)
+    );
+    let sum_json: serde_json::Value =
+        serde_json::from_slice(&sum_res.stdout).expect("valid summary JSON");
+    assert_eq!(sum_json["total_features"], 2);
+    assert_eq!(sum_json["total_area"], 400.0);
+    let md_text = fs::read_to_string(&md_out).unwrap();
+    assert!(md_text.contains("Rendah"));
+    assert!(md_text.contains("Tinggi"));
+    assert!(md_text.contains("400.00"));
+
+    let html_out = root.join("peta.html");
+    let wm_res = geokit_bin()
+        .args([
+            "webmap",
+            geojson_path.to_str().unwrap(),
+            "--field",
+            "KELAS",
+            "--title",
+            "Uji WebMap",
+            "--out",
+            html_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        wm_res.status.success(),
+        "webmap stderr: {}",
+        String::from_utf8_lossy(&wm_res.stderr)
+    );
+    let html_text = fs::read_to_string(&html_out).unwrap();
+    assert!(html_text.contains("leaflet"));
+    assert!(html_text.contains("Uji WebMap"));
+    assert!(html_text.contains("Tinggi"));
+}

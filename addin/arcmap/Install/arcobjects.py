@@ -1226,25 +1226,25 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     cur_y = top_y
 
     # === SECTION 1: JUDUL PETA, SUBJUDUL/NOMOR LEMBAR (BIRU BIG), NAMA WILAYAH ===
-    h_hdr = 3.15 if is_a3 else 2.30
+    h_hdr = 3.05 if is_a3 else 2.20
     y_hdr_bot = cur_y - h_hdr
     big_blue = (0, 112, 192)
     if region:
-        _add_text(gc, cx, cur_y - 0.22 * s, _wrap_text(title.upper(), max_chars=30), size=9.2 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+        _add_text(gc, cx, cur_y - 0.18 * s, _wrap_text(title.upper(), max_chars=30), size=9.2 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
         mid_txt = sheet_number or subtitle
         if mid_txt:
-            _add_text(gc, cx, cur_y - 0.88 * s, _wrap_text(mid_txt, max_chars=46), size=7.0 * s, rgb=big_blue, halign=1, valign=0, name="lbl_subjudul", bold=True)
-        _add_text(gc, cx, y_hdr_bot + 0.30 * s, region.upper(), size=11.8 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
+            _add_text(gc, cx, cur_y - 0.80 * s, _wrap_text(mid_txt, max_chars=46), size=7.0 * s, rgb=big_blue, halign=1, valign=0, name="lbl_subjudul", bold=True)
+        _add_text(gc, cx, y_hdr_bot + 0.26 * s, region.upper(), size=11.8 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
     else:
-        _add_text(gc, cx, cur_y - 0.28 * s, _wrap_text(title.upper(), max_chars=26), size=10.5 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+        _add_text(gc, cx, cur_y - 0.24 * s, _wrap_text(title.upper(), max_chars=26), size=10.5 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
         mid_txt = sheet_number or subtitle
         if mid_txt:
-            _add_text(gc, cx, y_hdr_bot + 0.30 * s, _wrap_text(mid_txt, max_chars=44), size=7.2 * s, rgb=big_blue, halign=1, valign=2, name="lbl_subjudul", bold=True)
+            _add_text(gc, cx, y_hdr_bot + 0.26 * s, _wrap_text(mid_txt, max_chars=44), size=7.2 * s, rgb=big_blue, halign=1, valign=2, name="lbl_subjudul", bold=True)
     cur_y = y_hdr_bot
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_header")
 
     # === SECTION 2: ARAH UTARA (KIRI, 40pt!) + SKALA ANGKA (9pt BOLD) & SKALA GARIS BULAT (KANAN) ===
-    h_sc = 2.55 if is_a3 else 1.90
+    h_sc = 2.45 if is_a3 else 1.85
     y_sc_bot = cur_y - h_sc
     if mf:
         # Bold legible North Arrow cleanly centered on left (zero overlap!)
@@ -1321,7 +1321,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     # === SECTION 3: DIAGRAM LOKASI / PETA INSET (2nd MapFrame + Red LocatorRectangle) ===
     inset_created = False
     if has_inset and mf:
-        h_ins = 4.40 if is_a3 else 3.15
+        h_ins = 4.00 if is_a3 else 2.85
         y_ins_bot = cur_y - h_ins
         _add_text(gc, cx, cur_y - 0.12 * s, "DIAGRAM LOKASI", size=7.2 * s, rgb=big_blue, halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
         try:
@@ -1376,7 +1376,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
         _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_inset")
 
     # === SECTION 4: SISTEM REFERENSI KOORDINAT (PROPORSI BESAR & MUDAH DIBACA) ===
-    h_proj = 1.95 if is_a3 else 1.55
+    h_proj = 1.85 if is_a3 else 1.45
     y_proj_bot = cur_y - h_proj
     zone_txt = utm_zone or (crs_text if crs_text else "UTM")
     grid_desc = "Grid UTM & Gratikul Geografi" if gmode == "dual" else ("Gratikul Geografi (DMS)" if gmode == "dms" else "Grid UTM (Meter)")
@@ -1385,35 +1385,35 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
         "Sistem Grid      : %s\n"
         "Datum Horizontal : SRGI 2013 / WGS 1984"
     ) % (zone_txt, grid_desc)
-    _add_text(gc, ix, cur_y - 0.18 * s, proj_lines, size=6.8 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_proyeksi")
+    _add_text(gc, ix, cur_y - 0.14 * s, proj_lines, size=6.8 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_proyeksi")
     cur_y = y_proj_bot
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_proyeksi")
 
     # === SECTION 5: PEMBUAT / INSTANSI (+ OPTIONAL LOGO) & EDISI / HAK CIPTA ===
-    h_org = 2.55 if is_a3 else 1.95
+    h_org = 2.30 if is_a3 else 1.75
     y_org_bot = cur_y - h_org
     text_x = ix
     max_ch = 36
     if logo_path:
-        lsz = 1.50 if is_a3 else 1.15
-        _add_picture(gc, ix, cur_y - 0.15 * s - lsz, ix + lsz, cur_y - 0.15 * s, logo_path, name="logo_instansi")
+        lsz = 1.40 if is_a3 else 1.05
+        _add_picture(gc, ix, cur_y - 0.12 * s - lsz, ix + lsz, cur_y - 0.12 * s, logo_path, name="logo_instansi")
         text_x = ix + lsz + 0.20 * s
         max_ch = 26
-    _add_text(gc, text_x, cur_y - 0.16 * s, "DIBUAT DAN DITERBITKAN OLEH:", size=6.8 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_instansi_hdr", bold=True)
-    _add_text(gc, text_x, cur_y - 0.56 * s, _wrap_text(author or "Laboratorium SIG / Penyusun", max_chars=max_ch), size=6.8 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_instansi")
+    _add_text(gc, text_x, cur_y - 0.12 * s, "DIBUAT DAN DITERBITKAN OLEH:", size=6.8 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_instansi_hdr", bold=True)
+    _add_text(gc, text_x, cur_y - 0.50 * s, _wrap_text(author or "Laboratorium SIG / Penyusun", max_chars=max_ch), size=6.8 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_instansi")
     hc_txt = "%s  |  Hak cipta dilindungi UU" % (edition or "Edisi 1 - Tahun 2026")
-    _add_text(gc, cx, y_org_bot + 0.18 * s, hc_txt, size=5.8 * s, rgb=(40, 45, 50), halign=1, valign=2, name="lbl_hak_cipta")
+    _add_text(gc, cx, y_org_bot + 0.14 * s, hc_txt, size=5.8 * s, rgb=(40, 45, 50), halign=1, valign=2, name="lbl_hak_cipta")
     cur_y = y_org_bot
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_instansi")
 
     # === SECTION 7 (ANCHORED AT BOTTOM): SUMBER DATA, RIWAYAT PETA & CATATAN ===
-    h_foot = 4.00 if is_a3 else 3.05
+    h_foot = 3.25 if is_a3 else 2.45
     y_foot_top = py + h_foot
     _add_hline(gc, px, px + pw_p, y_foot_top, width=0.7, name="garis_legenda")
-    _add_text(gc, ix, y_foot_top - 0.14 * s, "SUMBER DATA DAN RIWAYAT PETA:", size=6.3 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_sumber_hdr", bold=True)
-    _add_text(gc, ix, y_foot_top - 0.50 * s, _wrap_text(source or "1. Pengolahan Data Spasial GeoKit.", max_chars=40), size=6.2 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_sumber_riwayat")
+    _add_text(gc, ix, y_foot_top - 0.12 * s, "SUMBER DATA DAN RIWAYAT PETA:", size=6.3 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_sumber_hdr", bold=True)
+    _add_text(gc, ix, y_foot_top - 0.45 * s, _wrap_text(source or "1. Pengolahan Data Spasial GeoKit.", max_chars=42), size=6.1 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_sumber_riwayat")
     note_txt = note or "CATATAN: Batas wilayah administrasi pada peta ini bukan referensi resmi penegasan batas."
-    _add_text(gc, ix, py + 0.85 * s, _wrap_text(note_txt, max_chars=44), size=5.6 * s, rgb=(45, 50, 55), halign=0, valign=0, name="lbl_catatan")
+    _add_text(gc, ix, py + 0.72 * s, _wrap_text(note_txt, max_chars=46), size=5.5 * s, rgb=(45, 50, 55), halign=0, valign=0, name="lbl_catatan")
 
     # === SECTION 6 (FILLS CLEANLY BETWEEN SECTION 5 AND SECTION 7): KETERANGAN ===
     hidden = []
@@ -1479,4 +1479,58 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     _release(pl)
     refresh_mxdoc(mxdoc)
     return hidden, inset_created
+
+
+def style_inset_layers(mxdoc, df_name="Diagram Lokasi", fill_hex="#F3F4F6", outline_hex="#64748B", outline_width=0.55):
+    """Applies a clean neutral light-gray + slate-outline fill to all layers inside the inset MapFrame."""
+    pl = c_void_p()
+    _vcall(mxdoc, 4, POINTER(c_void_p))(mxdoc, byref(pl))
+    if not pl.value:
+        return 0
+    gc = _qi(pl, IID_IGraphicsContainer)
+    styled = 0
+    target = (df_name or "").lower()
+    _vcall(gc, 4)(gc)  # Reset
+    while True:
+        el = c_void_p()
+        hr = _vcall(gc, 3, POINTER(c_void_p))(gc, byref(el))  # Next
+        if hr != 0 or not el.value:
+            break
+        imf = _qi(el, IID_IMapFrame)
+        if imf:
+            imap = c_void_p()
+            _vcall(imf, 11, POINTER(c_void_p))(imf, byref(imap))  # get_Map
+            if imap.value:
+                bn = c_void_p()
+                _vcall(imap, 3, POINTER(c_void_p))(imap, byref(bn))  # IMap.get_Name
+                mname = ctypes.wstring_at(bn) if bn.value else u""
+                _free_bstr(bn)
+                if mname.lower() == target:
+                    lcnt = c_long(0)
+                    _vcall(imap, 8, POINTER(c_long))(imap, byref(lcnt))
+                    for i in range(lcnt.value):
+                        lyr = c_void_p()
+                        _vcall(imap, 9, c_long, POINTER(c_void_p))(imap, i, byref(lyr))
+                        if lyr.value:
+                            try:
+                                apply_single_symbol(
+                                    mxdoc,
+                                    lyr,
+                                    "Polygon",
+                                    color_hex=fill_hex,
+                                    outline_color=outline_hex,
+                                    outline_width=outline_width,
+                                )
+                                styled += 1
+                            except Exception:
+                                pass
+                            _release(lyr)
+                _release(imap)
+            _release(imf)
+        _release(el)
+    _release(gc)
+    _release(pl)
+    if styled:
+        refresh_mxdoc(mxdoc)
+    return styled
 

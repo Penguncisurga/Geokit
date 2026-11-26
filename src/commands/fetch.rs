@@ -62,8 +62,10 @@ fn curl_post(url: &str, body: &str) -> Result<String> {
     let out = Command::new("curl")
         .args([
             "-fsSL",
+            "--connect-timeout",
+            "10",
             "--max-time",
-            "90",
+            "30",
             "-X",
             "POST",
             "--data-urlencode",
@@ -238,13 +240,15 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
 
             let endpoints = [
                 "https://overpass-api.de/api/interpreter",
+                "https://lz4.overpass-api.de/api/interpreter",
+                "https://z.overpass-api.de/api/interpreter",
                 "https://overpass.kumi.systems/api/interpreter",
             ];
 
             for raw_lyr in layers.split(',').filter(|s| !s.trim().is_empty()) {
                 let (name, filter, as_poly) = osm_layer_filter(raw_lyr)?;
                 let query = format!(
-                    "[out:json][timeout:60];({filter}({min_lat:.6},{min_lon:.6},{max_lat:.6},{max_lon:.6}););out body geom;"
+                    "[out:json][timeout:25];({filter}({min_lat:.6},{min_lon:.6},{max_lat:.6},{max_lon:.6}););out body geom;"
                 );
                 let mut resp = None;
                 let mut last_err = String::new();

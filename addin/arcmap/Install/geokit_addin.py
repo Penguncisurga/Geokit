@@ -585,6 +585,14 @@ def _handle_command_on_ui_thread(req):
                                 cand_df.extent = arcpy.Extent(cx_m - w * 2.8, cy_m - h * 1.8, cx_m + w * 2.8, cy_m + h * 1.8)
                             elif added_in:
                                 cand_df.extent = added_in[0].getExtent(True)
+                            try:
+                                mx_in = _ao.get_current_mxdoc()
+                                try:
+                                    _ao.style_inset_layers(mx_in, "Diagram Lokasi")
+                                finally:
+                                    _ao._release(mx_in)
+                            except Exception:
+                                pass
                             inset_populated = True
                             break
                 except Exception:

@@ -4,6 +4,16 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-11-27
+
+### Fixed
+- **PerKaBIG `KETERANGAN` Legend Spacing**: Rebalanced right-panel vertical allocations (`+1.35 cm` extra height for `KETERANGAN`) so multi-class legend headings sit cleanly below the Section 5 divider with zero overlap.
+- **Automatic Neutral Inset Styling**: Layers added to the `Diagram Lokasi` inset DataFrame now automatically receive a clean neutral light-gray fill (`#F3F4F6`) and slate outline (`#64748B`, `0.55 pt`) so the red extent indicator box always stands out sharply.
+- **Faster `geokit fetch osm` Failover**: Added `lz4.overpass-api.de` and `z.overpass-api.de` mirrors with a crisp `30 s` per-mirror timeout (`10 s` connect timeout).
+
+### Tests
+- Added native integration test `test_gp_summary_and_webmap_native` covering `geokit gp summary` (JSON + Markdown table export) and `geokit webmap` (standalone Leaflet HTML generation).
+
 ## [2.3.0] - 2026-11-26
 
 ### Added
