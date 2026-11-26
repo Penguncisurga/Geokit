@@ -1,0 +1,405 @@
+"""
+geokit embedded ArcPy batch runner.
+Imports arcpy once per batch invocation to avoid repeated Python startup overhead.
+"""
+
+import json
+import os
+import re
+import sys
+
+try:
+    import arcpy
+except ImportError as exc:
+    sys.stderr.write(f"[geokit] Failed to import arcpy: {exc}\n")
+    sys.exit(2)
+
+arcpy.env.overwriteOutput = True
+
+VECTOR_EXTS = {".shp", ".gpkg"}
+RASTER_EXTS = {".tif", ".tiff", ".img", ".jp2", ".ecw", ".asc"}
+
+
+def sanitize_gdb_name(name: str) -> str:
+    stem = os.path.splitext(os.path.basename(name))[0]
+    clean = re.sub(r"[^a-zA-Z0-9_]+", "_", stem).strip("_").lower()
+    if not clean:
+        clean = "layer"
+    if clean[0].isdigit():
+        clean = f"l_{clean}"
+    return clean
+
+
+def is_gdb(path: str) -> bool:
+    return path.lower().endswith(".gdb") and os.path.isdir(path)
+
+
+def collect_datasets(input_path: str, include_rasters: bool = True):
+    """Returns list of tuples: (dataset_path, kind) where kind is 'vector' or 'raster'."""
+    items = []
+    if os.path.isfile(input_path):
+        ext = os.path.splitext(input_path)[1].lower()
+        if ext in RASTER_EXTS:
+            if include_rasters:
+                items.append((input_path, "raster"))
+        else:
+            items.append((input_path, "vector"))
+        return items
+
+    if is_gdb(input_path):
+        arcpy.env.workspace = input_path
+        for fc in arcpy.ListFeatureClasses() or []:
+            items.append((os.path.join(input_path, fc), "vector"))
+        for ds in arcpy.ListDatasets("", "Feature") or []:
+            for fc in arcpy.ListFeatureClasses(feature_dataset=ds) or []:
+                items.append((os.path.join(input_path, ds, fc), "vector"))
+        if include_rasters:
+            for r in arcpy.ListRasters() or []:
+                items.append((os.path.join(input_path, r), "raster"))
+        return items
+
+    if os.path.isdir(input_path):
+        for root, dirs, files in os.walk(input_path):
+            # Do not walk inside .gdb folders as plain files
+            dirs[:] = [d for d in dirs if not d.lower().endswith(".gdb")]
+            for fname in sorted(files):
+                ext = os.path.splitext(fname)[1].lower()
+                full = os.path.join(root, fname)
+                if ext in VECTOR_EXTS:
+                    items.append((full, "vector"))
+                elif include_rasters and ext in RASTER_EXTS:
+                    items.append((full, "raster"))
+        return items
+
+    return items
+
+
+def ensure_output_container(out_path: str, is_batch: bool):
+    if out_path.lower().endswith(".gdb"):
+        if not os.path.exists(out_path):
+            parent = os.path.dirname(out_path) or "."
+            os.makedirs(parent, exist_ok=True)
+            arcpy.management.CreateFileGDB(parent, os.path.basename(out_path))
+        return "gdb"
+
+    if is_batch or os.path.isdir(out_path) or not os.path.splitext(out_path)[1]:
+        os.makedirs(out_path, exist_ok=True)
+        return "dir"
+
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    return "file"
+
+
+def resolve_out_target(src_path: str, kind: str, out_path: str, container_type: str, suffix: str = "") -> str:
+    if container_type == "file":
+        return out_path
+    if container_type == "gdb":
+        name = sanitize_gdb_name(src_path)
+        if suffix:
+            name = f"{name}_{suffix}"
+        return os.path.join(out_path, name)
+    # dir
+    stem = os.path.splitext(os.path.basename(src_path))[0]
+    ext = os.path.splitext(src_path)[1]
+    if not ext:
+        ext = ".tif" if kind == "raster" else ".shp"
+    if suffix:
+        stem = f"{stem}_{suffix}"
+    return os.path.join(out_path, f"{stem}{ext}")
+
+
+def cmd_info(payload):
+    items = collect_datasets(payload["input"], include_rasters=True)
+    results = []
+    for ds_path, kind in items:
+        desc = arcpy.Describe(ds_path)
+        sr = getattr(desc, "spatialReference", None)
+        entry = {
+            "name": os.path.basename(ds_path),
+            "path": ds_path,
+            "kind": kind,
+            "crs": sr.name if sr else "Unknown",
+            "epsg": sr.factoryCode if (sr and getattr(sr, "factoryCode", 0)) else None,
+        }
+        if kind == "vector":
+            entry["geometry_type"] = getattr(desc, "shapeType", "Unknown")
+            entry["feature_count"] = int(arcpy.management.GetCount(ds_path)[0])
+            entry["fields"] = [f.name for f in arcpy.ListFields(ds_path)]
+        else:
+            entry["band_count"] = getattr(desc, "bandCount", None)
+            entry["pixel_type"] = getattr(desc, "pixelType", None)
+        results.append(entry)
+
+    if payload.get("json"):
+        print(json.dumps(results, indent=2))
+        return 0
+
+    if not results:
+        print("No GIS datasets found.")
+        return 0
+
+    for item in results:
+        epsg_str = f"EPSG:{item['epsg']}" if item["epsg"] else "No EPSG"
+        if item["kind"] == "vector":
+            print(
+                f"- {item['name']} [{item['geometry_type']}] | {item['feature_count']} features | "
+                f"{item['crs']} ({epsg_str})"
+            )
+            print(f"    Fields: {', '.join(item['fields'])}")
+        else:
+            print(
+                f"- {item['name']} [Raster, {item['band_count']} band(s)] | "
+                f"{item['crs']} ({epsg_str})"
+            )
+    return 0
+
+
+def cmd_project(payload):
+    items = collect_datasets(payload["input"], include_rasters=True)
+    if not items:
+        print("No datasets found to project.")
+        return 0
+    sr = arcpy.SpatialReference(int(payload["epsg"]))
+    ctype = ensure_output_container(payload["out"], len(items) > 1)
+    failures = 0
+    for idx, (src, kind) in enumerate(items, 1):
+        dst = resolve_out_target(src, kind, payload["out"], ctype)
+        try:
+            if kind == "vector":
+                arcpy.management.Project(src, dst, sr)
+            else:
+                arcpy.management.ProjectRaster(src, dst, sr)
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} -> {dst}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} succeeded, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_clip(payload):
+    items = collect_datasets(payload["input"], include_rasters=True)
+    if not items:
+        print("No datasets found to clip.")
+        return 0
+    aoi = payload["aoi"]
+    ctype = ensure_output_container(payload["out"], len(items) > 1)
+    failures = 0
+    for idx, (src, kind) in enumerate(items, 1):
+        dst = resolve_out_target(src, kind, payload["out"], ctype)
+        try:
+            if kind == "vector":
+                arcpy.analysis.Clip(src, aoi, dst)
+            else:
+                arcpy.management.Clip(
+                    in_raster=src,
+                    rectangle="#",
+                    out_raster=dst,
+                    in_template_dataset=aoi,
+                    clipping_geometry="ClippingGeometry",
+                    maintain_clipping_extent="NO_MAINTAIN_EXTENT",
+                )
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} -> {dst}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} succeeded, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_merge(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if len(items) < 2:
+        print("Need at least 2 vector datasets to merge.", file=sys.stderr)
+        return 1
+    ensure_output_container(payload["out"], is_batch=False)
+    arcpy.management.Merge(items, payload["out"])
+    print(f"OK Merged {len(items)} dataset(s) -> {payload['out']}")
+    return 0
+
+
+def cmd_pack(payload):
+    include_rasters = bool(payload.get("include_rasters", False))
+    items = collect_datasets(payload["input"], include_rasters=include_rasters)
+    if not items:
+        print("No datasets found to pack.")
+        return 0
+    out_gdb = payload["out"]
+    if not out_gdb.lower().endswith(".gdb"):
+        out_gdb = out_gdb + ".gdb"
+    ensure_output_container(out_gdb, is_batch=True)
+    failures = 0
+    for idx, (src, kind) in enumerate(items, 1):
+        name = sanitize_gdb_name(src)
+        try:
+            if kind == "vector":
+                arcpy.conversion.FeatureClassToFeatureClass(src, out_gdb, name)
+            else:
+                arcpy.conversion.RasterToGeodatabase(src, out_gdb)
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} -> {out_gdb}\\{name}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} packed, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_unpack(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No feature classes found to unpack.")
+        return 0
+    out_dir = payload["out"]
+    os.makedirs(out_dir, exist_ok=True)
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        name = os.path.basename(src)
+        try:
+            arcpy.conversion.FeatureClassToShapefile(src, out_dir)
+            print(f"[{idx}/{len(items)}] OK   {name} -> {out_dir}\\{name}.shp")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {name}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} unpacked, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_repair(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found to repair.")
+        return 0
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        try:
+            arcpy.management.RepairGeometry(src, "DELETE_NULL")
+            print(f"[{idx}/{len(items)}] OK   Repaired {os.path.basename(src)}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} repaired, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_buffer(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found to buffer.")
+        return 0
+    ctype = ensure_output_container(payload["out"], len(items) > 1)
+    dissolve_opt = "ALL" if payload.get("dissolve") else "NONE"
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        dst = resolve_out_target(src, "vector", payload["out"], ctype)
+        try:
+            arcpy.analysis.Buffer(src, dst, payload["dist"], dissolve_option=dissolve_opt)
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} -> {dst}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} buffered, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_dissolve(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found to dissolve.")
+        return 0
+    fields = [f.strip() for f in payload["field"].split(",") if f.strip()]
+    ctype = ensure_output_container(payload["out"], len(items) > 1)
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        dst = resolve_out_target(src, "vector", payload["out"], ctype)
+        try:
+            arcpy.management.Dissolve(src, dst, fields)
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} -> {dst}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} dissolved, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_calc_geom(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found for geometry calculation.")
+        return 0
+    unit_req = (payload.get("unit") or "").lower()
+    custom_field = payload.get("field")
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        try:
+            shape_type = arcpy.Describe(src).shapeType
+            if shape_type == "Polygon":
+                unit = unit_req or "ha"
+                area_map = {
+                    "ha": ("HECTARES", "AREA_HA"),
+                    "m2": ("SQUARE_METERS", "AREA_M2"),
+                    "km2": ("SQUARE_KILOMETERS", "AREA_KM2"),
+                }
+                if unit not in area_map:
+                    raise ValueError(f"Unsupported polygon unit '{unit}'. Use ha, m2, or km2.")
+                arc_unit, default_field = area_map[unit]
+                field_name = custom_field or default_field
+                arcpy.management.CalculateGeometryAttributes(
+                    src, [[field_name, "AREA_GEODESIC"]], area_unit=arc_unit
+                )
+            elif shape_type == "Polyline":
+                unit = unit_req or "km"
+                len_map = {
+                    "km": ("KILOMETERS", "LEN_KM"),
+                    "m": ("METERS", "LEN_M"),
+                }
+                if unit not in len_map:
+                    raise ValueError(f"Unsupported line unit '{unit}'. Use km or m.")
+                arc_unit, default_field = len_map[unit]
+                field_name = custom_field or default_field
+                arcpy.management.CalculateGeometryAttributes(
+                    src, [[field_name, "LENGTH_GEODESIC"]], length_unit=arc_unit
+                )
+            else:
+                print(f"[{idx}/{len(items)}] SKIP {os.path.basename(src)} (geometry type: {shape_type})")
+                continue
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} -> calculated {field_name}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} processed, {failures} failed.")
+    return 1 if failures else 0
+
+
+HANDLERS = {
+    "info": cmd_info,
+    "project": cmd_project,
+    "clip": cmd_clip,
+    "merge": cmd_merge,
+    "pack": cmd_pack,
+    "unpack": cmd_unpack,
+    "repair": cmd_repair,
+    "buffer": cmd_buffer,
+    "dissolve": cmd_dissolve,
+    "calc_geom": cmd_calc_geom,
+}
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.stderr.write("Usage: arcpy_runner.py <payload.json>\n")
+        sys.exit(2)
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+    action = payload.get("action")
+    handler = HANDLERS.get(action)
+    if not handler:
+        sys.stderr.write(f"Unknown geokit gp action: {action}\n")
+        sys.exit(2)
+    code = handler(payload)
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    main()
