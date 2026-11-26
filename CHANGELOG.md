@@ -4,6 +4,17 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-11-27
+
+### Added
+- **Persistent Hot-Worker ArcPy Daemon (`geokit daemon start|status|stop`) — 5×–15× Faster Multi-Step Geoprocessing!**:
+  - Eliminates the ~8-second `import arcpy` cold-start penalty on every CLI/MCP invocation by keeping a lightweight detached local TCP worker warm in RAM (`127.0.0.1:9878` for ArcMap 10.x, `127.0.0.1:9879` for ArcGIS Pro, with automatic idle shutdown default `30 min`).
+  - **100% transparent routing**: every existing `geokit gp`, `raster`, `hydro`, `qa`, `layout`, and `map` command automatically routes through the warm daemon when running, and falls back seamlessly to cold subprocesses when stopped (or with `GEOKIT_NO_DAEMON=1`).
+- **Auto-Accelerated `geokit pipeline run`**:
+  - Multi-step `pipeline.toml` workflows containing 2+ ArcPy steps now automatically spin up a temporary warm daemon once before Step 1 and shut it down cleanly at the end (`--no-hot` to opt out).
+- **MCP Server (`19 tools`)**: Added `geokit_daemon` so AI agents can warm up ArcPy once at the start of a multi-step analysis session!
+- **Automated Tests**: 17/17 tests passing (added `test_daemon_status_json_offline`).
+
 ## [2.5.0] - 2026-11-27
 
 ### Added

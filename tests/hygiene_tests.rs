@@ -177,7 +177,7 @@ fn test_mcp_server_stdio_handshake_and_tools() {
 
     let list_resp: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 18);
+    assert_eq!(tools.len(), 19);
 
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
@@ -427,4 +427,25 @@ fn test_install_pro_bridge_extracts_script_and_pyt() {
     let pyt_src = fs::read_to_string(&pyt_path).unwrap();
     assert!(pyt_src.contains("StartGeoKitBridge"));
     assert!(pyt_src.contains("StopGeoKitBridge"));
+}
+
+#[test]
+fn test_daemon_status_json_offline() {
+    let res = geokit_bin()
+        .args(["daemon", "status", "--json"])
+        .env("GEOKIT_ARCMAP_DAEMON_PORT", "19878")
+        .env("GEOKIT_ARCPY_DAEMON_PORT", "19879")
+        .output()
+        .unwrap();
+    assert!(
+        res.status.success(),
+        "daemon status stderr: {}",
+        String::from_utf8_lossy(&res.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&res.stdout).expect("valid daemon status JSON");
+    assert_eq!(parsed["arcmap"]["port"], 19878);
+    assert_eq!(parsed["arcmap"]["running"], false);
+    assert_eq!(parsed["arcgis"]["port"], 19879);
+    assert_eq!(parsed["arcgis"]["running"], false);
 }

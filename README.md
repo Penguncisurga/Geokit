@@ -253,7 +253,7 @@ tabular = "05_Tabular"
 
 ### 6. Built-in MCP Server (`geokit mcp`) & ArcMap 10.x Support
 
-`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio` exposing **18 GIS tools** and **3 built-in GIS SOP Playbook Prompts** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — see [AGENT_GUIDE.md](AGENT_GUIDE.md)), allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run end-to-end GIS workflows natively.
+`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio` exposing **19 GIS tools** (including `geokit_daemon` for 5×–15× faster hot-session ArcPy execution!) and **3 built-in GIS SOP Playbook Prompts** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — see [AGENT_GUIDE.md](AGENT_GUIDE.md)), allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run end-to-end GIS workflows natively.
 
 Add to your MCP client configuration:
 

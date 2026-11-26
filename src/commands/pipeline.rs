@@ -6,6 +6,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::config::GeokitConfig;
+use crate::engine::{
+    arcmap_daemon_port, arcpy_daemon_port, ping_daemon, resolve_backend, start_daemon, stop_daemon,
+    EngineBackend, ResolvedBackend,
+};
+
 #[derive(Debug, Subcommand)]
 pub enum PipelineCommand {
     /// Generate a starter declarative pipeline.toml recipe (text-based ModelBuilder for GIS)
@@ -17,13 +23,16 @@ pub enum PipelineCommand {
         #[arg(long)]
         force: bool,
     },
-    /// Execute a multi-step GIS pipeline defined in a TOML file
+    /// Execute a multi-step GIS pipeline defined in a TOML file (auto-warms a 1-time ArcPy daemon when 2+ ArcPy steps are present!)
     Run {
         /// Path to pipeline.toml
         file: PathBuf,
         /// Preview steps without executing them
         #[arg(long)]
         dry_run: bool,
+        /// Disable automatic temporary warm ArcPy daemon for multi-step pipelines
+        #[arg(long)]
+        no_hot: bool,
     },
 }
 
@@ -80,7 +89,31 @@ args = ["clean", ".", "--dry-run"]
 "#
 }
 
-fn run_pipeline(file: &Path, dry_run: bool) -> Result<()> {
+fn is_arcpy_step(args: &[String]) -> bool {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--engine" || a == "--propy" {
+            i += 2;
+            continue;
+        }
+        if a.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return matches!(a, "gp" | "raster" | "hydro" | "qa" | "layout" | "map");
+    }
+    false
+}
+
+fn run_pipeline(
+    file: &Path,
+    dry_run: bool,
+    no_hot: bool,
+    override_propy: Option<&Path>,
+    cfg: &GeokitConfig,
+    backend: EngineBackend,
+) -> Result<()> {
     if !file.is_file() {
         bail!("Pipeline file does not exist: {}", file.display());
     }
@@ -102,10 +135,47 @@ fn run_pipeline(file: &Path, dry_run: bool) -> Result<()> {
         if pipeline.steps.len() == 1 { "" } else { "s" }
     );
 
+    // Auto-start a temporary warm ArcPy daemon when running 2+ ArcPy steps so `import arcpy` runs ONCE!
+    let mut temp_daemon_port: Option<u16> = None;
+    let arcpy_steps = pipeline
+        .steps
+        .iter()
+        .filter(|s| is_arcpy_step(&s.args))
+        .count();
+    if !dry_run && !no_hot && arcpy_steps >= 2 {
+        let resolved =
+            resolve_backend(backend, override_propy, cfg.arcgis.arcmap_python.as_deref());
+        let port = match resolved {
+            ResolvedBackend::Arcmap => Some(arcmap_daemon_port()),
+            ResolvedBackend::Arcgis => Some(arcpy_daemon_port()),
+            ResolvedBackend::Gdal => None,
+        };
+        if let Some(p) = port {
+            if ping_daemon(p).is_none() {
+                println!(
+                    "{} Auto-warming single-startup ArcPy daemon for {} GIS steps...",
+                    "[hot-pipeline]".cyan().bold(),
+                    arcpy_steps
+                );
+                if start_daemon(
+                    resolved,
+                    override_propy,
+                    cfg.arcgis.arcmap_python.as_deref(),
+                    15,
+                )
+                .is_ok()
+                {
+                    temp_daemon_port = Some(p);
+                }
+            }
+        }
+    }
+
     let exe = std::env::current_exe().context("Failed to locate geokit executable")?;
     let total = pipeline.steps.len();
     let mut succeeded = 0usize;
     let mut failed = 0usize;
+    let mut fatal_err: Option<anyhow::Error> = None;
 
     for (idx, step) in pipeline.steps.iter().enumerate() {
         let label = format!("[{}/{}]", idx + 1, total);
@@ -143,9 +213,18 @@ fn run_pipeline(file: &Path, dry_run: bool) -> Result<()> {
             if step.continue_on_error {
                 eprintln!("{} {} (continuing)", "[WARN]".yellow().bold(), msg);
             } else {
-                bail!("{msg}");
+                fatal_err = Some(anyhow::anyhow!("{msg}"));
+                break;
             }
         }
+    }
+
+    if let Some(p) = temp_daemon_port {
+        let _ = stop_daemon(p);
+    }
+
+    if let Some(err) = fatal_err {
+        return Err(err);
     }
 
     println!(
@@ -162,7 +241,12 @@ fn run_pipeline(file: &Path, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn run(cmd: PipelineCommand) -> Result<()> {
+pub fn run(
+    cmd: PipelineCommand,
+    override_propy: Option<&Path>,
+    cfg: &GeokitConfig,
+    backend: EngineBackend,
+) -> Result<()> {
     match cmd {
         PipelineCommand::Init { out, force } => {
             if out.exists() && !force {
@@ -180,6 +264,10 @@ pub fn run(cmd: PipelineCommand) -> Result<()> {
             println!("{} Created {}", "[OK]".green().bold(), out.display());
             Ok(())
         }
-        PipelineCommand::Run { file, dry_run } => run_pipeline(&file, dry_run),
+        PipelineCommand::Run {
+            file,
+            dry_run,
+            no_hot,
+        } => run_pipeline(&file, dry_run, no_hot, override_propy, cfg, backend),
     }
 }

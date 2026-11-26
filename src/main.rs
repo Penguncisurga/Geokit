@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use commands::daemon::DaemonCommand;
 use commands::fetch::FetchCommand;
 use commands::gp::GpCommand;
 use commands::hydro::HydroCommand;
@@ -192,6 +193,11 @@ enum Commands {
         #[command(subcommand)]
         command: Box<LiveCommand>,
     },
+    /// Manage a persistent warm ArcPy worker daemon (skips 8s `import arcpy` startup for 5x-15x faster commands!)
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
     /// Run geokit as a Model Context Protocol (MCP) JSON-RPC 2.0 server over stdio
     Mcp,
 }
@@ -264,7 +270,9 @@ fn real_main() -> Result<()> {
             commands::hydro::run(command, effective_propy, &cfg, effective_engine)
         }
         Commands::Toolbox { command } => commands::toolbox::run(command),
-        Commands::Pipeline { command } => commands::pipeline::run(command),
+        Commands::Pipeline { command } => {
+            commands::pipeline::run(command, effective_propy, &cfg, effective_engine)
+        }
         Commands::Qa {
             input,
             expected_epsg,
@@ -303,6 +311,9 @@ fn real_main() -> Result<()> {
             simplify,
         ),
         Commands::Live { command } => commands::live::run(*command),
+        Commands::Daemon { command } => {
+            commands::daemon::run(command, effective_propy, &cfg, effective_engine)
+        }
         Commands::Mcp => commands::mcp::run(),
     }
 }

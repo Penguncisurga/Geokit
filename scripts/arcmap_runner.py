@@ -1535,9 +1535,161 @@ HANDLERS = {
 }
 
 
+def _safe_u(val):
+    if isinstance(val, unicode):
+        return val
+    try:
+        return str(val).decode("utf-8", "replace")
+    except Exception:
+        return u""
+
+
+def _run_payload_captured(payload):
+    import StringIO
+    import traceback
+
+    action = payload.get("action")
+    handler = HANDLERS.get(action)
+    if not handler:
+        return 2, u"", u"Unsupported ArcMap action: %s\n" % action
+
+    old_out, old_err = sys.stdout, sys.stderr
+    buf_out, buf_err = StringIO.StringIO(), StringIO.StringIO()
+    sys.stdout, sys.stderr = buf_out, buf_err
+    code = 0
+    try:
+        arcpy.env.overwriteOutput = True
+        code = int(handler(payload) or 0)
+    except SystemExit as se:
+        code = int(se.code) if isinstance(se.code, int) else 1
+    except Exception:
+        code = 1
+        traceback.print_exc(file=buf_err)
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+        try:
+            arcpy.env.workspace = None
+            arcpy.env.overwriteOutput = True
+        except Exception:
+            pass
+    return code, _safe_u(buf_out.getvalue()), _safe_u(buf_err.getvalue())
+
+
+def _serve_daemon(port, idle_minutes=30):
+    import socket
+    import time
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", int(port)))
+    srv.listen(8)
+    srv.settimeout(1.0)
+
+    started = time.time()
+    last_req = started
+    served = 0
+    idle_sec = float(idle_minutes) * 60.0 if idle_minutes and idle_minutes > 0 else 0.0
+
+    try:
+        while True:
+            if idle_sec > 0.0 and (time.time() - last_req) >= idle_sec:
+                break
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            last_req = time.time()
+            try:
+                conn.settimeout(30.0)
+                chunks = []
+                while True:
+                    data = conn.recv(65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+                    if "\n" in data:
+                        break
+                raw = "".join(chunks).strip()
+                if not raw:
+                    continue
+                payload = json.loads(raw)
+                action = payload.get("action")
+                if action == "__ping__":
+                    resp = {
+                        "ok": True,
+                        "code": 0,
+                        "engine": "arcmap",
+                        "pid": os.getpid(),
+                        "port": int(port),
+                        "requests": served,
+                        "uptime_sec": round(time.time() - started, 1),
+                    }
+                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    continue
+                if action == "__shutdown__":
+                    conn.sendall((json.dumps({"ok": True, "code": 0, "stopped": True}) + "\n").encode("utf-8"))
+                    break
+                if action == "__batch__":
+                    steps = payload.get("steps") or []
+                    all_out = []
+                    all_err = []
+                    final_code = 0
+                    for step in steps:
+                        c, o, e = _run_payload_captured(step)
+                        served += 1
+                        if o:
+                            all_out.append(o)
+                        if e:
+                            all_err.append(e)
+                        if c != 0:
+                            final_code = c
+                            break
+                    resp = {
+                        "ok": final_code == 0,
+                        "code": final_code,
+                        "stdout": "".join(all_out),
+                        "stderr": "".join(all_err),
+                    }
+                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    continue
+
+                code, out_s, err_s = _run_payload_captured(payload)
+                served += 1
+                resp = {
+                    "ok": code == 0,
+                    "code": code,
+                    "stdout": out_s,
+                    "stderr": err_s,
+                }
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+            except Exception as exc:
+                try:
+                    err_resp = {"ok": False, "code": 1, "stdout": "", "stderr": str(exc) + "\n"}
+                    conn.sendall((json.dumps(err_resp) + "\n").encode("utf-8"))
+                except Exception:
+                    pass
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    finally:
+        try:
+            srv.close()
+        except Exception:
+            pass
+
+
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--serve":
+        port = int(sys.argv[2])
+        idle_min = 30
+        if len(sys.argv) >= 5 and sys.argv[3] == "--idle-minutes":
+            idle_min = int(sys.argv[4])
+        _serve_daemon(port, idle_minutes=idle_min)
+        sys.exit(0)
     if len(sys.argv) < 2:
-        sys.stderr.write("Usage: arcmap_runner.py <payload.json>\n")
+        sys.stderr.write("Usage: arcmap_runner.py <payload.json> | --serve <port>\n")
         sys.exit(2)
     with open(sys.argv[1], "r") as fh:
         payload = json.load(fh)

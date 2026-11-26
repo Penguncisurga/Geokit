@@ -206,7 +206,7 @@ Kamu bisa mengubah nama folder `organize`, default EPSG untuk `gp project`, defa
 
 ### 6. Built-in MCP Server (`geokit mcp`) & Dukungan ArcMap 10.x (`.mxd`)
 
-`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio` dengan **18 tool GIS** dan **3 SOP Playbook Prompt bawaan** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — lihat [AGENT_GUIDE.md](AGENT_GUIDE.md)), sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa mengolah folder bahan mentah menjadi peta analisis lengkap secara otomatis!
+`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio` dengan **19 tool GIS** (termasuk `geokit_daemon` agar eksekusi multi-langkah ArcPy 5×–15× lebih cepat tanpa ulang `import arcpy`!) dan **3 SOP Playbook Prompt bawaan** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — lihat [AGENT_GUIDE.md](AGENT_GUIDE.md)), sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa mengolah folder bahan mentah menjadi peta analisis lengkap secara otomatis!
 
 Tambahkan ke konfigurasi MCP client kamu:
 

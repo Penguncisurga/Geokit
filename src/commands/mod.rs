@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod clean;
+pub mod daemon;
 pub mod doctor;
 pub mod fetch;
 pub mod gp;

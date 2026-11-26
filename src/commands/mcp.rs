@@ -597,6 +597,20 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["input", "group_by"]
             }
+        },
+        {
+            "name": "geokit_daemon",
+            "description": "Start, inspect, or stop the persistent warm ArcPy worker daemon (imports arcpy ONCE, making all subsequent geokit_gp / geokit_raster / geokit_hydro / geokit_qa calls 5x-15x faster!).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["start", "status", "stop"] },
+                    "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap"], "description": "Backend to warm up (for start)" },
+                    "idle_minutes": { "type": "integer", "description": "Auto-shutdown idle minutes (default: 30, 0 = never)" },
+                    "target": { "type": "string", "enum": ["all", "arcmap", "arcgis"], "description": "Which daemon to stop (for stop)" }
+                },
+                "required": ["action"]
+            }
         }
     ]"#,
     )
@@ -1198,6 +1212,27 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(out) = str_arg(args, "out") {
                 cli_args.extend(["--out".into(), out.into()]);
+            }
+        }
+        "geokit_daemon" => {
+            let Some(action) = str_arg(args, "action") else {
+                return ("Missing required argument: action".into(), true);
+            };
+            cli_args.extend(["daemon".into(), action.into()]);
+            match action {
+                "start" => {
+                    if let Some(m) = args.get("idle_minutes").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--idle-minutes".into(), m.to_string()]);
+                    }
+                    cli_args.push("--json".into());
+                }
+                "status" => cli_args.push("--json".into()),
+                "stop" => {
+                    if let Some(t) = str_arg(args, "target") {
+                        cli_args.extend(["--target".into(), t.into()]);
+                    }
+                }
+                _ => return (format!("Unknown daemon action: {action}"), true),
             }
         }
         _ => return (format!("Unknown tool: {name}"), true),
