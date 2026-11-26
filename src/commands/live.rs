@@ -147,27 +147,9 @@ fn detect_arcmap_versions() -> Vec<String> {
     found
 }
 
-fn resolve_documents_dirs() -> Result<Vec<PathBuf>> {
+fn install_addin(version: Option<&str>) -> Result<()> {
     let user_profile = std::env::var("USERPROFILE")
         .context("USERPROFILE environment variable not found (Windows required for ArcMap).")?;
-    let base = PathBuf::from(&user_profile);
-    let mut roots = Vec::new();
-    let std_docs = base.join("Documents");
-    let od_docs = base.join("OneDrive").join("Documents");
-    if od_docs.join("ArcGIS").is_dir() {
-        roots.push(od_docs);
-    }
-    if std_docs.is_dir() {
-        roots.push(std_docs);
-    }
-    if roots.is_empty() {
-        roots.push(base.join("Documents"));
-    }
-    Ok(roots)
-}
-
-fn install_addin(version: Option<&str>) -> Result<()> {
-    let doc_roots = resolve_documents_dirs()?;
 
     let versions: Vec<String> = match version {
         Some(v) => vec![v.trim_start_matches("Desktop").to_string()],
@@ -183,20 +165,36 @@ fn install_addin(version: Option<&str>) -> Result<()> {
         }
     };
 
-    for doc_root in &doc_roots {
-        let addins_root = doc_root.join("ArcGIS").join("AddIns");
-        for ver in &versions {
-            let target_dir = addins_root.join(format!("Desktop{ver}"));
-            std::fs::create_dir_all(&target_dir)?;
-            let dst = target_dir.join("geokit-arcmap.esriaddin");
-            std::fs::write(&dst, ARCMAP_ADDIN_BYTES)
-                .with_context(|| format!("Failed to write {}", dst.display()))?;
-            println!(
-                "{} Installed GeoKit Live Add-In -> {}",
-                "[OK]".green().bold(),
-                dst.display()
-            );
+    // Store in %USERPROFILE%\.geokit\addins (avoids OneDrive cloud-placeholder & Controlled Folder Access issues)
+    let addin_dir = PathBuf::from(&user_profile).join(".geokit").join("addins");
+    std::fs::create_dir_all(&addin_dir)
+        .with_context(|| format!("Failed to create {}", addin_dir.display()))?;
+    let dst = addin_dir.join("geokit-arcmap.esriaddin");
+    std::fs::write(&dst, ARCMAP_ADDIN_BYTES)
+        .with_context(|| format!("Failed to write {}", dst.display()))?;
+    println!(
+        "{} Extracted GeoKit Live Add-In -> {}",
+        "[OK]".green().bold(),
+        dst.display()
+    );
+
+    // Register folder in ArcMap's official AddInFolders registry key
+    let dir_str = addin_dir.display().to_string();
+    for ver in &versions {
+        let reg_key = format!(r"HKCU\Software\ESRI\Desktop{ver}\Settings\AddInFolders");
+        let status = std::process::Command::new("reg")
+            .args([
+                "add", &reg_key, "/v", &dir_str, "/t", "REG_SZ", "/d", "", "/f",
+            ])
+            .status()
+            .context("Failed to invoke Windows `reg` command")?;
+        if !status.success() {
+            bail!("Failed to register Add-In folder in {reg_key}");
         }
+        println!(
+            "{} Registered Add-In folder for ArcMap Desktop{ver} ({reg_key})",
+            "[OK]".green().bold()
+        );
     }
 
     println!("\nNext step: Restart ArcMap 10.x once, then test with `geokit live ping`!");

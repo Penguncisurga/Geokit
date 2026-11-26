@@ -4,6 +4,11 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-11-26
+
+### Fixed
+- `geokit live install-addin` now extracts `geokit-arcmap.esriaddin` into `%USERPROFILE%\.geokit\addins` and registers it in ArcMap's official `HKCU\Software\ESRI\Desktop10.x\Settings\AddInFolders` registry key — avoiding OneDrive cloud-placeholder and Windows Controlled Folder Access failures on localized Windows systems.
+
 ## [1.2.0] - 2026-11-26
 
 ### Added
