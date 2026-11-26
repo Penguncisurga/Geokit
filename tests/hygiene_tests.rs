@@ -166,7 +166,7 @@ fn test_mcp_server_stdio_handshake_and_tools() {
 
     let list_resp: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 13);
 
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
@@ -191,4 +191,51 @@ fn test_organize_ignores_plain_json_but_moves_geojson() {
     assert!(!root.join("01_Vector").join("package.json").exists());
     // .geojson must be organized into 01_Vector
     assert!(root.join("01_Vector").join("batas.geojson").exists());
+}
+
+#[test]
+fn test_toolbox_create_and_pipeline_run() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // 1. Generate a ModelBuilder-ready Python Toolbox (.pyt)
+    let pyt = root.join("DAS_Tools.pyt");
+    let tb_out = geokit_bin()
+        .args([
+            "toolbox",
+            "create",
+            "GeoKit_DAS",
+            "--out",
+            pyt.to_str().unwrap(),
+            "--template",
+            "das",
+        ])
+        .output()
+        .unwrap();
+    assert!(tb_out.status.success());
+    let pyt_content = fs::read_to_string(&pyt).unwrap();
+    assert!(pyt_content.contains("class Toolbox"));
+    assert!(pyt_content.contains("DelineateWatershedTool"));
+
+    // 2. Generate and dry-run + execute a declarative pipeline.toml
+    let pipe = root.join("pipeline.toml");
+    let init_out = geokit_bin()
+        .args(["pipeline", "init", "--out", pipe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(init_out.status.success());
+    assert!(pipe.is_file());
+
+    let dry_out = geokit_bin()
+        .args(["pipeline", "run", pipe.to_str().unwrap(), "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(dry_out.status.success());
+
+    let exec_out = geokit_bin()
+        .current_dir(root)
+        .args(["pipeline", "run", pipe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(exec_out.status.success());
 }

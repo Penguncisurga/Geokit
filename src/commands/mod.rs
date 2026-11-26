@@ -9,5 +9,7 @@ pub mod live;
 pub mod map;
 pub mod mcp;
 pub mod organize;
+pub mod pipeline;
 pub mod raster;
 pub mod sanitize;
+pub mod toolbox;

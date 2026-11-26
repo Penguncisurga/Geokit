@@ -745,6 +745,130 @@ def cmd_hydro_basin(payload):
     return 0
 
 
+def auto_checkout_extension(tool_name: str):
+    lower = tool_name.lower()
+    ext_map = [
+        ("_sa", "Spatial"),
+        ("_3d", "3D"),
+        ("_na", "Network"),
+        ("_ia", "ImageAnalyst"),
+        ("_ga", "GeoStats"),
+        ("_ta", "Tracking"),
+        ("_ba", "Business"),
+    ]
+    for suffix, ext_name in ext_map:
+        if lower.endswith(suffix):
+            try:
+                if arcpy.CheckExtension(ext_name) == "Available":
+                    arcpy.CheckOutExtension(ext_name)
+            except Exception:
+                pass
+            return
+
+
+def cmd_gp_tools(payload):
+    pattern = payload.get("input") or "*"
+    if "*" not in pattern:
+        pattern = f"*{pattern}*"
+    tools = sorted(arcpy.ListTools(pattern) or [])
+    if payload.get("json"):
+        print(json.dumps({"pattern": pattern, "count": len(tools), "tools": tools}, indent=2))
+        return 0
+    print(f"Found {len(tools)} ArcGIS Pro tool(s) matching '{pattern}':")
+    for t in tools[:150]:
+        print(f"  - {t}")
+    if len(tools) > 150:
+        print(f"  ... ({len(tools) - 150} more; narrow your search keyword)")
+    return 0
+
+
+def cmd_gp_tool_usage(payload):
+    tool = payload.get("tool") or ""
+    print(arcpy.Usage(tool))
+    return 0
+
+
+def cmd_gp_run(payload):
+    tool = payload.get("tool") or ""
+    args = payload.get("args") or []
+    auto_checkout_extension(tool)
+    fn = getattr(arcpy, tool, None)
+    if fn is None:
+        print(f"Unknown ArcPy tool '{tool}'. Run `geokit gp tools <keyword>` to search.", file=sys.stderr)
+        return 1
+    res = fn(*args)
+    out_val = res.getOutput(0) if res else ""
+    print(f"OK {tool} completed" + (f" -> {out_val}" if out_val else ""))
+    return 0
+
+
+def cmd_layout_map_series(payload):
+    aprx = arcpy.mp.ArcGISProject(payload["input"])
+    target_name = payload.get("layout_name")
+    layouts = aprx.listLayouts(target_name) if target_name else aprx.listLayouts()
+    lyt = None
+    for candidate in layouts:
+        ms = getattr(candidate, "mapSeries", None)
+        if ms and ms.enabled:
+            lyt = candidate
+            break
+    if lyt is None:
+        print("No enabled Map Series found in the specified .aprx layout(s).", file=sys.stderr)
+        return 1
+
+    ms = lyt.mapSeries
+    out_path = payload["out"]
+    fmt = (payload.get("format") or "pdf").lower()
+    dpi = int(payload.get("dpi") or 300)
+    multi = bool(payload.get("multiple_files", False))
+
+    if fmt == "pdf" and not multi:
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        ms.exportToPDF(out_path, page_range_type="ALL", resolution=dpi)
+        print(f"OK Exported {ms.pageCount} Map Series page(s) -> {out_path}")
+        return 0
+
+    os.makedirs(out_path, exist_ok=True)
+    for page_num in range(1, ms.pageCount + 1):
+        ms.currentPageNumber = page_num
+        page_name = sanitize_gdb_name(str(getattr(ms.pageRow, ms.pageNameField.name, page_num)))
+        dst = os.path.join(out_path, f"{page_num:03d}_{page_name}.{fmt}")
+        if fmt == "pdf":
+            lyt.exportToPDF(dst, resolution=dpi)
+        else:
+            lyt.exportToPNG(dst, resolution=dpi)
+        print(f"[{page_num}/{ms.pageCount}] OK {dst}")
+    print(f"Summary: Exported {ms.pageCount} Map Series page(s) -> {out_path}")
+    return 0
+
+
+def cmd_map_add_layer(payload):
+    aprx_path = payload["input"]
+    aprx = arcpy.mp.ArcGISProject(aprx_path)
+    map_name = payload.get("map_name")
+    maps = aprx.listMaps(map_name) if map_name else aprx.listMaps()
+    if not maps:
+        print("No matching map found in .aprx project.", file=sys.stderr)
+        return 1
+    m = maps[0]
+    added = m.addDataFromPath(payload["layer"])
+    if payload.get("lyrx"):
+        arcpy.management.ApplySymbologyFromLayer(added, payload["lyrx"])
+    out_path = payload.get("out")
+    if out_path:
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        aprx.saveACopy(out_path)
+        print(f"OK Added '{added.name}' to map '{m.name}' and saved copy -> {out_path}")
+    else:
+        aprx.save()
+        print(f"OK Added '{added.name}' to map '{m.name}' and saved -> {aprx_path}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -759,10 +883,15 @@ HANDLERS = {
     "intersect": cmd_intersect,
     "erase": cmd_erase,
     "spatial_join": cmd_spatial_join,
+    "gp_tools": cmd_gp_tools,
+    "gp_tool_usage": cmd_gp_tool_usage,
+    "gp_run": cmd_gp_run,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
+    "layout_map_series": cmd_layout_map_series,
     "map_broken_links": cmd_map_broken_links,
     "map_fix_links": cmd_map_fix_links,
+    "map_add_layer": cmd_map_add_layer,
     "raster_mosaic": cmd_raster_mosaic,
     "raster_terrain": cmd_raster_terrain,
     "raster_zonal_stats": cmd_raster_zonal_stats,

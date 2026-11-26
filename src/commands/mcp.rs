@@ -156,15 +156,15 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_gp",
-            "description": "Run batch geoprocessing (info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join) via ArcGIS Pro, ArcMap 10.x, or GDAL.",
+            "description": "Run batch geoprocessing OR dynamically discover/run ANY installed ArcGIS Pro / ArcMap tool (tools, tool-usage, run, info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["info", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join"]
+                        "enum": ["info", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "tools", "tool-usage", "run"]
                     },
-                    "input": { "type": "string", "description": "Input file, folder, or .gdb" },
+                    "input": { "type": "string", "description": "Input file, folder, .gdb, or keyword pattern (for tools)" },
                     "out": { "type": "string", "description": "Output file, folder, or .gdb (when required)" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"], "description": "Backend engine" },
                     "epsg": { "type": "integer", "description": "Target EPSG code (for project)" },
@@ -176,9 +176,11 @@ fn tool_definitions() -> Value {
                     "with": { "type": "string", "description": "Overlay layer path (for intersect)" },
                     "mask": { "type": "string", "description": "Mask/erase layer path (for erase)" },
                     "join": { "type": "string", "description": "Join layer path (for spatial-join)" },
-                    "match": { "type": "string", "enum": ["intersect", "within", "contains", "closest"], "description": "Match option (for spatial-join)" }
+                    "match": { "type": "string", "enum": ["intersect", "within", "contains", "closest"], "description": "Match option (for spatial-join)" },
+                    "tool": { "type": "string", "description": "Exact ArcPy tool name e.g. Buffer_analysis or Slope_sa (for tool-usage or run)" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Positional arguments passed to ArcPy tool (for run)" }
                 },
-                "required": ["action", "input"]
+                "required": ["action"]
             }
         },
         {
@@ -289,6 +291,34 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["action"]
             }
+        },
+        {
+            "name": "geokit_toolbox",
+            "description": "Generate a ModelBuilder-ready ArcGIS Pro / ArcMap Python Toolbox (.pyt) with GUI parameters (templates: das, batch-prep, blank).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Toolbox name e.g. GeoKit_DAS_Tools" },
+                    "out": { "type": "string", "description": "Output .pyt file path" },
+                    "template": { "type": "string", "enum": ["das", "batch-prep", "blank"] },
+                    "force": { "type": "boolean" }
+                },
+                "required": ["name", "out"]
+            }
+        },
+        {
+            "name": "geokit_pipeline",
+            "description": "Create (`init`) or execute (`run`) a declarative multi-step GIS pipeline.toml workflow (text-based ModelBuilder).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["init", "run"] },
+                    "file": { "type": "string", "description": "Path to pipeline.toml" },
+                    "dry_run": { "type": "boolean", "description": "Preview steps without executing (for run)" },
+                    "force": { "type": "boolean", "description": "Overwrite existing file (for init)" }
+                },
+                "required": ["action"]
+            }
         }
     ])
 }
@@ -354,11 +384,23 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
         }
         "geokit_gp" => {
-            let (Some(action), Some(input)) = (str_arg(args, "action"), str_arg(args, "input"))
-            else {
-                return ("Missing required arguments: action, input".into(), true);
+            let Some(action) = str_arg(args, "action") else {
+                return ("Missing required argument: action".into(), true);
             };
-            cli_args.extend(["gp".into(), action.into(), input.into()]);
+            cli_args.extend(["gp".into(), action.into()]);
+            if let Some(input) = str_arg(args, "input") {
+                cli_args.push(input.into());
+            }
+            if let Some(tool) = str_arg(args, "tool") {
+                cli_args.push(tool.into());
+            }
+            if let Some(arr) = args.get("args").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        cli_args.push(s.into());
+                    }
+                }
+            }
             if let Some(out) = str_arg(args, "out") {
                 cli_args.extend(["--out".into(), out.into()]);
             }
@@ -515,6 +557,46 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
                     if let Some(s) = item.as_str() {
                         cli_args.push(s.into());
                     }
+                }
+            }
+        }
+        "geokit_toolbox" => {
+            let (Some(tb_name), Some(out)) = (str_arg(args, "name"), str_arg(args, "out")) else {
+                return ("Missing required arguments: name, out".into(), true);
+            };
+            cli_args.extend([
+                "toolbox".into(),
+                "create".into(),
+                tb_name.into(),
+                "--out".into(),
+                out.into(),
+            ]);
+            if let Some(tpl) = str_arg(args, "template") {
+                cli_args.extend(["--template".into(), tpl.into()]);
+            }
+            if bool_arg(args, "force") {
+                cli_args.push("--force".into());
+            }
+        }
+        "geokit_pipeline" => {
+            let Some(action) = str_arg(args, "action") else {
+                return ("Missing required argument: action".into(), true);
+            };
+            cli_args.extend(["pipeline".into(), action.into()]);
+            if action == "init" {
+                if let Some(f) = str_arg(args, "file") {
+                    cli_args.extend(["--out".into(), f.into()]);
+                }
+                if bool_arg(args, "force") {
+                    cli_args.push("--force".into());
+                }
+            } else {
+                let Some(f) = str_arg(args, "file") else {
+                    return ("Missing required argument: file".into(), true);
+                };
+                cli_args.push(f.into());
+                if bool_arg(args, "dry_run") {
+                    cli_args.push("--dry-run".into());
                 }
             }
         }

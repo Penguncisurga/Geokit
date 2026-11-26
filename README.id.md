@@ -254,6 +254,38 @@ geokit live run-gp Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
 
 ---
 
+### 8. Future-Proof ArcGIS Pro Tools, Generator Toolbox ModelBuilder (`.pyt`) & Pipeline
+
+- **Otomatis ikut update versi ArcGIS Pro terbaru:**
+  ```bash
+  # Cari & jalankan SEMUA tool yang terpasang di versi ArcGIS Pro / ArcMap kamu
+  geokit gp tools slope
+  geokit gp tool-usage Slope_sa
+  geokit gp run Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
+  ```
+- **Generator Python Toolbox (`.pyt`) siap pakai di ModelBuilder:**
+  ```bash
+  # Buat file .pyt dengan form GUI yang langsung bisa di-drag ke ModelBuilder
+  geokit toolbox create GeoKit_DAS --out ./GeoKit_DAS.pyt --template das
+  geokit toolbox create Batch_Prep --out ./Batch_Prep.pyt --template batch-prep
+  ```
+- **Pipeline Resep (`pipeline.toml` — ModelBuilder versi teks/AI):**
+  ```bash
+  geokit pipeline init --out pipeline.toml
+  geokit pipeline run pipeline.toml --dry-run
+  geokit pipeline run pipeline.toml
+  ```
+- **Otomasi `.aprx` Lanjutan:**
+  ```bash
+  # Export seluruh halaman Spatial Map Series ArcGIS Pro sekaligus
+  geokit layout map-series ./peta_desa.aprx --out ./exports/desa_all.pdf --dpi 300
+
+  # Tambah layer + terapkan simbologi .lyrx langsung ke file .aprx
+  geokit map add-layer ./proyek.aprx --layer ./batas_desa.shp --lyrx ./style_desa.lyrx
+  ```
+
+---
+
 ## Lisensi
 
 Proyek ini dirilis dengan [Lisensi MIT](LICENSE).

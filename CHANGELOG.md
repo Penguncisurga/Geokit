@@ -4,6 +4,15 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-11-26
+
+### Added
+- **Future-Proof ArcGIS Pro / ArcMap Tool Discovery & Execution**: `geokit gp tools [pattern]`, `geokit gp tool-usage <tool>`, and `geokit gp run <tool> [args...]` with automatic extension checkout (`Spatial`, `3D`, `Network`, `ImageAnalyst`, `GeoStats`, `Tracking`, `Business`) — automatically supports every new tool added in future ArcGIS Pro 3.x/4.x updates without updating `geokit`.
+- **ModelBuilder Python Toolbox Generator (`geokit toolbox create`)**: generates ModelBuilder-ready `.pyt` toolboxes with GUI parameters (`das`, `batch-prep`, and `blank` templates).
+- **Declarative Pipeline Runner (`geokit pipeline init` & `geokit pipeline run`)**: text-based ModelBuilder workflows defined in `pipeline.toml` with `--dry-run` support.
+- **Advanced `.aprx` Automation**: `geokit layout map-series` (batch export ArcGIS Pro Spatial Map Series) and `geokit map add-layer` (add dataset + optional `.lyrx` symbology to `.aprx`).
+- Added `geokit_toolbox` and `geokit_pipeline` MCP tools (now 13 MCP tools total).
+
 ## [1.3.0] - 2026-11-26
 
 ### Added

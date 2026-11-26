@@ -651,6 +651,51 @@ def cmd_hydro_basin(payload):
     return 0
 
 
+def auto_checkout_extension(tool_name):
+    lower = tool_name.lower()
+    for suffix, ext_name in [("_sa", "Spatial"), ("_3d", "3D"), ("_na", "Network"), ("_ga", "GeoStats")]:
+        if lower.endswith(suffix):
+            try:
+                if arcpy.CheckExtension(ext_name) == "Available":
+                    arcpy.CheckOutExtension(ext_name)
+            except Exception:
+                pass
+            return
+
+
+def cmd_gp_tools(payload):
+    pattern = payload.get("input") or "*"
+    if "*" not in pattern:
+        pattern = "*%s*" % pattern
+    tools = sorted(arcpy.ListTools(pattern) or [])
+    if payload.get("json"):
+        print(json.dumps({"pattern": pattern, "count": len(tools), "tools": tools}, indent=2))
+        return 0
+    print("Found %d ArcMap tool(s) matching '%s':" % (len(tools), pattern))
+    for t in tools[:150]:
+        print("  - %s" % t)
+    return 0
+
+
+def cmd_gp_tool_usage(payload):
+    print(arcpy.Usage(payload.get("tool") or ""))
+    return 0
+
+
+def cmd_gp_run(payload):
+    tool = payload.get("tool") or ""
+    args = payload.get("args") or []
+    auto_checkout_extension(tool)
+    fn = getattr(arcpy, tool, None)
+    if fn is None:
+        sys.stderr.write("Unknown ArcPy tool '%s'. Run `geokit gp tools <keyword>` to search.\n" % tool)
+        return 1
+    res = fn(*args)
+    out_val = res.getOutput(0) if res else ""
+    print("OK %s completed%s" % (tool, (" -> " + out_val) if out_val else ""))
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -665,6 +710,9 @@ HANDLERS = {
     "intersect": cmd_intersect,
     "erase": cmd_erase,
     "spatial_join": cmd_spatial_join,
+    "gp_tools": cmd_gp_tools,
+    "gp_tool_usage": cmd_gp_tool_usage,
+    "gp_run": cmd_gp_run,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
     "map_broken_links": cmd_map_broken_links,

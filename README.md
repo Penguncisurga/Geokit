@@ -301,6 +301,38 @@ geokit live run-gp Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
 
 ---
 
+### 8. Future-Proof ArcGIS Pro Tools, ModelBuilder `.pyt` Generator & Pipelines
+
+- **Always up-to-date with new ArcGIS Pro releases:**
+  ```bash
+  # Discover & run ANY tool installed in your ArcGIS Pro / ArcMap version
+  geokit gp tools slope
+  geokit gp tool-usage Slope_sa
+  geokit gp run Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
+  ```
+- **ModelBuilder-ready Python Toolbox (`.pyt`) generator:**
+  ```bash
+  # Generate a GUI .pyt toolbox ready to drag into ArcGIS Pro ModelBuilder
+  geokit toolbox create GeoKit_DAS --out ./GeoKit_DAS.pyt --template das
+  geokit toolbox create Batch_Prep --out ./Batch_Prep.pyt --template batch-prep
+  ```
+- **Declarative Pipelines (`pipeline.toml` — text-based ModelBuilder):**
+  ```bash
+  geokit pipeline init --out pipeline.toml
+  geokit pipeline run pipeline.toml --dry-run
+  geokit pipeline run pipeline.toml
+  ```
+- **Advanced `.aprx` automation:**
+  ```bash
+  # Export all pages of an ArcGIS Pro Spatial Map Series
+  geokit layout map-series ./peta_desa.aprx --out ./exports/desa_all.pdf --dpi 300
+
+  # Add a layer and apply a .lyrx symbology file into an .aprx
+  geokit map add-layer ./proyek.aprx --layer ./batas_desa.shp --lyrx ./style_desa.lyrx
+  ```
+
+---
+
 ## Roadmap
 
 - [x] `geokit layout list` & `geokit layout export` — Batch export `.aprx` & `.mxd` layouts to PDF/PNG/JPG

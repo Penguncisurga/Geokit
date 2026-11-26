@@ -8,17 +8,17 @@ use crate::engine::{abs_string, is_mxd_target, run_arcmap_job, run_arcpy_job, En
 
 #[derive(Debug, Subcommand)]
 pub enum LayoutCommand {
-    /// List all layouts inside an .aprx file or a directory of .aprx projects
+    /// List all layouts inside an .aprx/.mxd file or a directory of projects
     List {
-        /// Path to an .aprx file or directory
+        /// Path to an .aprx, .mxd, or directory
         input: PathBuf,
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Batch export layouts from one or more .aprx projects to PDF, PNG, or JPG
+    /// Batch export layouts from one or more .aprx/.mxd projects to PDF, PNG, or JPG
     Export {
-        /// Path to an .aprx file or directory of .aprx files
+        /// Path to an .aprx, .mxd, or directory of project files
         input: PathBuf,
         /// Output directory for exported maps
         #[arg(short, long)]
@@ -33,9 +33,29 @@ pub enum LayoutCommand {
         #[arg(long)]
         filter: Option<String>,
     },
+    /// Batch export an ArcGIS Pro (.aprx) Spatial Map Series (e.g. 50 village maps from 1 layout)
+    MapSeries {
+        /// Path to an .aprx project with a configured Map Series layout
+        input: PathBuf,
+        /// Output directory (for individual files) or single multi-page PDF path
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Layout name containing the Map Series (defaults to first layout with a Map Series)
+        #[arg(long)]
+        layout: Option<String>,
+        /// Export format: pdf or png (default: pdf)
+        #[arg(short, long)]
+        format: Option<String>,
+        /// Export resolution in DPI (defaults to geokit.toml or 300)
+        #[arg(long)]
+        dpi: Option<u32>,
+        /// Export one separate file per Map Series page instead of a single multi-page PDF
+        #[arg(long)]
+        multiple_files: bool,
+    },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct LayoutPayload {
     action: String,
     input: String,
@@ -43,6 +63,8 @@ struct LayoutPayload {
     format: Option<String>,
     dpi: Option<u32>,
     filter: Option<String>,
+    layout_name: Option<String>,
+    multiple_files: Option<bool>,
     json: Option<bool>,
 }
 
@@ -56,6 +78,7 @@ pub fn run(
         LayoutCommand::List { input, .. } | LayoutCommand::Export { input, .. } => {
             backend == EngineBackend::Arcmap || is_mxd_target(input)
         }
+        LayoutCommand::MapSeries { .. } => false,
     };
 
     let payload = match cmd {
@@ -66,11 +89,8 @@ pub fn run(
             LayoutPayload {
                 action: "layout_list".into(),
                 input: abs_string(&input),
-                out: None,
-                format: None,
-                dpi: None,
-                filter: None,
                 json: Some(json),
+                ..Default::default()
             }
         }
         LayoutCommand::Export {
@@ -97,7 +117,36 @@ pub fn run(
                 format: Some(fmt),
                 dpi: Some(resolution),
                 filter,
-                json: None,
+                ..Default::default()
+            }
+        }
+        LayoutCommand::MapSeries {
+            input,
+            out,
+            layout,
+            format,
+            dpi,
+            multiple_files,
+        } => {
+            if !input.is_file() {
+                bail!("Input .aprx file does not exist: {}", input.display());
+            }
+            let fmt = format
+                .unwrap_or_else(|| "pdf".to_string())
+                .to_ascii_lowercase();
+            if !matches!(fmt.as_str(), "pdf" | "png") {
+                bail!("Unsupported Map Series format '{fmt}'. Use pdf or png.");
+            }
+            let resolution = dpi.unwrap_or(cfg.defaults.dpi);
+            LayoutPayload {
+                action: "layout_map_series".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                format: Some(fmt),
+                dpi: Some(resolution),
+                layout_name: layout,
+                multiple_files: Some(multiple_files),
+                ..Default::default()
             }
         }
     };

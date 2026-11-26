@@ -147,9 +147,30 @@ pub enum GpCommand {
         #[arg(long = "match", default_value = "intersect")]
         match_option: String,
     },
+    /// Discover ANY installed ArcGIS Pro / ArcMap tool dynamically (always up-to-date with new ArcGIS releases!)
+    Tools {
+        /// Keyword or wildcard filter (e.g. "clip", "*_sa", "zonal")
+        #[arg(default_value = "*")]
+        pattern: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show exact parameter usage syntax for any installed ArcGIS tool (e.g. Buffer_analysis, Fill_sa)
+    ToolUsage {
+        /// Exact ArcPy tool name
+        tool: String,
+    },
+    /// Run ANY installed ArcGIS Pro / ArcMap geoprocessing tool dynamically (auto-checks out extensions)
+    Run {
+        /// Exact ArcPy tool name (e.g. Buffer_analysis, Slope_sa, FeatureToPoint_management)
+        tool: String,
+        /// Positional arguments passed directly to the ArcPy tool
+        args: Vec<String>,
+    },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct GpPayload {
     action: String,
     input: String,
@@ -163,6 +184,8 @@ struct GpPayload {
     include_rasters: Option<bool>,
     overlay: Option<String>,
     match_option: Option<String>,
+    tool: Option<String>,
+    args: Option<Vec<String>>,
     json: Option<bool>,
 }
 
@@ -240,17 +263,8 @@ pub fn run(
             GpPayload {
                 action: "info".into(),
                 input: abs_string(&input),
-                out: None,
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
                 json: Some(json),
+                ..Default::default()
             }
         }
         GpCommand::Project { input, epsg, out } => {
@@ -265,15 +279,7 @@ pub fn run(
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
                 epsg: Some(target_epsg),
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Clip { input, aoi, out } => {
@@ -287,16 +293,8 @@ pub fn run(
                 action: "clip".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
                 aoi: Some(abs_string(&aoi)),
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Merge { input, out } => {
@@ -307,16 +305,7 @@ pub fn run(
                 action: "merge".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Pack {
@@ -331,16 +320,8 @@ pub fn run(
                 action: "pack".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
                 include_rasters: Some(include_rasters),
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Unpack { input, out } => {
@@ -351,16 +332,7 @@ pub fn run(
                 action: "unpack".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Repair { input } => {
@@ -370,17 +342,7 @@ pub fn run(
             GpPayload {
                 action: "repair".into(),
                 input: abs_string(&input),
-                out: None,
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Buffer {
@@ -396,16 +358,9 @@ pub fn run(
                 action: "buffer".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
                 dist: Some(dist),
                 dissolve: Some(dissolve),
-                field: None,
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Dissolve { input, field, out } => {
@@ -416,16 +371,8 @@ pub fn run(
                 action: "dissolve".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
                 field: Some(field),
-                unit: None,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::CalcGeom { input, unit, field } => {
@@ -435,17 +382,9 @@ pub fn run(
             GpPayload {
                 action: "calc_geom".into(),
                 input: abs_string(&input),
-                out: None,
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
                 field,
                 unit,
-                include_rasters: None,
-                overlay: None,
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Intersect { input, with, out } => {
@@ -459,16 +398,8 @@ pub fn run(
                 action: "intersect".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
                 overlay: Some(abs_string(&with)),
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::Erase { input, mask, out } => {
@@ -482,16 +413,8 @@ pub fn run(
                 action: "erase".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
                 overlay: Some(abs_string(&mask)),
-                match_option: None,
-                json: None,
+                ..Default::default()
             }
         }
         GpCommand::SpatialJoin {
@@ -510,18 +433,28 @@ pub fn run(
                 action: "spatial_join".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: None,
-                aoi: None,
-                dist: None,
-                dissolve: None,
-                field: None,
-                unit: None,
-                include_rasters: None,
                 overlay: Some(abs_string(&join)),
                 match_option: Some(match_option),
-                json: None,
+                ..Default::default()
             }
         }
+        GpCommand::Tools { pattern, json } => GpPayload {
+            action: "gp_tools".into(),
+            input: pattern,
+            json: Some(json),
+            ..Default::default()
+        },
+        GpCommand::ToolUsage { tool } => GpPayload {
+            action: "gp_tool_usage".into(),
+            tool: Some(tool),
+            ..Default::default()
+        },
+        GpCommand::Run { tool, args } => GpPayload {
+            action: "gp_run".into(),
+            tool: Some(tool),
+            args: Some(args),
+            ..Default::default()
+        },
     };
 
     if resolved == ResolvedBackend::Arcmap {

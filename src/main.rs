@@ -12,7 +12,9 @@ use commands::hydro::HydroCommand;
 use commands::layout::LayoutCommand;
 use commands::live::LiveCommand;
 use commands::map::MapCommand;
+use commands::pipeline::PipelineCommand;
 use commands::raster::RasterCommand;
+use commands::toolbox::ToolboxCommand;
 use engine::EngineBackend;
 
 #[derive(Debug, Parser)]
@@ -119,6 +121,16 @@ enum Commands {
         #[command(subcommand)]
         command: HydroCommand,
     },
+    /// Generate ModelBuilder-ready ArcGIS Python Toolboxes (.pyt)
+    Toolbox {
+        #[command(subcommand)]
+        command: ToolboxCommand,
+    },
+    /// Create and execute declarative multi-step GIS pipelines (pipeline.toml)
+    Pipeline {
+        #[command(subcommand)]
+        command: PipelineCommand,
+    },
     /// Control a currently open ArcMap 10.x window live (add/remove/zoom/select/export/run-gp)
     Live {
         #[command(subcommand)]
@@ -182,6 +194,8 @@ fn main() -> Result<()> {
         Commands::Hydro { command } => {
             commands::hydro::run(command, effective_propy, &cfg, effective_engine)
         }
+        Commands::Toolbox { command } => commands::toolbox::run(command),
+        Commands::Pipeline { command } => commands::pipeline::run(command),
         Commands::Live { command } => commands::live::run(command),
         Commands::Mcp => commands::mcp::run(),
     }
