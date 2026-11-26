@@ -151,7 +151,32 @@ geokit map fix-links ./04_Projects/peta_das.aprx --find "D:\OldData" --replace "
 
 ---
 
-### 4. Project Configuration (`geokit.toml`)
+### 4. Raster & Hydrology / Watershed (DAS) Toolkit
+
+| Command | Description |
+| :--- | :--- |
+| `geokit raster mosaic <dir> --out <merged.tif>` | Mosaic multiple DEM/raster tiles (e.g. DEMNAS/SRTM) into one GeoTIFF (ArcGIS Pro or `--engine gdal`). |
+| `geokit raster terrain <dem.tif> --out <dir> [--all \| --slope --aspect --hillshade]` | Generate slope, aspect, and hillshade derivatives from a DEM (ArcGIS Pro Spatial Analyst or `--engine gdal`). |
+| `geokit raster zonal-stats <raster.tif> --zones <poly> --zone-field <field> --out <stats.csv>` | Compute zonal statistics per polygon/sub-watershed to CSV/DBF. |
+| `geokit hydro delineate <dem.tif> --out <dir> [--threshold 1000] [--pour-point <outlet.shp>]` | Automated DAS pipeline: `Fill` → `FlowDirection` → `FlowAccumulation` → `Streams (.shp)` → `Watershed (.shp)`. |
+| `geokit hydro basin <dem.tif> --out <dir>` | Automatically delineate all drainage basins from a DEM into a polygon shapefile. |
+
+**Examples:**
+
+```bash
+# Generate slope, aspect, and hillshade using GDAL (no Spatial Analyst license needed)
+geokit --engine gdal raster terrain ./02_Raster/dem_das.tif --out ./terrain --all
+
+# Run automated watershed (DAS) delineation with an outlet point
+geokit hydro delineate ./02_Raster/dem_utm.tif --out ./das_output --threshold 500 --pour-point ./outlet.shp
+
+# Compute elevation statistics per sub-watershed
+geokit raster zonal-stats ./02_Raster/dem_utm.tif --zones ./sub_das.shp --zone-field SUB_DAS --out ./elev_stats.csv
+```
+
+---
+
+### 5. Project Configuration (`geokit.toml`)
 
 Generate a starter configuration file in your project root:
 
@@ -184,7 +209,7 @@ tabular = "05_Tabular"
 - [x] `geokit init` & `geokit.toml` — Custom folder templates, default EPSG, and layout defaults per project
 - [x] Optional GDAL / QGIS CLI backend (`--engine auto|arcgis|gdal`) for cross-platform & non-ArcGIS environments
 - [x] Batch overlay geoprocessing (`intersect`, `erase`, `spatial-join`)
-- [ ] Raster batch toolkit (mosaic, slope/aspect/hillshade, zonal statistics)
+- [x] Raster & Hydrology/DAS toolkit (`raster mosaic/terrain/zonal-stats`, `hydro delineate/basin`)
 
 ---
 

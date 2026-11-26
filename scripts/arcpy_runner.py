@@ -588,6 +588,163 @@ def cmd_spatial_join(payload):
     return 1 if failures else 0
 
 
+def checkout_spatial_analyst():
+    if arcpy.CheckExtension("Spatial") != "Available":
+        raise RuntimeError(
+            "ArcGIS Spatial Analyst extension is not available/licensed. "
+            "Tip: For slope/aspect/hillshade or mosaic without Spatial Analyst, use `--engine gdal`."
+        )
+    arcpy.CheckOutExtension("Spatial")
+
+
+def cmd_raster_mosaic(payload):
+    rasters = [p for p, kind in collect_datasets(payload["input"], include_rasters=True) if kind == "raster"]
+    if not rasters:
+        print("No raster datasets found to mosaic.", file=sys.stderr)
+        return 1
+    out_path = payload["out"]
+    out_dir = os.path.dirname(out_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    out_name = os.path.basename(out_path)
+    desc = arcpy.Describe(rasters[0])
+    bands = getattr(desc, "bandCount", 1) or 1
+    arcpy.management.MosaicToNewRaster(
+        input_rasters=rasters,
+        output_location=out_dir,
+        raster_dataset_name_with_extension=out_name,
+        pixel_type="32_BIT_FLOAT",
+        number_of_bands=bands,
+        mosaic_method="LAST",
+    )
+    print(f"OK Mosaicked {len(rasters)} raster(s) -> {out_path}")
+    return 0
+
+
+def cmd_raster_terrain(payload):
+    checkout_spatial_analyst()
+    from arcpy import sa
+
+    dem = payload["input"]
+    out_dir = payload["out"]
+    os.makedirs(out_dir, exist_ok=True)
+    stem = sanitize_gdb_name(dem)
+
+    if payload.get("slope"):
+        dst = os.path.join(out_dir, f"{stem}_slope.tif")
+        sa.Slope(dem, "DEGREE").save(dst)
+        print(f"[OK] Slope     -> {dst}")
+    if payload.get("aspect"):
+        dst = os.path.join(out_dir, f"{stem}_aspect.tif")
+        sa.Aspect(dem).save(dst)
+        print(f"[OK] Aspect    -> {dst}")
+    if payload.get("hillshade"):
+        dst = os.path.join(out_dir, f"{stem}_hillshade.tif")
+        sa.Hillshade(dem).save(dst)
+        print(f"[OK] Hillshade -> {dst}")
+    return 0
+
+
+def cmd_raster_zonal_stats(payload):
+    checkout_spatial_analyst()
+    from arcpy import sa
+
+    raster = payload["input"]
+    zones = payload["zones"]
+    zone_field = payload["zone_field"]
+    out_path = payload["out"]
+    parent = os.path.dirname(out_path) or "."
+    os.makedirs(parent, exist_ok=True)
+
+    if out_path.lower().endswith(".csv"):
+        tmp_tbl = os.path.join(arcpy.env.scratchGDB, "geokit_zonal_tmp")
+        sa.ZonalStatisticsAsTable(zones, zone_field, raster, tmp_tbl, "DATA", "ALL")
+        arcpy.conversion.TableToTable(tmp_tbl, parent, os.path.basename(out_path))
+        arcpy.management.Delete(tmp_tbl)
+    else:
+        sa.ZonalStatisticsAsTable(zones, zone_field, raster, out_path, "DATA", "ALL")
+    print(f"OK Zonal statistics saved -> {out_path}")
+    return 0
+
+
+def cmd_hydro_delineate(payload):
+    checkout_spatial_analyst()
+    from arcpy import sa
+
+    dem = payload["dem"]
+    out_dir = payload["out"]
+    threshold = int(payload.get("threshold") or 1000)
+    pour_point = payload.get("pour_point")
+    snap_dist = float(payload.get("snap_dist") or 100.0)
+    os.makedirs(out_dir, exist_ok=True)
+
+    print("[1/5] Filling DEM sinks...")
+    filled_path = os.path.join(out_dir, "01_dem_filled.tif")
+    filled = sa.Fill(dem)
+    filled.save(filled_path)
+
+    print("[2/5] Computing D8 Flow Direction...")
+    fdir_path = os.path.join(out_dir, "02_flow_dir.tif")
+    fdir = sa.FlowDirection(filled, "NORMAL")
+    fdir.save(fdir_path)
+
+    print("[3/5] Computing Flow Accumulation...")
+    facc_path = os.path.join(out_dir, "03_flow_acc.tif")
+    facc = sa.FlowAccumulation(fdir)
+    facc.save(facc_path)
+
+    print(f"[4/5] Extracting Stream Network (threshold >= {threshold} cells)...")
+    streams_shp = os.path.join(out_dir, "04_streams.shp")
+    stream_ras = sa.Con(facc >= threshold, 1)
+    try:
+        sa.StreamToFeature(stream_ras, fdir, streams_shp, "SIMPLIFY")
+        print(f"      -> {streams_shp}")
+    except Exception as exc:
+        print(f"      [WARN] No streams extracted at threshold {threshold} ({exc})")
+
+    if pour_point:
+        print(f"[5/5] Snapping pour point ({snap_dist} map units) & delineating watershed...")
+        snapped = sa.SnapPourPoint(pour_point, facc, snap_dist)
+        ws_ras = sa.Watershed(fdir, snapped)
+        ws_tif = os.path.join(out_dir, "05_watershed.tif")
+        ws_ras.save(ws_tif)
+        ws_shp = os.path.join(out_dir, "05_watershed.shp")
+        arcpy.conversion.RasterToPolygon(ws_ras, ws_shp, "SIMPLIFY", "VALUE")
+        print(f"      -> {ws_shp}")
+    else:
+        print("[5/5] No --pour-point provided; skipping single-outlet watershed polygon.")
+        print("      Tip: Pass `--pour-point <outlet.shp>` or run `geokit hydro basin`.")
+
+    print(f"OK Hydrology delineation complete -> {out_dir}")
+    return 0
+
+
+def cmd_hydro_basin(payload):
+    checkout_spatial_analyst()
+    from arcpy import sa
+
+    dem = payload["dem"]
+    out_dir = payload["out"]
+    os.makedirs(out_dir, exist_ok=True)
+
+    print("[1/4] Filling DEM sinks...")
+    filled = sa.Fill(dem)
+    filled.save(os.path.join(out_dir, "01_dem_filled.tif"))
+
+    print("[2/4] Computing D8 Flow Direction...")
+    fdir = sa.FlowDirection(filled, "NORMAL")
+    fdir.save(os.path.join(out_dir, "02_flow_dir.tif"))
+
+    print("[3/4] Delineating all drainage basins...")
+    basin_ras = sa.Basin(fdir)
+    basin_ras.save(os.path.join(out_dir, "03_basins.tif"))
+
+    print("[4/4] Converting basins to polygon shapefile...")
+    basins_shp = os.path.join(out_dir, "04_basins.shp")
+    arcpy.conversion.RasterToPolygon(basin_ras, basins_shp, "SIMPLIFY", "VALUE")
+    print(f"OK Drainage basins saved -> {basins_shp}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -606,6 +763,11 @@ HANDLERS = {
     "layout_export": cmd_layout_export,
     "map_broken_links": cmd_map_broken_links,
     "map_fix_links": cmd_map_fix_links,
+    "raster_mosaic": cmd_raster_mosaic,
+    "raster_terrain": cmd_raster_terrain,
+    "raster_zonal_stats": cmd_raster_zonal_stats,
+    "hydro_delineate": cmd_hydro_delineate,
+    "hydro_basin": cmd_hydro_basin,
 }
 
 

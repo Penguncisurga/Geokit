@@ -8,8 +8,10 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use commands::gp::GpCommand;
+use commands::hydro::HydroCommand;
 use commands::layout::LayoutCommand;
 use commands::map::MapCommand;
+use commands::raster::RasterCommand;
 use engine::EngineBackend;
 
 #[derive(Debug, Parser)]
@@ -106,6 +108,16 @@ enum Commands {
         #[command(subcommand)]
         command: MapCommand,
     },
+    /// Batch raster processing (mosaic, terrain slope/aspect/hillshade, zonal statistics)
+    Raster {
+        #[command(subcommand)]
+        command: RasterCommand,
+    },
+    /// Automated hydrology & watershed (DAS) delineation pipelines from DEM (ArcGIS Spatial Analyst)
+    Hydro {
+        #[command(subcommand)]
+        command: HydroCommand,
+    },
 }
 
 fn main() -> Result<()> {
@@ -135,5 +147,7 @@ fn main() -> Result<()> {
         Commands::Gp { command } => commands::gp::run(command, effective_propy, &cfg, cli.engine),
         Commands::Layout { command } => commands::layout::run(command, effective_propy, &cfg),
         Commands::Map { command } => commands::map::run(command, effective_propy),
+        Commands::Raster { command } => commands::raster::run(command, effective_propy, cli.engine),
+        Commands::Hydro { command } => commands::hydro::run(command, effective_propy),
     }
 }

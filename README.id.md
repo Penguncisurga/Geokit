@@ -125,7 +125,25 @@ geokit map broken-links ./04_Projects
 
 ---
 
-### 4. Konfigurasi Proyek (`geokit.toml`)
+### 4. Raster & Hidrologi / DAS (`raster` & `hydro`)
+
+- **`geokit raster mosaic <folder> --out <dem_gabungan.tif>`** — Gabungkan banyak tile DEMNAS/SRTM jadi satu GeoTIFF (ArcGIS Pro atau `--engine gdal`).
+- **`geokit raster terrain <dem.tif> --out <folder> [--all | --slope --aspect --hillshade]`** — Hasilkan peta kemiringan lereng (*slope*), arah lereng (*aspect*), dan *hillshade* sekaligus.
+- **`geokit raster zonal-stats <raster.tif> --zones <poligon> --zone-field <field> --out <stats.csv>`** — Hitung statistik zonal (min, max, mean, std, sum) per sub-DAS ke CSV/DBF.
+- **`geokit hydro delineate <dem.tif> --out <folder> [--threshold 1000] [--pour-point <outlet.shp>]`** — Pipeline delineasi DAS otomatis: `Fill` → `FlowDirection` → `FlowAccumulation` → `Jaringan Sungai (.shp)` → `Poligon DAS (.shp)`.
+- **`geokit hydro basin <dem.tif> --out <folder>`** — Delineasi otomatis seluruh poligon *Basin* dari DEM tanpa perlu titik outlet.
+
+```bash
+# Buat slope, aspect, dan hillshade cepat lewat GDAL
+geokit --engine gdal raster terrain ./02_Raster/dem_das.tif --out ./terrain --all
+
+# Delineasi DAS otomatis dari DEM + titik outlet
+geokit hydro delineate ./02_Raster/dem_utm.tif --out ./hasil_das --threshold 500 --pour-point ./outlet.shp
+```
+
+---
+
+### 5. Konfigurasi Proyek (`geokit.toml`)
 
 Buat file konfigurasi awal di folder proyek:
 

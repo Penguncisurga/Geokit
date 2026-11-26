@@ -13,6 +13,7 @@ pub struct GdalEnvironment {
     pub ogr2ogr: Option<PathBuf>,
     pub ogrinfo: Option<PathBuf>,
     pub gdalwarp: Option<PathBuf>,
+    pub gdaldem: Option<PathBuf>,
     pub proj_data: Option<PathBuf>,
     pub gdal_data: Option<PathBuf>,
     pub source: Option<String>,
@@ -31,6 +32,7 @@ pub fn detect_gdal() -> GdalEnvironment {
             ogr2ogr: Some(ogr2ogr),
             ogrinfo: find_on_path("ogrinfo"),
             gdalwarp: find_on_path("gdalwarp"),
+            gdaldem: find_on_path("gdaldem"),
             proj_data: None,
             gdal_data: None,
             source: Some("System PATH".to_string()),
@@ -72,6 +74,10 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("gdalwarp.exe")
                     .is_file()
                     .then(|| bin.join("gdalwarp.exe")),
+                gdaldem: bin
+                    .join("gdaldem.exe")
+                    .is_file()
+                    .then(|| bin.join("gdaldem.exe")),
                 proj_data: proj_data.is_dir().then_some(proj_data),
                 gdal_data,
                 source: Some(format!("QGIS ({})", bin.display())),
@@ -83,6 +89,7 @@ pub fn detect_gdal() -> GdalEnvironment {
         ogr2ogr: None,
         ogrinfo: None,
         gdalwarp: None,
+        gdaldem: None,
         proj_data: None,
         gdal_data: None,
         source: None,
@@ -418,5 +425,90 @@ pub fn gdal_unpack(gdal: &GdalEnvironment, input: &Path, out_dir: &Path) -> Resu
         ],
     )?;
     println!("OK Unpacked {} -> {}", input.display(), out_dir.display());
+    Ok(())
+}
+
+pub fn gdal_mosaic(gdal: &GdalEnvironment, input_dir: &Path, out: &Path) -> Result<()> {
+    let Some(warp) = &gdal.gdalwarp else {
+        bail!("gdalwarp not found in GDAL environment.");
+    };
+    let rasters: Vec<PathBuf> = collect_inputs(input_dir, true)
+        .into_iter()
+        .filter(|(_, is_r)| *is_r)
+        .map(|(p, _)| p)
+        .collect();
+    if rasters.is_empty() {
+        bail!("No raster files found in {}", input_dir.display());
+    }
+    if let Some(parent) = out.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut args = vec!["-overwrite".to_string()];
+    for r in &rasters {
+        args.push(r.display().to_string());
+    }
+    args.push(out.display().to_string());
+    run_cmd(gdal, warp, &args)?;
+    println!(
+        "OK Mosaicked {} raster(s) -> {}",
+        rasters.len(),
+        out.display()
+    );
+    Ok(())
+}
+
+pub fn gdal_terrain(
+    gdal: &GdalEnvironment,
+    dem: &Path,
+    out_dir: &Path,
+    slope: bool,
+    aspect: bool,
+    hillshade: bool,
+) -> Result<()> {
+    let Some(gdaldem) = &gdal.gdaldem else {
+        bail!("gdaldem not found in GDAL environment.");
+    };
+    fs::create_dir_all(out_dir)?;
+    let stem = dem.file_stem().and_then(|s| s.to_str()).unwrap_or("dem");
+
+    if slope {
+        let dst = out_dir.join(format!("{stem}_slope.tif"));
+        run_cmd(
+            gdal,
+            gdaldem,
+            &[
+                "slope".into(),
+                dem.display().to_string(),
+                dst.display().to_string(),
+            ],
+        )?;
+        println!("[OK] Slope     -> {}", dst.display());
+    }
+    if aspect {
+        let dst = out_dir.join(format!("{stem}_aspect.tif"));
+        run_cmd(
+            gdal,
+            gdaldem,
+            &[
+                "aspect".into(),
+                dem.display().to_string(),
+                dst.display().to_string(),
+            ],
+        )?;
+        println!("[OK] Aspect    -> {}", dst.display());
+    }
+    if hillshade {
+        let dst = out_dir.join(format!("{stem}_hillshade.tif"));
+        run_cmd(
+            gdal,
+            gdaldem,
+            &[
+                "hillshade".into(),
+                dem.display().to_string(),
+                dst.display().to_string(),
+            ],
+        )?;
+        println!("[OK] Hillshade -> {}", dst.display());
+    }
     Ok(())
 }
