@@ -132,8 +132,8 @@ fn test_mcp_server_stdio_handshake_and_tools() {
         .spawn()
         .unwrap();
 
-    {
-        let stdin = child.stdin.as_mut().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || {
         writeln!(
             stdin,
             r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
@@ -159,9 +159,10 @@ fn test_mcp_server_stdio_handshake_and_tools() {
             r#"{{"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{{"name":"peta_kerawanan","arguments":{{"folder":"D:\\Proyek"}}}}}}"#
         )
         .unwrap();
-    }
+    });
 
     let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
     assert!(output.status.success());
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);

@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 mod commands;
 mod config;
 mod engine;

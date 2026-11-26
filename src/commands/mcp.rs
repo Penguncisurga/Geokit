@@ -221,7 +221,8 @@ fn get_prompt(name: &str, args: &Value) -> Option<Value> {
 }
 
 fn tool_definitions() -> Value {
-    json!([
+    serde_json::from_str(
+        r#"[
         {
             "name": "geokit_doctor",
             "description": "Check detected GIS backends (ArcGIS Pro, ArcMap 10.x, GDAL/QGIS) and environment health.",
@@ -391,7 +392,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_live",
-            "description": "Control an open ArcMap 10.1-10.8 window in real time via the GeoKit Live-UI Add-In bridge. Supports full ArcToolbox discovery (tools/tool-usage) and execution (run-gp with auto extension checkout), plus live cartography (add, remove, visible, zoom, select, clear-selection, layer-info, definition-query, symbology, labels, export, save).",
+            "description": "Control an open ArcMap 10.1-10.8 window in real time via the GeoKit Live-UI Add-In bridge. Supports full ArcToolbox discovery (tools/tool-usage) and execution (run-gp with auto extension checkout), plus live cartography (add, remove, visible, zoom, select, clear-selection, layer-info, definition-query, symbology, style, order, layout, labels, export, save).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -500,7 +501,9 @@ fn tool_definitions() -> Value {
                 "required": ["path", "out"]
             }
         }
-    ])
+    ]"#,
+    )
+    .expect("valid embedded MCP tool definitions JSON")
 }
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
