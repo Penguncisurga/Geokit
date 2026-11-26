@@ -191,6 +191,9 @@ geokit map fix-links ./04_Projects/peta_das.aprx --find "D:\OldData" --replace "
 | `geokit raster mosaic <dir> --out <merged.tif>` | Mosaic multiple DEM/raster tiles (e.g. DEMNAS/SRTM) into one GeoTIFF (ArcGIS Pro or `--engine gdal`). |
 | `geokit raster terrain <dem.tif> --out <dir> [--all \| --slope --aspect --hillshade]` | Generate slope, aspect, and hillshade derivatives from a DEM (ArcGIS Pro Spatial Analyst or `--engine gdal`). |
 | `geokit raster zonal-stats <raster.tif> --zones <poly> --zone-field <field> --out <stats.csv>` | Compute zonal statistics per polygon/sub-watershed to CSV/DBF. |
+| `geokit raster reclass <in.tif> --rules "0-8:1;8-15:2;>15:3" --out <cls.tif> [--smooth]` | Reclassify continuous rasters into discrete classes with optional majority-filter smoothing (Spatial Analyst). |
+| `geokit raster weighted-sum --inputs "r1.tif:0.4,r2.tif:0.6" --out <out.tif> [--classes 5 --polygon-out <poly.shp> --smooth]` | Multi-parameter raster weighted overlay with optional auto-reclass (1..N) and clean dissolved polygon export (`KELAS`, `AREA_HA`). |
+| `geokit raster interpolate <pts.shp> --field <col> --out <surface.tif> [--method idw\|spline\|kriging] [--mask <aoi>]` | Spatial surface interpolation from point data (e.g. rainfall stations, boreholes) using IDW, Spline, or Ordinary Kriging. |
 | `geokit hydro delineate <dem.tif> --out <dir> [--threshold 1000] [--pour-point <outlet.shp>]` | Automated DAS pipeline: `Fill` → `FlowDirection` → `FlowAccumulation` → `Streams (.shp)` → `Watershed (.shp)`. |
 | `geokit hydro basin <dem.tif> --out <dir>` | Automatically delineate all drainage basins from a DEM into a polygon shapefile. |
 
@@ -199,6 +202,13 @@ geokit map fix-links ./04_Projects/peta_das.aprx --find "D:\OldData" --replace "
 ```bash
 # Generate slope, aspect, and hillshade using GDAL (no Spatial Analyst license needed)
 geokit --engine gdal raster terrain ./02_Raster/dem_das.tif --out ./terrain --all
+
+# Multi-parameter hazard modeling: reclassify rasters -> weighted overlay -> dissolved 5-class polygon
+geokit raster reclass ./slope.tif --rules "0-8:1;8-15:2;15-25:3;25-45:4;>45:5" --out ./slope_cls.tif --smooth
+geokit raster weighted-sum --inputs "elev_cls.tif:0.5,slope_cls.tif:0.5" --out ./hazard.tif --classes 5 --smooth --polygon-out ./hazard_5cls.shp
+
+# Interpolate rainfall station points into a continuous surface clipped to AOI
+geokit raster interpolate ./stasiun_hujan.shp --field CURAH_MM --method idw --mask ./batas_kab.shp --out ./hujan_idw.tif
 
 # Run automated watershed (DAS) delineation with an outlet point
 geokit hydro delineate ./02_Raster/dem_utm.tif --out ./das_output --threshold 500 --pour-point ./outlet.shp
@@ -291,22 +301,24 @@ geokit live ping
 geokit live layers
 geokit live layer-info batas_desa
 
-# Add, zoom, filter, style, label, select, export, and save live
+# Add, rename, zoom (with padding + standard scale snap), filter, style, label with white halo, build PerKaBIG A4 layout, export & save live
 geokit live add ./01_Vector/batas_desa.shp
-geokit live zoom batas_desa
-geokit live definition-query batas_desa --where "KECAMATAN = 'Boja'"
-geokit live symbology batas_desa --lyr ./styles/batas_desa.lyr
-# Full ArcObjects COM cartography (unlimited N classes, lines, points, boundaries, rasters!)
+geokit live rename batas_desa --name "Batas Administrasi Desa"
+geokit live zoom "Batas Administrasi Desa" --padding 0.12 --scale auto
+geokit live definition-query "Batas Administrasi Desa" --where "KECAMATAN = 'Boja'"
+geokit live symbology "Batas Administrasi Desa" --lyr ./styles/batas_desa.lyr
+# Full ArcObjects COM cartography (unlimited N classes, BIG admin dashes, white label halos, rasters!)
 geokit live style kerawanan_banjir --field KELAS_RWN --preset hazard-pastel --transparency 30
 geokit live style overlay_skor --field TOTAL_SKOR --mode graduated --classes-count 5 --preset viridis
 geokit live style sungai --preset stream --width 1.4
-geokit live style batas_kab --preset boundary --outline-style dash --outline-width 1.5
+geokit live style batas_kab --preset boundary --outline-style admin-kab --outline-width 1.6
 geokit live style dem_kendal --mode raster --preset terrain
 geokit live order sungai --position top
-geokit live layout --view layout --title "PETA KERAWANAN BANJIR" --zoom-layer kerawanan_banjir --hide-legend "hillshade,Basemap"
-geokit live labels batas_desa --show true --field NAMOBJ
-geokit live select batas_desa --where "KELAS = 'Hutan'"
-geokit live export --out ./current_view.png --dpi 200
+geokit live labels "Batas Administrasi Desa" --show true --field NAMOBJ --halo true --font-size 8.5
+# One-command PerKaBIG A4 Landscape layout (70% Left MapFrame + UTM Grid, 28% Right Title/North/Scale/Legend/Source Panel)
+geokit live layout --template perkabig --title "PETA KERAWANAN BANJIR" --subtitle "Analisis Multi-Parameter" --source "Sumber: DEM SRTM 30m & GeoKit" --zoom-layer batas_kab --hide-legend "hillshade,Basemap" --grid true
+geokit live select "Batas Administrasi Desa" --where "KELAS = 'Hutan'"
+geokit live export --out ./peta_perkabig.png --dpi 200
 geokit live save --out ./peta_kerja.mxd
 
 # Discover & run ANY tool in ArcToolbox (auto-checks out Spatial/3D/Network extensions!)

@@ -72,6 +72,59 @@ IID_IColorRamp = _guid("{BEB87091-C0B4-11D0-8379-080009B996CC}")
 CLSID_SimpleLineSymbol = _guid("{7914E5F9-C892-11D0-8BB6-080009EE4E41}")
 IID_ISimpleLineSymbol = _guid("{A9360291-5828-11D0-98BF-00805F7CED21}")
 
+CLSID_CartographicLineSymbol = _guid("{7914E5FB-C892-11D0-8BB6-080009EE4E41}")
+IID_ICartographicLineSymbol = _guid("{B04BC359-C36E-11D0-BFA1-0080C7E24280}")
+IID_ILineProperties = _guid("{B04BC357-C36E-11D0-BFA1-0080C7E24280}")
+CLSID_Template = _guid("{41093A71-CCE1-11D0-BFAA-0080C7E24280}")
+IID_ITemplate = _guid("{7914E5F4-C892-11D0-8BB6-080009EE4E41}")
+
+CLSID_TextSymbol = _guid("{B65A3E74-2993-11D1-9A43-0080C7EC5C96}")
+IID_ITextSymbol = _guid("{A80B5E91-7F9C-11D0-9410-080009EEBECB}")
+IID_IMask = _guid("{6A7EF984-6924-11D2-980D-0080C7E04196}")
+
+IID_IFillSymbol = _guid("{E6BDAA7E-4D35-11D0-98BE-00805F7CED21}")
+IID_ILabelEngineLayerProperties = _guid("{01004143-0D1C-11D2-A26F-080009B6F22B}")
+
+IID_IPageLayout = _guid("{DD94D76A-836D-11D0-87EC-080009EC732A}")
+IID_IPage = _guid("{2AB4981F-9406-11D0-87EF-080009EC732A}")
+IID_IGraphicsContainer = _guid("{D09411D1-4BB4-11D1-B6CC-080009B996CC}")
+IID_IElement = _guid("{9B001319-9ED7-11D0-859E-0800091A2A72}")
+IID_IElementProperties = _guid("{86F32B61-7667-11D2-A2D3-080009B6F22B}")
+IID_ITextElement = _guid("{204034D2-F6EA-11D0-83AD-080009B996CC}")
+CLSID_TextElement = _guid("{204034D3-F6EA-11D0-83AD-080009B996CC}")
+CLSID_RectangleElement = _guid("{3A9767C2-F253-11D0-83A4-080009B996CC}")
+IID_IFillShapeElement = _guid("{3E150C0D-19F5-11D3-9F9E-00C04F6BC8DD}")
+IID_IMapFrame = _guid("{9B00131B-9ED7-11D0-859E-0800091A2A72}")
+IID_IMapSurroundFrame = _guid("{9B00131C-9ED7-11D0-859E-0800091A2A72}")
+IID_IMapGrids = _guid("{08E7D005-9AAE-11D2-AE7B-080009EC732A}")
+CLSID_MeasuredGrid = _guid("{03762C90-F4D0-11D1-ADE8-080009EC732A}")
+IID_IMeasuredGrid = _guid("{4F69021F-A5C1-11D2-AE82-080009EC732A}")
+IID_IMapGrid = _guid("{03762C8B-F4D0-11D1-ADE8-080009EC732A}")
+
+CLSID_Envelope = _guid("{30707212-52D5-11D0-A8F2-00608C85EDE5}")
+IID_IEnvelope = _guid("{1B077914-38C5-11D0-92D2-00805F7C28B0}")
+CLSID_Point = _guid("{00A5CB41-52DA-11D0-A8F2-00608C85EDE5}")
+IID_IPoint = _guid("{1B077915-38C5-11D0-92D2-00805F7C28B0}")
+IID_IGeometry = _guid("{1B07790D-38C5-11D0-92D2-00805F7C28B0}")
+
+CLSID_UID = _guid("{78FF7FA1-FB2F-11D1-94A2-080009EEBECB}")
+IID_IUID = _guid("{1714D59B-FB22-11D1-94A2-080009EEBECB}")
+
+SURROUND_LEGEND_CLSID = u"{7A3F91E4-B9E3-11D1-8756-0000F8751720}"
+SURROUND_NORTH_CLSID = u"{7A3F91DD-B9E3-11D1-8756-0000F8751720}"
+SURROUND_SCALEBAR_CLSID = u"{6589F147-F7F7-11D2-B872-00600802E603}"
+
+
+class VARIANT(Structure):
+    _fields_ = [
+        ("vt", c_ushort),
+        ("wReserved1", c_ushort),
+        ("wReserved2", c_ushort),
+        ("wReserved3", c_ushort),
+        ("val", c_void_p),
+        ("pad", c_void_p),
+    ]
+
 CLSID_SimpleFillSymbol = _guid("{7914E603-C892-11D0-8BB6-080009EE4E41}")
 IID_ISimpleFillSymbol = _guid("{A9360292-5828-11D0-98BF-00805F7CED21}")
 
@@ -268,13 +321,50 @@ def make_rgb(r, g, b, null_color=False):
     return col
 
 
+DASH_PATTERNS = {
+    "dash": [(6.0, 3.0)],
+    "dot": [(1.5, 2.5)],
+    "dashdot": [(8.0, 3.0), (1.5, 3.0)],
+    "dashdotdot": [(8.0, 2.5), (1.5, 2.0), (1.5, 2.5)],
+    "admin-kab": [(10.0, 3.0), (1.5, 2.5), (1.5, 3.0)],
+    "admin-kec": [(8.0, 3.0), (1.5, 3.0)],
+    "admin-desa": [(4.5, 2.5)],
+}
+
+
 def make_line_symbol(r, g, b, width=1.2, style="solid", null_color=False):
+    st = (style or "solid").lower()
+    if (not null_color) and st in DASH_PATTERNS:
+        # CartographicLineSymbol renders TRUE thick dashes / BIG admin patterns at ANY line width!
+        sym = _co(CLSID_CartographicLineSymbol, IID_ILineSymbol)
+        col = make_rgb(r, g, b, null_color=False)
+        icol = _qi(col, IID_IColor)
+        _vcall(sym, 4, c_void_p)(sym, icol)
+        _vcall(sym, 6, c_double)(sym, float(width))
+        cls_iface = _qi(sym, IID_ICartographicLineSymbol)
+        if cls_iface:
+            _vcall(cls_iface, 8, c_long)(cls_iface, 2)   # Cap = Round (2)
+            _vcall(cls_iface, 10, c_long)(cls_iface, 2)  # Join = Round (2)
+            _release(cls_iface)
+        lprop = _qi(sym, IID_ILineProperties)
+        if lprop:
+            tpl = _co(CLSID_Template, IID_ITemplate)
+            _vcall(tpl, 11, c_double)(tpl, 1.0)  # Interval = 1.0 pt
+            for mark, gap in DASH_PATTERNS[st]:
+                _vcall(tpl, 6, c_double, c_double)(tpl, float(mark), float(gap))
+            _vcall(lprop, 14, c_void_p)(lprop, tpl)  # putref_Template
+            _release(tpl)
+            _release(lprop)
+        _release(icol)
+        _release(col)
+        return sym
+
     sym = _co(CLSID_SimpleLineSymbol, IID_ISimpleLineSymbol)
     col = make_rgb(r, g, b, null_color=null_color)
     icol = _qi(col, IID_IColor)
     _vcall(sym, 4, c_void_p)(sym, icol)
     _vcall(sym, 6, c_double)(sym, float(width))
-    style_code = LINE_STYLES.get((style or "solid").lower(), 0)
+    style_code = LINE_STYLES.get(st, 0)
     _vcall(sym, 8, c_long)(sym, style_code)
     _release(icol)
     _release(col)
@@ -649,3 +739,355 @@ def hide_legend_layers(mxdoc, layer_names_to_hide):
     _release(fmap)
     refresh_mxdoc(mxdoc)
     return removed
+
+
+def make_text_symbol(size=10.0, rgb=(30, 30, 30), halign=1, valign=2, halo=False, halo_size=1.5):
+    """Creates an ITextSymbol (halign: 0=left,1=center,2=right; valign: 0=top,1=center,2=baseline,3=bottom)."""
+    ts = _co(CLSID_TextSymbol, IID_ITextSymbol)
+    col = make_rgb(*rgb)
+    icol = _qi(col, IID_IColor)
+    _vcall(ts, 6, c_double)(ts, float(size))
+    _vcall(ts, 8, c_void_p)(ts, icol)
+    _vcall(ts, 12, c_long)(ts, int(halign))
+    _vcall(ts, 10, c_long)(ts, int(valign))
+    if halo:
+        mask = _qi(ts, IID_IMask)
+        if mask:
+            wfill = make_fill_symbol(255, 255, 255, outline_width=0.0)
+            ifill = _qi(wfill, IID_IFillSymbol)
+            _vcall(mask, 4, c_long)(mask, 1)  # 1 = esriMSHalo
+            _vcall(mask, 6, c_double)(mask, float(halo_size))
+            _vcall(mask, 8, c_void_p)(mask, ifill)
+            _release(ifill)
+            _release(wfill)
+            _release(mask)
+    _release(icol)
+    _release(col)
+    return ts
+
+
+def set_label_halo(mxdoc, lyr, font_size=8.5, color_rgb=(33, 33, 33), halo_size=1.5):
+    """Applies a clean white halo + readable font size to a feature layer's label class."""
+    gfl = _qi(lyr, IID_IGeoFeatureLayer)
+    if not gfl:
+        return False
+    ap_col = c_void_p()
+    _vcall(gfl, 40, POINTER(c_void_p))(gfl, byref(ap_col))  # get_AnnotationProperties
+    if not ap_col.value:
+        _release(gfl)
+        return False
+    cnt = c_long(0)
+    _vcall(ap_col, 4, POINTER(c_long))(ap_col, byref(cnt))  # Count
+    applied = False
+    if cnt.value > 0:
+        item = c_void_p()
+        placed = c_void_p()
+        unplaced = c_void_p()
+        _vcall(ap_col, 5, c_long, POINTER(c_void_p), POINTER(c_void_p), POINTER(c_void_p))(
+            ap_col, 0, byref(item), byref(placed), byref(unplaced)
+        )
+        _release(placed)
+        _release(unplaced)
+        if item.value:
+            lelp = _qi(item, IID_ILabelEngineLayerProperties)
+            if lelp:
+                ts = make_text_symbol(size=font_size, rgb=color_rgb, halign=1, valign=1, halo=True, halo_size=halo_size)
+                _vcall(lelp, 3, c_void_p)(lelp, ts)  # putref_Symbol
+                _release(ts)
+                _release(lelp)
+                applied = True
+            _release(item)
+    _release(ap_col)
+    _release(gfl)
+    refresh_mxdoc(mxdoc)
+    return applied
+
+
+def _make_envelope(xmin, ymin, xmax, ymax):
+    env = _co(CLSID_Envelope, IID_IEnvelope)
+    _vcall(env, 57, c_double, c_double, c_double, c_double)(
+        env, float(xmin), float(ymin), float(xmax), float(ymax)
+    )
+    return env
+
+
+def _make_point(x, y):
+    pt = _co(CLSID_Point, IID_IPoint)
+    _vcall(pt, 16, c_double, c_double)(pt, float(x), float(y))
+    return pt
+
+
+def _make_uid(guid_str):
+    uid = _co(CLSID_UID, IID_IUID)
+    bs = _bstr(guid_str)
+    v = VARIANT()
+    v.vt = 8  # VT_BSTR
+    v.val = bs
+    _vcall(uid, 8, VARIANT)(uid, v)  # put_Value
+    _free_bstr(bs)
+    return uid
+
+
+def _add_rect(gc, xmin, ymin, xmax, ymax, fill_rgb=None, outline_rgb=(40, 40, 40), outline_width=0.8, hollow=True, name="geokit_box"):
+    re = _co(CLSID_RectangleElement, IID_IFillShapeElement)
+    r, g, b = fill_rgb or (255, 255, 255)
+    fs = make_fill_symbol(r, g, b, outline_rgb=outline_rgb, outline_width=outline_width, hollow=hollow)
+    ifs = _qi(fs, IID_IFillSymbol)
+    _vcall(re, 4, c_void_p)(re, ifs)  # put_Symbol
+    el = _qi(re, IID_IElement)
+    env = _make_envelope(xmin, ymin, xmax, ymax)
+    geom = _qi(env, IID_IGeometry)
+    _vcall(el, 4, c_void_p)(el, geom)  # put_Geometry
+    ep = _qi(re, IID_IElementProperties)
+    if ep:
+        nb = _bstr(name)
+        _vcall(ep, 4, c_void_p)(ep, nb)
+        _free_bstr(nb)
+        _release(ep)
+    _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)  # AddElement
+    _release(geom)
+    _release(env)
+    _release(el)
+    _release(ifs)
+    _release(fs)
+    _release(re)
+
+
+def _add_text(gc, x, y, text, size=10.0, rgb=(25, 25, 25), halign=1, valign=1, name="geokit_text"):
+    te = _co(CLSID_TextElement, IID_ITextElement)
+    ts = make_text_symbol(size=size, rgb=rgb, halign=halign, valign=valign, halo=False)
+    _vcall(te, 4, c_void_p)(te, ts)  # put_Symbol
+    tb = _bstr(text)
+    _vcall(te, 6, c_void_p)(te, tb)  # put_Text
+    _free_bstr(tb)
+    el = _qi(te, IID_IElement)
+    pt = _make_point(x, y)
+    geom = _qi(pt, IID_IGeometry)
+    _vcall(el, 4, c_void_p)(el, geom)  # put_Geometry
+    ep = _qi(te, IID_IElementProperties)
+    if ep:
+        nb = _bstr(name)
+        _vcall(ep, 4, c_void_p)(ep, nb)
+        _free_bstr(nb)
+        _release(ep)
+    _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
+    _release(geom)
+    _release(pt)
+    _release(el)
+    _release(ts)
+    _release(te)
+
+
+def _wrap_text(text, max_chars=26):
+    words = text.split()
+    lines = []
+    cur = ""
+    for w in words:
+        if not cur:
+            cur = w
+        elif len(cur) + 1 + len(w) <= max_chars:
+            cur = cur + " " + w
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return "\n".join(lines)
+
+
+def _nice_grid_interval(span_meters):
+    if span_meters <= 0:
+        return 10000.0
+    raw = span_meters / 4.0
+    for step in [100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 25000.0, 50000.0, 100000.0]:
+        if raw <= step:
+            return step
+    return 100000.0
+
+
+def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", source="Sumber: Analisis GeoKit GIS",
+                          crs_text="", scale_text="", span_meters=40000.0, hide_legend_names=None, add_grid=True):
+    """
+    Constructs a clean A4 Landscape (29.7 x 21.0 cm) Indonesian PerKaBIG-style map layout:
+      - Left 70% MapFrame with UTM MeasuredGrid + crisp border
+      - Right 28% Info Panel: Title/Subtitle, North Arrow + ScaleBar + Scale Ratio, Clean Legend, CRS & Source
+    """
+    pl = c_void_p()
+    _vcall(mxdoc, 4, POINTER(c_void_p))(mxdoc, byref(pl))  # get_PageLayout
+    if not pl.value:
+        raise RuntimeError("Could not retrieve PageLayout from MxDocument.")
+
+    # 1. Configure A4 Landscape in Centimeters (29.7 x 21.0 cm)
+    page = c_void_p()
+    _vcall(pl, 3, POINTER(c_void_p))(pl, byref(page))  # get_Page
+    if page.value:
+        _vcall(page, 8, c_long)(page, 9)               # put_Units(9 = esriCentimeters)
+        _vcall(page, 6, c_short)(page, 2)              # put_Orientation(2 = Landscape)
+        _vcall(page, 25, c_double, c_double)(page, 29.7, 21.0)  # PutCustomSize(29.7, 21.0)
+        _release(page)
+
+    gc = _qi(pl, IID_IGraphicsContainer)
+    fmap = c_void_p()
+    _vcall(mxdoc, 9, POINTER(c_void_p))(mxdoc, byref(fmap))
+
+    # Locate the main MapFrame before clearing old decorative elements
+    mf_frame = c_void_p()
+    _vcall(gc, 13, c_void_p, POINTER(c_void_p))(gc, fmap, byref(mf_frame))  # FindFrame(fmap)
+    mf = _qi(mf_frame, IID_IMapFrame) if mf_frame.value else None
+
+    # Clear all non-MapFrame layout elements so we start completely clean
+    to_delete = []
+    _vcall(gc, 4)(gc)  # Reset
+    while True:
+        el = c_void_p()
+        hr = _vcall(gc, 3, POINTER(c_void_p))(gc, byref(el))  # Next
+        if hr != 0 or not el.value:
+            break
+        is_mf = _qi(el, IID_IMapFrame)
+        if is_mf:
+            _release(is_mf)
+            _release(el)
+        else:
+            to_delete.append(el)
+    for el in to_delete:
+        _vcall(gc, 7, c_void_p)(gc, el)  # DeleteElement
+        _release(el)
+
+    # Clear old MapSurrounds on FocusMap so no stale duplicate legends remain
+    _vcall(fmap, 35)(fmap)  # ClearMapSurrounds()
+
+    # 2. Position Left MapFrame (1.7, 1.7) -> (20.4, 19.3) cm (leaves clean 1.0 cm margin for UTM grid labels)
+    if mf and mf_frame.value:
+        mf_el = _qi(mf_frame, IID_IElement)
+        mf_env = _make_envelope(1.7, 1.7, 20.4, 19.3)
+        mf_geom = _qi(mf_env, IID_IGeometry)
+        _vcall(mf_el, 4, c_void_p)(mf_el, mf_geom)  # put_Geometry
+        _vcall(gc, 14, c_void_p)(gc, mf_el)         # UpdateElement
+        _release(mf_geom)
+        _release(mf_env)
+        _release(mf_el)
+
+        # Attach UTM MeasuredGrid to MapFrame
+        if add_grid:
+            mgrids = _qi(mf, IID_IMapGrids)
+            if mgrids:
+                _vcall(mgrids, 8)(mgrids)  # ClearMapGrids()
+                mg_obj = _co(CLSID_MeasuredGrid, IID_IMeasuredGrid)
+                mgrid = _qi(mg_obj, IID_IMapGrid)
+                if mgrid:
+                    nb = _bstr("Grid UTM")
+                    _vcall(mgrid, 4, c_void_p)(mgrid, nb)
+                    _free_bstr(nb)
+                    _vcall(mgrid, 31, c_void_p)(mgrid, mf)  # SetDefaults(mf)
+                    interval = _nice_grid_interval(span_meters)
+                    _vcall(mg_obj, 6, c_double)(mg_obj, interval)   # put_XIntervalSize
+                    _vcall(mg_obj, 10, c_double)(mg_obj, interval)  # put_YIntervalSize
+                    grid_line = make_line_symbol(160, 174, 192, width=0.35, style="solid")
+                    igline = _qi(grid_line, IID_ILineSymbol)
+                    _vcall(mgrid, 6, c_void_p)(mgrid, igline)  # put_LineSymbol
+                    _vcall(mgrid, 24, c_short)(mgrid, -1)      # Visible = True
+                    _vcall(mgrids, 6, c_void_p)(mgrids, mgrid) # AddMapGrid
+                    _release(igline)
+                    _release(grid_line)
+                    _release(mgrid)
+                _release(mg_obj)
+                _release(mgrids)
+
+    # 3. Draw Outer Page Border & Right Info Panel Boxes (21.1 -> 29.0 cm)
+    _add_rect(gc, 0.7, 0.7, 29.0, 20.3, outline_rgb=(30, 30, 30), outline_width=1.4, hollow=True, name="outer_frame")
+    _add_rect(gc, 21.1, 16.4, 29.0, 20.3, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_title")
+    _add_rect(gc, 21.1, 12.6, 29.0, 16.4, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_scale")
+    _add_rect(gc, 21.1, 4.2, 29.0, 12.6, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_legend")
+    _add_rect(gc, 21.1, 0.7, 29.0, 4.2, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_info")
+
+    # 4. Box 1: Title & Subtitle (centered neatly inside 21.1..29.0, center x=25.05)
+    wrapped_title = _wrap_text(title.upper(), max_chars=24)
+    _add_text(gc, 25.05, 18.7, wrapped_title, size=11.5, rgb=(20, 25, 35), halign=1, valign=1, name="judul_peta")
+    if subtitle:
+        _add_text(gc, 25.05, 17.0, _wrap_text(subtitle, max_chars=34), size=8.0, rgb=(70, 80, 90), halign=1, valign=1, name="subjudul_peta")
+
+    # 5. Box 2: North Arrow + Alternating Scale Bar + Numeric Scale Text
+    if mf:
+        # North Arrow
+        uid_na = _make_uid(SURROUND_NORTH_CLSID)
+        na_sf = c_void_p()
+        if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_na, None, byref(na_sf)) == 0 and na_sf.value:
+            el = _qi(na_sf, IID_IElement)
+            env = _make_envelope(24.2, 14.7, 25.9, 16.1)
+            geom = _qi(env, IID_IGeometry)
+            _vcall(el, 4, c_void_p)(el, geom)
+            _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
+            _release(geom)
+            _release(env)
+            _release(el)
+            _release(na_sf)
+        _release(uid_na)
+
+        # Alternating Scale Bar
+        uid_sb = _make_uid(SURROUND_SCALEBAR_CLSID)
+        sb_sf = c_void_p()
+        if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_sb, None, byref(sb_sf)) == 0 and sb_sf.value:
+            el = _qi(sb_sf, IID_IElement)
+            env = _make_envelope(21.6, 13.0, 28.5, 13.8)
+            geom = _qi(env, IID_IGeometry)
+            _vcall(el, 4, c_void_p)(el, geom)
+            _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
+            _release(geom)
+            _release(env)
+            _release(el)
+            _release(sb_sf)
+        _release(uid_sb)
+
+    if scale_text:
+        _add_text(gc, 25.05, 14.2, scale_text, size=8.5, rgb=(30, 30, 30), halign=1, valign=1, name="skala_angka")
+
+    # 6. Box 3: Clean Legend (positioned cleanly inside 21.5..28.6, y=4.6..12.2)
+    hidden = []
+    if mf:
+        uid_leg = _make_uid(SURROUND_LEGEND_CLSID)
+        leg_sf = c_void_p()
+        if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_leg, None, byref(leg_sf)) == 0 and leg_sf.value:
+            ms = c_void_p()
+            _vcall(leg_sf, 11, POINTER(c_void_p))(leg_sf, byref(ms))  # get_MapSurround
+            if ms.value:
+                leg = _qi(ms, IID_ILegend)
+                if leg:
+                    tb = _bstr("LEGENDA")
+                    _vcall(leg, 16, c_void_p)(leg, tb)  # put_Title("LEGENDA")
+                    _free_bstr(tb)
+                    _release(leg)
+                _release(ms)
+            el = _qi(leg_sf, IID_IElement)
+            env = _make_envelope(21.5, 4.6, 28.6, 12.1)
+            geom = _qi(env, IID_IGeometry)
+            _vcall(el, 4, c_void_p)(el, geom)
+            _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
+            _release(geom)
+            _release(env)
+            _release(el)
+            _release(leg_sf)
+        _release(uid_leg)
+
+    if hide_legend_names:
+        hidden = hide_legend_layers(mxdoc, hide_legend_names)
+
+    # 7. Box 4: Projection & Source Info
+    info_lines = []
+    if crs_text:
+        info_lines.append("Sistem Proyeksi:\n" + _wrap_text(crs_text, max_chars=34))
+    if source:
+        info_lines.append(_wrap_text(source, max_chars=34))
+    if info_lines:
+        _add_text(gc, 21.5, 3.8, "\n\n".join(info_lines), size=7.5, rgb=(50, 55, 60), halign=0, valign=0, name="sumber_data")
+
+    # Zoom layout to full page so user sees the entire A4 PerKaBIG sheet cleanly
+    _vcall(pl, 12)(pl)  # ZoomToWhole()
+
+    _release(mf)
+    _release(mf_frame)
+    _release(fmap)
+    _release(gc)
+    _release(pl)
+    refresh_mxdoc(mxdoc)
+    return hidden
+

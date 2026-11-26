@@ -1479,6 +1479,186 @@ def cmd_union(payload):
     return 0
 
 
+def _parse_remap_ranges(rules_str):
+    import re
+    ranges = []
+    for raw in rules_str.split(";"):
+        seg = raw.strip()
+        if not seg:
+            continue
+        if ":" in seg:
+            cond, val_s = seg.rsplit(":", 1)
+            cond = cond.strip()
+            cls_v = int(float(val_s.strip()))
+            if cond.startswith("<="):
+                ranges.append([-1e9, float(cond[2:].strip()), cls_v])
+            elif cond.startswith("<"):
+                ranges.append([-1e9, float(cond[1:].strip()), cls_v])
+            elif cond.startswith(">="):
+                ranges.append([float(cond[2:].strip()), 1e9, cls_v])
+            elif cond.startswith(">"):
+                ranges.append([float(cond[1:].strip()), 1e9, cls_v])
+            else:
+                m = re.match(r"^\s*([+-]?\d+(?:\.\d+)?)\s*(?:-|to|\.\.)\s*([+-]?\d+(?:\.\d+)?)\s*$", cond, re.I)
+                if m:
+                    ranges.append([float(m.group(1)), float(m.group(2)), cls_v])
+                else:
+                    v = float(cond)
+                    ranges.append([v, v, cls_v])
+        else:
+            parts = seg.split()
+            if len(parts) == 3:
+                ranges.append([float(parts[0]), float(parts[1]), int(float(parts[2]))])
+            elif len(parts) == 2:
+                v = float(parts[0])
+                ranges.append([v, v, int(float(parts[1]))])
+            else:
+                return None
+    return ranges if ranges else None
+
+
+def cmd_raster_reclass(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Reclassify, RemapRange, MajorityFilter
+
+    in_r = payload["input"]
+    rules = payload["rules"]
+    out_r = payload["out"]
+    smooth = bool(payload.get("smooth", False))
+    parent = os.path.dirname(out_r)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if arcpy.Exists(out_r):
+        arcpy.management.Delete(out_r)
+    ranges = _parse_remap_ranges(rules)
+    if ranges:
+        rc = Reclassify(in_r, "Value", RemapRange(ranges), "NODATA")
+        if smooth:
+            MajorityFilter(rc, "EIGHT", "MAJORITY").save(out_r)
+        else:
+            rc.save(out_r)
+    elif smooth:
+        tmp_r = os.path.join(arcpy.env.scratchFolder, "geokit_reclass_raw.tif")
+        arcpy.gp.Reclassify_sa(in_r, "Value", rules, tmp_r, "NODATA")
+        arcpy.gp.MajorityFilter_sa(tmp_r, out_r, "EIGHT", "MAJORITY")
+    else:
+        arcpy.gp.Reclassify_sa(in_r, "Value", rules, out_r, "NODATA")
+    print(f"OK Reclassified raster -> {out_r}" + (" (smoothed)" if smooth else ""))
+    return 0
+
+
+def cmd_raster_weighted_sum(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Raster, Reclassify, RemapRange, MajorityFilter
+
+    pairs = payload.get("weighted_inputs") or []
+    out_r = payload["out"]
+    n_classes = payload.get("classes")
+    poly_out = payload.get("polygon_out")
+    smooth = bool(payload.get("smooth", False))
+    parent = os.path.dirname(out_r)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if arcpy.Exists(out_r):
+        arcpy.management.Delete(out_r)
+
+    total = None
+    for r_path, weight in pairs:
+        term = Raster(r_path) * float(weight)
+        total = term if total is None else (total + term)
+    total.save(out_r)
+    print(f"OK Weighted sum ({len(pairs)} rasters) -> {out_r}")
+
+    if n_classes or poly_out:
+        n_cls = int(n_classes or 5)
+        try:
+            arcpy.management.CalculateStatistics(out_r)
+        except Exception:
+            pass
+        rmin = float(arcpy.management.GetRasterProperties(out_r, "MINIMUM").getOutput(0).replace(",", "."))
+        rmax = float(arcpy.management.GetRasterProperties(out_r, "MAXIMUM").getOutput(0).replace(",", "."))
+        if rmax <= rmin:
+            ranges = [[rmin - 0.1, rmax + 0.1, 1]]
+        else:
+            step = (rmax - rmin) / float(n_cls)
+            ranges = []
+            for i in range(n_cls):
+                lo = rmin + i * step - (0.001 if i == 0 else 0.0)
+                hi = rmax + 0.001 if i == n_cls - 1 else (rmin + (i + 1) * step)
+                ranges.append([lo, hi, i + 1])
+        cls_tif = os.path.join(arcpy.env.scratchFolder, "geokit_wsum_cls.tif")
+        if arcpy.Exists(cls_tif):
+            arcpy.management.Delete(cls_tif)
+        Reclassify(out_r, "Value", RemapRange(ranges), "NODATA").save(cls_tif)
+        if smooth:
+            sm_tif = os.path.join(arcpy.env.scratchFolder, "geokit_wsum_sm.tif")
+            if arcpy.Exists(sm_tif):
+                arcpy.management.Delete(sm_tif)
+            MajorityFilter(cls_tif, "EIGHT", "MAJORITY").save(sm_tif)
+            cls_tif = sm_tif
+        if poly_out:
+            p_parent = os.path.dirname(poly_out)
+            if p_parent:
+                os.makedirs(p_parent, exist_ok=True)
+            raw_poly = os.path.join(arcpy.env.scratchGDB, "geokit_wsum_raw_poly")
+            if arcpy.Exists(raw_poly):
+                arcpy.management.Delete(raw_poly)
+            if arcpy.Exists(poly_out):
+                arcpy.management.Delete(poly_out)
+            arcpy.conversion.RasterToPolygon(cls_tif, raw_poly, "SIMPLIFY", "Value")
+            arcpy.management.Dissolve(raw_poly, poly_out, ["gridcode"])
+            if n_cls == 5:
+                lbls = {1: "Sangat Rendah", 2: "Rendah", 3: "Sedang", 4: "Tinggi", 5: "Sangat Tinggi"}
+            elif n_cls == 3:
+                lbls = {1: "Rendah", 2: "Sedang", 3: "Tinggi"}
+            else:
+                lbls = {i + 1: f"Kelas {i + 1}" for i in range(n_cls)}
+            arcpy.management.AddField(poly_out, "KELAS", "TEXT", field_length=32)
+            arcpy.management.AddField(poly_out, "AREA_HA", "DOUBLE")
+            with arcpy.da.UpdateCursor(poly_out, ["gridcode", "KELAS", "AREA_HA", "SHAPE@AREA"]) as cur:
+                for row in cur:
+                    row[1] = lbls.get(int(row[0]), f"Kelas {row[0]}")
+                    row[2] = round(float(row[3] or 0.0) / 10000.0, 2)
+                    cur.updateRow(row)
+            print(f"OK Classified polygon ({n_cls} classes) -> {poly_out}")
+    return 0
+
+
+def cmd_raster_interpolate(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Idw, Spline, Kriging, KrigingModelOrdinary
+
+    in_pts = payload["input"]
+    field = payload["field"]
+    out_r = payload["out"]
+    method = (payload.get("method") or "idw").lower()
+    cell_size = payload.get("cell_size")
+    mask = payload.get("mask")
+    parent = os.path.dirname(out_r)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    prev_mask = arcpy.env.mask
+    prev_ext = arcpy.env.extent
+    try:
+        if mask:
+            arcpy.env.mask = mask
+            arcpy.env.extent = mask
+        if method == "spline":
+            surf = Spline(in_pts, field, cell_size) if cell_size else Spline(in_pts, field)
+        elif method == "kriging":
+            surf = Kriging(in_pts, field, KrigingModelOrdinary("SPHERICAL"), cell_size) if cell_size else Kriging(in_pts, field, KrigingModelOrdinary("SPHERICAL"))
+        else:
+            surf = Idw(in_pts, field, cell_size) if cell_size else Idw(in_pts, field)
+        surf.save(out_r)
+    finally:
+        arcpy.env.mask = prev_mask
+        arcpy.env.extent = prev_ext
+
+    print(f"OK Interpolated ({method.upper()}, field={field}) -> {out_r}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -1514,6 +1694,9 @@ HANDLERS = {
     "raster_mosaic": cmd_raster_mosaic,
     "raster_terrain": cmd_raster_terrain,
     "raster_zonal_stats": cmd_raster_zonal_stats,
+    "raster_reclass": cmd_raster_reclass,
+    "raster_weighted_sum": cmd_raster_weighted_sum,
+    "raster_interpolate": cmd_raster_interpolate,
     "hydro_delineate": cmd_hydro_delineate,
     "hydro_basin": cmd_hydro_basin,
 }

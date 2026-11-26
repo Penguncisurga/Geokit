@@ -4,6 +4,22 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-11-26
+
+### Added
+- **One-Command PerKaBIG A4 Landscape Layout Builder (`geokit live layout --template perkabig`)**:
+  - Automatically constructs a clean publication-grade A4 Landscape (`29.7 × 21.0 cm`) Indonesian PerKaBIG layout via ArcObjects COM: 70% Left MapFrame with **UTM `MeasuredGrid`** & 12–14% framing margin + standard scale snapping, and 28% Right Info Panel with neatly boxed **Title/Subtitle**, **North Arrow**, **Alternating Scale Bar + Ratio**, **Clean Legend** (auto-hiding `hillshade`/`Basemap`), and **CRS + Source**.
+- **True Cartographic Dashed & BIG Admin Boundary Lines (`CartographicLineSymbol` + `Template`)**:
+  - Upgraded `geokit live style --outline-style` to support crisp thick dashes and Indonesian BIG administrative boundary patterns (`dash`, `dot`, `dashdot`, `admin-kab`, `admin-kec`, `admin-desa`) at any width.
+- **Label White Halo, TOC Layer Rename, & Smart Zoom Framing**:
+  - `geokit live labels --halo true --font-size 8.5` applies white halo masks (`ITextSymbol` + `IMask`) for crisp readability over dark fills.
+  - `geokit live rename <layer> --name "Tingkat Kerawanan Banjir"` cleans up layer names in TOC & Legend.
+  - `geokit live zoom <layer> --padding 0.12 --scale auto` adds breathing room and snaps to standard cartographic scales (`1:25k`, `1:50k`, `1:100k`, `1:250k`, etc.).
+- **Scientific Raster Analysis Trio (`ArcGIS Pro` & `ArcMap 10.x` Spatial Analyst)**:
+  - `geokit raster reclass` (reclassify continuous raster + optional `--smooth` `MajorityFilter`).
+  - `geokit raster weighted-sum` (multi-raster weighted overlay + optional `--classes 5 --polygon-out` export).
+  - `geokit raster interpolate` (`idw`, `spline`, `kriging` point-to-raster surface interpolation with `--cell-size` & `--mask`).
+
 ## [2.0.2] - 2026-11-26
 
 ### Fixed

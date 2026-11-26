@@ -53,9 +53,61 @@ pub enum RasterCommand {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Reclassify a continuous raster into integer classes (e.g. 1-5) with optional MajorityFilter smoothing
+    Reclass {
+        /// Input raster file (e.g. DEM, slope, rainfall)
+        input: PathBuf,
+        /// ArcGIS Reclassify remap string, e.g. "-50 25 5;25 100 4;100 300 3;300 650 2;650 3000 1"
+        #[arg(long, allow_hyphen_values = true)]
+        rules: String,
+        /// Output classified GeoTIFF path
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Apply 8-neighbor MajorityFilter smoothing to remove noisy isolated pixels
+        #[arg(long)]
+        smooth: bool,
+    },
+    /// Compute weighted overlay sum across multiple scored rasters (e.g. "slope.tif:0.4,rain.tif:0.3,soil.tif:0.3")
+    WeightedSum {
+        /// Comma-separated list of "<raster_path>:<weight>" pairs
+        #[arg(long)]
+        inputs: String,
+        /// Output weighted score GeoTIFF path
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Optional number of output classes (e.g. 5) to classify & optionally polygonize
+        #[arg(long)]
+        classes: Option<usize>,
+        /// Optional output polygon shapefile path for the classified zones
+        #[arg(long)]
+        polygon_out: Option<PathBuf>,
+        /// Apply MajorityFilter smoothing before polygonizing
+        #[arg(long)]
+        smooth: bool,
+    },
+    /// Interpolate point samples (e.g. rainfall stations, water quality) into a continuous raster surface
+    Interpolate {
+        /// Input point shapefile or .gdb feature class
+        input: PathBuf,
+        /// Numeric Z/value field to interpolate (e.g. CH_MM, ELEV_M)
+        #[arg(long)]
+        field: String,
+        /// Output interpolated GeoTIFF path
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Interpolation method: idw (default), spline, or kriging
+        #[arg(long, default_value = "idw")]
+        method: String,
+        /// Optional output cell size in map units (e.g. 30 for 30m UTM)
+        #[arg(long)]
+        cell_size: Option<f64>,
+        /// Optional polygon mask / AOI to clip the output extent
+        #[arg(long)]
+        mask: Option<PathBuf>,
+    },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct RasterPayload {
     action: String,
     input: String,
@@ -65,6 +117,15 @@ struct RasterPayload {
     hillshade: Option<bool>,
     zones: Option<String>,
     zone_field: Option<String>,
+    rules: Option<String>,
+    smooth: Option<bool>,
+    weighted_inputs: Option<Vec<(String, f64)>>,
+    classes: Option<usize>,
+    polygon_out: Option<String>,
+    field: Option<String>,
+    method: Option<String>,
+    cell_size: Option<f64>,
+    mask: Option<String>,
 }
 
 pub fn run(
@@ -88,11 +149,7 @@ pub fn run(
                 action: "raster_mosaic".into(),
                 input: abs_string(&input),
                 out: abs_string(&out),
-                slope: None,
-                aspect: None,
-                hillshade: None,
-                zones: None,
-                zone_field: None,
+                ..Default::default()
             };
             if resolved == ResolvedBackend::Arcmap {
                 run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
@@ -127,8 +184,7 @@ pub fn run(
                 slope: Some(do_slope),
                 aspect: Some(do_aspect),
                 hillshade: Some(do_hillshade),
-                zones: None,
-                zone_field: None,
+                ..Default::default()
             };
             if resolved == ResolvedBackend::Arcmap {
                 run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
@@ -152,11 +208,116 @@ pub fn run(
                 action: "raster_zonal_stats".into(),
                 input: abs_string(&input),
                 out: abs_string(&out),
-                slope: None,
-                aspect: None,
-                hillshade: None,
                 zones: Some(abs_string(&zones)),
                 zone_field: Some(zone_field),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Reclass {
+            input,
+            rules,
+            out,
+            smooth,
+        } => {
+            if !input.exists() {
+                bail!("Input raster does not exist: {}", input.display());
+            }
+            if resolved == ResolvedBackend::Gdal {
+                bail!(
+                    "`geokit raster reclass` requires ArcGIS Pro or ArcMap 10.x Spatial Analyst."
+                );
+            }
+            let payload = RasterPayload {
+                action: "raster_reclass".into(),
+                input: abs_string(&input),
+                out: abs_string(&out),
+                rules: Some(rules),
+                smooth: Some(smooth),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::WeightedSum {
+            inputs,
+            out,
+            classes,
+            polygon_out,
+            smooth,
+        } => {
+            if resolved == ResolvedBackend::Gdal {
+                bail!("`geokit raster weighted-sum` requires ArcGIS Pro or ArcMap 10.x Spatial Analyst.");
+            }
+            let mut pairs = Vec::new();
+            for item in inputs
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                let Some(colon) = item.rfind(':') else {
+                    bail!("Invalid weighted input '{item}'. Expected '<raster_path>:<weight>'.");
+                };
+                let p_str = item[..colon].trim();
+                let w_str = item[colon + 1..].trim();
+                let weight: f64 = w_str
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid numeric weight '{w_str}' in '{item}'"))?;
+                let p = PathBuf::from(p_str);
+                if !p.exists() {
+                    bail!("Weighted raster does not exist: {}", p.display());
+                }
+                pairs.push((abs_string(&p), weight));
+            }
+            if pairs.is_empty() {
+                bail!("No weighted raster inputs provided.");
+            }
+            let payload = RasterPayload {
+                action: "raster_weighted_sum".into(),
+                input: pairs[0].0.clone(),
+                out: abs_string(&out),
+                weighted_inputs: Some(pairs),
+                classes,
+                polygon_out: polygon_out.as_deref().map(abs_string),
+                smooth: Some(smooth),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Interpolate {
+            input,
+            field,
+            out,
+            method,
+            cell_size,
+            mask,
+        } => {
+            if !input.exists() {
+                bail!("Input point dataset does not exist: {}", input.display());
+            }
+            if resolved == ResolvedBackend::Gdal {
+                bail!("`geokit raster interpolate` requires ArcGIS Pro or ArcMap 10.x Spatial Analyst.");
+            }
+            let payload = RasterPayload {
+                action: "raster_interpolate".into(),
+                input: abs_string(&input),
+                out: abs_string(&out),
+                field: Some(field),
+                method: Some(method.to_ascii_lowercase()),
+                cell_size,
+                mask: mask.as_deref().map(abs_string),
+                ..Default::default()
             };
             if resolved == ResolvedBackend::Arcmap {
                 run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)

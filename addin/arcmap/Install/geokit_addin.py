@@ -468,15 +468,86 @@ def _handle_command_on_ui_thread(req):
 
     if action == "layout_update":
         view = (req.get("view") or "").lower()
+        template = (req.get("template") or "").lower()
         title = req.get("title")
         subtitle = req.get("subtitle")
         source = req.get("source")
         zoom_layer = req.get("zoom_layer")
+        hide_legend_raw = req.get("hide_legend")
+        add_grid = bool(req.get("grid", True))
 
-        if view == "layout":
+        if template == "perkabig" or view == "layout":
             mxd.activeView = "PAGE_LAYOUT"
         elif view == "data":
             mxd.activeView = df.name
+
+        # Build full A4 Landscape PerKaBIG layout directly via ArcObjects COM!
+        if template == "perkabig":
+            if _ao is None:
+                return {"ok": False, "error": "ArcObjects COM module required for PerKaBIG layout."}
+            span_m = 40000.0
+            if zoom_layer:
+                zl = _find_layer(mxd, df, zoom_layer)
+                if zl:
+                    ext = zl.getExtent(True)
+                    dx = (ext.XMax - ext.XMin) * 0.12
+                    dy = (ext.YMax - ext.YMin) * 0.12
+                    df.extent = arcpy.Extent(ext.XMin - dx, ext.YMin - dy, ext.XMax + dx, ext.YMax + dy)
+                    span_m = max(ext.XMax - ext.XMin, ext.YMax - ext.YMin)
+                    std_scales = [5000, 10000, 25000, 50000, 75000, 100000, 150000, 200000, 250000, 500000, 1000000]
+                    cur_s = df.scale
+                    df.scale = next((s for s in std_scales if s >= cur_s), std_scales[-1])
+            sr = getattr(df, "spatialReference", None)
+            crs_str = ""
+            if sr and getattr(sr, "name", "Unknown") != "Unknown":
+                epsg = getattr(sr, "factoryCode", 0)
+                crs_str = sr.name.replace("_", " ") + ((" (EPSG:%d)" % epsg) if epsg else "")
+            scale_int = int(round(df.scale)) if df.scale else 0
+            scale_txt = ("Skala 1 : %s" % ("{:,}".format(scale_int).replace(",", "."))) if scale_int else ""
+            hide_names = [n.strip() for n in (hide_legend_raw or "hillshade,Basemap").split(",") if n.strip()]
+
+            mxdoc = _ao.get_current_mxdoc()
+            try:
+                hidden = _ao.build_perkabig_layout(
+                    mxdoc,
+                    title=title or "PETA TEMATIK WILAYAH",
+                    subtitle=subtitle or "",
+                    source=source or "Sumber: Pengolahan Data Spasial GeoKit",
+                    crs_text=crs_str,
+                    scale_text=scale_txt,
+                    span_meters=span_m,
+                    hide_legend_names=hide_names,
+                    add_grid=add_grid,
+                )
+            finally:
+                _ao._release(mxdoc)
+
+            # Re-center extent cleanly inside resized MapFrame and sync numeric scale text
+            if zoom_layer:
+                zl = _find_layer(mxd, df, zoom_layer)
+                if zl:
+                    ext = zl.getExtent(True)
+                    dx = (ext.XMax - ext.XMin) * 0.14
+                    dy = (ext.YMax - ext.YMin) * 0.14
+                    df.extent = arcpy.Extent(ext.XMin - dx, ext.YMin - dy, ext.XMax + dx, ext.YMax + dy)
+                    std_scales = [5000, 10000, 25000, 50000, 75000, 100000, 150000, 200000, 250000, 500000, 1000000]
+                    cur_s = df.scale
+                    df.scale = next((s for s in std_scales if s >= cur_s), std_scales[-1])
+                    final_s = int(round(df.scale)) if df.scale else 0
+                    if final_s:
+                        for el in arcpy.mapping.ListLayoutElements(mxd, "TEXT_ELEMENT", "skala_angka"):
+                            el.text = "Skala 1 : %s" % ("{:,}".format(final_s).replace(",", "."))
+            _force_refresh()
+            return {
+                "ok": True,
+                "template": "perkabig",
+                "page": "A4 Landscape (29.7 x 21.0 cm)",
+                "active_view": mxd.activeView,
+                "scale": int(round(df.scale)),
+                "crs": crs_str,
+                "hidden_legend_items": hidden,
+                "grid": add_grid,
+            }
 
         updated_elements = []
         elems = arcpy.mapping.ListLayoutElements(mxd, "TEXT_ELEMENT")
@@ -500,10 +571,12 @@ def _handle_command_on_ui_thread(req):
         if zoom_layer:
             zl = _find_layer(mxd, df, zoom_layer)
             if zl:
-                df.extent = zl.getExtent(True)
+                ext = zl.getExtent(True)
+                dx = (ext.XMax - ext.XMin) * 0.12
+                dy = (ext.YMax - ext.YMin) * 0.12
+                df.extent = arcpy.Extent(ext.XMin - dx, ext.YMin - dy, ext.XMax + dx, ext.YMax + dy)
 
         hidden_legend = []
-        hide_legend_raw = req.get("hide_legend")
         if hide_legend_raw and _ao is not None:
             try:
                 mxdoc = _ao.get_current_mxdoc()
@@ -524,10 +597,25 @@ def _handle_command_on_ui_thread(req):
             "zoomed_to": zoom_layer,
         }
 
+    if action == "rename_layer":
+        name = req.get("layer", "")
+        new_name = req.get("new_name", "")
+        if not new_name:
+            return {"ok": False, "error": "Missing 'new_name'"}
+        lyr = _find_layer(mxd, df, name)
+        if not lyr:
+            return {"ok": False, "error": "Layer not found: %s" % name}
+        old_name = lyr.name
+        lyr.name = new_name
+        _force_refresh()
+        return {"ok": True, "old_name": old_name, "new_name": lyr.name}
+
     if action == "set_labels":
         name = req.get("layer", "")
         show = bool(req.get("show", True))
         field = req.get("field")
+        halo = bool(req.get("halo", True))
+        font_size = float(req.get("font_size") or 8.5)
         lyr = _find_layer(mxd, df, name)
         if not lyr:
             return {"ok": False, "error": "Layer not found: %s" % name}
@@ -537,11 +625,44 @@ def _handle_command_on_ui_thread(req):
             expr = field if field.startswith("[") else "[%s]" % field
             lyr.labelClasses[0].expression = expr
         lyr.showLabels = show
+        halo_applied = False
+        if show and halo and _ao is not None:
+            try:
+                mxdoc = _ao.get_current_mxdoc()
+                com_lyr, _ = _ao.find_com_layer(mxdoc, lyr.name)
+                if com_lyr:
+                    halo_applied = _ao.set_label_halo(mxdoc, com_lyr, font_size=font_size)
+                    _ao._release(com_lyr)
+                _ao._release(mxdoc)
+            except Exception:
+                pass
         _force_refresh()
-        return {"ok": True, "layer": lyr.name, "show_labels": show, "field": field}
+        return {"ok": True, "layer": lyr.name, "show_labels": show, "field": field, "halo": halo_applied}
 
     if action == "zoom_to_layer":
         name = req.get("layer", "")
+        padding = float(req.get("padding") if req.get("padding") is not None else 0.12)
+        scale_req = req.get("scale")
+
+        def _apply_extent_with_padding(ext):
+            if padding > 0:
+                dx = (ext.XMax - ext.XMin) * padding
+                dy = (ext.YMax - ext.YMin) * padding
+                ext = arcpy.Extent(ext.XMin - dx, ext.YMin - dy, ext.XMax + dx, ext.YMax + dy)
+            df.extent = ext
+            if scale_req:
+                s_str = str(scale_req).lower()
+                if s_str == "auto":
+                    std_scales = [1000, 2500, 5000, 10000, 25000, 50000, 75000, 100000, 125000, 150000, 200000, 250000, 500000, 1000000, 2500000]
+                    cur = df.scale
+                    snapped = next((s for s in std_scales if s >= cur), std_scales[-1])
+                    df.scale = snapped
+                else:
+                    try:
+                        df.scale = float(s_str)
+                    except ValueError:
+                        pass
+
         if not name or name.lower() == "__full__":
             ext = None
             for lyr in arcpy.mapping.ListLayers(mxd, "", df):
@@ -558,9 +679,9 @@ def _handle_command_on_ui_thread(req):
                 except Exception:
                     pass
             if ext:
-                df.extent = ext
+                _apply_extent_with_padding(ext)
                 _force_refresh()
-            return {"ok": True, "zoomed": "full_extent"}
+            return {"ok": True, "zoomed": "full_extent", "scale": round(df.scale, 1)}
 
         lyr = _find_layer(mxd, df, name)
         if not lyr:
@@ -568,9 +689,9 @@ def _handle_command_on_ui_thread(req):
         ext = lyr.getSelectedExtent(True)
         if not ext:
             ext = lyr.getExtent(True)
-        df.extent = ext
+        _apply_extent_with_padding(ext)
         _force_refresh()
-        return {"ok": True, "zoomed_to": lyr.name}
+        return {"ok": True, "zoomed_to": lyr.name, "padding": padding, "scale": round(df.scale, 1)}
 
     if action == "select":
         name = req.get("layer", "")

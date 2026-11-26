@@ -163,12 +163,22 @@ geokit map broken-links ./04_Projects
 - **`geokit raster mosaic <folder> --out <dem_gabungan.tif>`** — Gabungkan banyak tile DEMNAS/SRTM jadi satu GeoTIFF (ArcGIS Pro atau `--engine gdal`).
 - **`geokit raster terrain <dem.tif> --out <folder> [--all | --slope --aspect --hillshade]`** — Hasilkan peta kemiringan lereng (*slope*), arah lereng (*aspect*), dan *hillshade* sekaligus.
 - **`geokit raster zonal-stats <raster.tif> --zones <poligon> --zone-field <field> --out <stats.csv>`** — Hitung statistik zonal (min, max, mean, std, sum) per sub-DAS ke CSV/DBF.
+- **`geokit raster reclass <in.tif> --rules "0-8:1;8-15:2;>15:3" --out <cls.tif> [--smooth]`** — Reklasifikasi raster kontinu ke kelas diskrit dengan opsi penghalusan *MajorityFilter* (`--smooth`).
+- **`geokit raster weighted-sum --inputs "r1.tif:0.4,r2.tif:0.6" --out <out.tif> [--classes 5 --polygon-out <poly.shp> --smooth]`** — Overlay raster berbobot multi-parameter, otomatis reklasifikasi 1..N dan opsional ekspor langsung ke poligon bersih ter-*dissolve* (`KELAS`, `AREA_HA`).
+- **`geokit raster interpolate <titik.shp> --field <kolom> --out <permukaan.tif> [--method idw|spline|kriging] [--mask <aoi>]`** — Interpolasi spasial data titik (mis. stasiun hujan/bor) menggunakan IDW, Spline, atau Ordinary Kriging.
 - **`geokit hydro delineate <dem.tif> --out <folder> [--threshold 1000] [--pour-point <outlet.shp>]`** — Pipeline delineasi DAS otomatis: `Fill` → `FlowDirection` → `FlowAccumulation` → `Jaringan Sungai (.shp)` → `Poligon DAS (.shp)`.
 - **`geokit hydro basin <dem.tif> --out <folder>`** — Delineasi otomatis seluruh poligon *Basin* dari DEM tanpa perlu titik outlet.
 
 ```bash
 # Buat slope, aspect, dan hillshade cepat lewat GDAL
 geokit --engine gdal raster terrain ./02_Raster/dem_das.tif --out ./terrain --all
+
+# Analisis kerawanan multi-parameter: reclass -> weighted-sum -> poligon 5 kelas bersih
+geokit raster reclass ./slope.tif --rules "0-8:1;8-15:2;15-25:3;25-45:4;>45:5" --out ./slope_cls.tif --smooth
+geokit raster weighted-sum --inputs "elev_cls.tif:0.5,slope_cls.tif:0.5" --out ./rawan.tif --classes 5 --smooth --polygon-out ./rawan_5kelas.shp
+
+# Interpolasi titik curah hujan menjadi raster permukaan ter-clip AOI
+geokit raster interpolate ./stasiun_hujan.shp --field CURAH_MM --method idw --mask ./batas_kab.shp --out ./hujan_idw.tif
 
 # Delineasi DAS otomatis dari DEM + titik outlet
 geokit hydro delineate ./02_Raster/dem_utm.tif --out ./hasil_das --threshold 500 --pour-point ./outlet.shp
@@ -244,22 +254,24 @@ geokit live ping
 geokit live layers
 geokit live layer-info batas_desa
 
-# Tambah layer, zoom, filter, terapkan simbologi .lyr, nyalakan label, seleksi, export & simpan .mxd
+# Tambah, rename legenda, zoom (padding + skala bulat), filter, style, label halo putih, layout PerKaBIG A4, export & simpan .mxd
 geokit live add ./01_Vector/batas_desa.shp
-geokit live zoom batas_desa
-geokit live definition-query batas_desa --where "KECAMATAN = 'Boja'"
-geokit live symbology batas_desa --lyr ./styles/batas_desa.lyr
-# Full ArcObjects COM cartography (bebas N kelas, garis, titik, batas hollow, raster!)
+geokit live rename batas_desa --name "Batas Administrasi Desa"
+geokit live zoom "Batas Administrasi Desa" --padding 0.12 --scale auto
+geokit live definition-query "Batas Administrasi Desa" --where "KECAMATAN = 'Boja'"
+geokit live symbology "Batas Administrasi Desa" --lyr ./styles/batas_desa.lyr
+# Full ArcObjects COM cartography (bebas N kelas, garis batas BIG, halo putih label, raster!)
 geokit live style kerawanan_banjir --field KELAS_RWN --preset hazard-pastel --transparency 30
 geokit live style overlay_skor --field TOTAL_SKOR --mode graduated --classes-count 5 --preset viridis
 geokit live style sungai --preset stream --width 1.4
-geokit live style batas_kab --preset boundary --outline-style dash --outline-width 1.5
+geokit live style batas_kab --preset boundary --outline-style admin-kab --outline-width 1.6
 geokit live style dem_kendal --mode raster --preset terrain
 geokit live order sungai --position top
-geokit live layout --view layout --title "PETA KERAWANAN BANJIR" --zoom-layer kerawanan_banjir --hide-legend "hillshade,Basemap"
-geokit live labels batas_desa --show true --field NAMOBJ
-geokit live select batas_desa --where "KELAS = 'Hutan'"
-geokit live export --out ./tampilan_aktif.png --dpi 200
+geokit live labels "Batas Administrasi Desa" --show true --field NAMOBJ --halo true --font-size 8.5
+# Layout A4 Landscape standar PerKaBIG 1-perintah (70% Peta Kiri + Grid UTM, 28% Panel Kanan Judul/Utara/Skala/Legenda/Sumber)
+geokit live layout --template perkabig --title "PETA KERAWANAN BANJIR" --subtitle "Analisis Multi-Parameter" --source "Sumber: DEM SRTM 30m & GeoKit" --zoom-layer batas_kab --hide-legend "hillshade,Basemap" --grid true
+geokit live select "Batas Administrasi Desa" --where "KELAS = 'Hutan'"
+geokit live export --out ./peta_perkabig.png --dpi 200
 geokit live save --out ./peta_kerja.mxd
 
 # Cari & jalankan SEMUA tool di ArcToolbox (otomatis checkout ekstensi Spatial/3D/Network!)

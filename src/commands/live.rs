@@ -83,7 +83,17 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Toggle map labels (and optionally label field) live on a layer in ArcMap
+    /// Rename a layer in the ArcMap Table of Contents (cleans up names shown in the Layout Legend!)
+    Rename {
+        /// Current layer name in ArcMap TOC
+        layer: String,
+        /// Clean display name (e.g. "Tingkat Kerawanan Banjir" or "Jaringan Sungai")
+        #[arg(long)]
+        name: String,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Toggle map labels (with optional white halo & readable font size) live on a layer in ArcMap
     Labels {
         /// Layer name in ArcMap Table of Contents
         layer: String,
@@ -93,13 +103,25 @@ pub enum LiveCommand {
         /// Optional attribute field name to label (e.g. NAMOBJ)
         #[arg(long)]
         field: Option<String>,
+        /// Add a crisp white halo mask around labels for legibility over dark fills (default: true)
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        halo: bool,
+        /// Label font size in points (default: 8.5)
+        #[arg(long, default_value_t = 8.5)]
+        font_size: f64,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Zoom the live ArcMap map view to a layer (or full extent if omitted)
+    /// Zoom the live ArcMap map view to a layer (with smart breathing-room padding & optional standard scale snap)
     Zoom {
         /// Layer name to zoom to (omit for full extent)
         layer: Option<String>,
+        /// Fractional margin around extent (default: 0.12 = 12% breathing room so polygons never clip frame edges)
+        #[arg(long, default_value_t = 0.12)]
+        padding: f64,
+        /// Optional scale denominator or "auto" to snap to standard cartographic scales (1:25k, 1:50k, 1:100k, 1:250k)
+        #[arg(long)]
+        scale: Option<String>,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
@@ -185,7 +207,7 @@ pub enum LiveCommand {
         /// Outline width in points (default: 0.0 = clean borderless fill)
         #[arg(long, default_value_t = 0.0)]
         outline_width: f64,
-        /// Line/outline dash style: solid, dash, dot, dashdot (default: solid)
+        /// Line/outline dash style: solid, dash, dot, dashdot, admin-kab, admin-kec, admin-desa (default: solid)
         #[arg(long, default_value = "solid")]
         outline_style: String,
         /// Line width in points for polyline layers (default: 1.4)
@@ -219,11 +241,14 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Switch between Layout/Data view, update text elements, zoom, and hide noisy layers from the legend
+    /// Build a PerKaBIG A4 Landscape layout (panel kanan + UTM grid + clean legend) or update layout view/text live
     Layout {
         /// View mode: layout or data
         #[arg(long)]
         view: Option<String>,
+        /// Optional built-in layout generator: "perkabig" (A4 Landscape: 70% map + UTM grid on left, 28% info panel on right!)
+        #[arg(long)]
+        template: Option<String>,
         /// Map title text (updates layout title text element)
         #[arg(long)]
         title: Option<String>,
@@ -239,6 +264,9 @@ pub enum LiveCommand {
         /// Comma-separated layer names to remove from the Layout Legend (e.g. "hillshade,Basemap")
         #[arg(long)]
         hide_legend: Option<String>,
+        /// Add UTM MeasuredGrid on the MapFrame (default: true for perkabig template)
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        grid: bool,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
@@ -632,18 +660,44 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
                 }),
             )?
         }
+        LiveCommand::Rename { layer, name, port } => send_live_request(
+            port,
+            &json!({ "action": "rename_layer", "layer": layer, "new_name": name }),
+        )?,
         LiveCommand::Labels {
             layer,
             show,
             field,
+            halo,
+            font_size,
             port,
         } => send_live_request(
             port,
-            &json!({ "action": "set_labels", "layer": layer, "show": show, "field": field }),
+            &json!({
+                "action": "set_labels",
+                "layer": layer,
+                "show": show,
+                "field": field,
+                "halo": halo,
+                "font_size": font_size,
+            }),
         )?,
-        LiveCommand::Zoom { layer, port } => {
+        LiveCommand::Zoom {
+            layer,
+            padding,
+            scale,
+            port,
+        } => {
             let target = layer.unwrap_or_else(|| "__full__".to_string());
-            send_live_request(port, &json!({ "action": "zoom_to_layer", "layer": target }))?
+            send_live_request(
+                port,
+                &json!({
+                    "action": "zoom_to_layer",
+                    "layer": target,
+                    "padding": padding,
+                    "scale": scale,
+                }),
+            )?
         }
         LiveCommand::Select {
             layer,
@@ -723,22 +777,26 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
         )?,
         LiveCommand::Layout {
             view,
+            template,
             title,
             subtitle,
             source,
             zoom_layer,
             hide_legend,
+            grid,
             port,
         } => send_live_request(
             port,
             &json!({
                 "action": "layout_update",
                 "view": view,
+                "template": template,
                 "title": title,
                 "subtitle": subtitle,
                 "source": source,
                 "zoom_layer": zoom_layer,
                 "hide_legend": hide_legend,
+                "grid": grid,
             }),
         )?,
         LiveCommand::RunGp { tool, args, port } => send_live_request(

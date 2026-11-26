@@ -360,18 +360,27 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_raster",
-            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), or zonal statistics.",
+            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, or point-to-raster interpolation (IDW/Spline/Kriging).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats"] },
-                    "input": { "type": "string", "description": "Input raster or folder" },
+                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate"] },
+                    "input": { "type": "string", "description": "Input raster, point layer (for interpolate), or folder" },
+                    "inputs": { "type": "string", "description": "Comma-separated '<raster>:<weight>' pairs (for weighted-sum)" },
                     "out": { "type": "string", "description": "Output file or directory" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"] },
                     "zones": { "type": "string", "description": "Zone polygon path (for zonal-stats)" },
-                    "zone_field": { "type": "string", "description": "Zone field name (for zonal-stats)" }
+                    "zone_field": { "type": "string", "description": "Zone field name (for zonal-stats)" },
+                    "rules": { "type": "string", "description": "ArcGIS Reclassify remap string (for reclass)" },
+                    "smooth": { "type": "boolean", "description": "Apply MajorityFilter smoothing (for reclass or weighted-sum)" },
+                    "classes": { "type": "integer", "description": "Optional number of classes (for weighted-sum)" },
+                    "polygon_out": { "type": "string", "description": "Optional classified polygon output path (for weighted-sum)" },
+                    "field": { "type": "string", "description": "Value field to interpolate (for interpolate)" },
+                    "method": { "type": "string", "enum": ["idw", "spline", "kriging"], "description": "Interpolation method (for interpolate)" },
+                    "cell_size": { "type": "number", "description": "Output cell size in map units (for interpolate)" },
+                    "mask": { "type": "string", "description": "Optional polygon mask/AOI (for interpolate)" }
                 },
-                "required": ["action", "input", "out"]
+                "required": ["action", "out"]
             }
         },
         {
@@ -408,6 +417,7 @@ fn tool_definitions() -> Value {
                             "definition-query",
                             "symbology",
                             "style",
+                            "rename",
                             "order",
                             "layout",
                             "labels",
@@ -434,7 +444,14 @@ fn tool_definitions() -> Value {
                     "break_method": { "type": "string", "enum": ["quantile", "equal"], "description": "Break method for graduated mode" },
                     "outline_color": { "type": "string", "description": "Outline hex color e.g. '#37474F'" },
                     "outline_width": { "type": "number", "description": "Outline width in pt (0.0 = borderless)" },
-                    "outline_style": { "type": "string", "enum": ["solid", "dash", "dot", "dashdot"], "description": "Line/outline dash style" },
+                    "outline_style": { "type": "string", "enum": ["solid", "dash", "dot", "dashdot", "admin-kab", "admin-kec", "admin-desa"], "description": "True CartographicLineSymbol dash or BIG admin boundary pattern" },
+                    "name": { "type": "string", "description": "New clean TOC/legend display name (for rename)" },
+                    "padding": { "type": "number", "description": "Zoom extent padding ratio e.g. 0.12 (for zoom)" },
+                    "scale": { "type": "string", "description": "Target scale or 'auto' to snap to standard scale (for zoom)" },
+                    "halo": { "type": "boolean", "description": "White halo around labels (for labels, default: true)" },
+                    "font_size": { "type": "number", "description": "Label font size in pt (for labels)" },
+                    "template": { "type": "string", "enum": ["perkabig"], "description": "Built-in A4 Landscape PerKaBIG layout generator (for layout)" },
+                    "grid": { "type": "boolean", "description": "Attach UTM MeasuredGrid to MapFrame (for perkabig layout)" },
                     "width": { "type": "number", "description": "Line width in pt for polylines" },
                     "size": { "type": "number", "description": "Marker size in pt for points" },
                     "marker": { "type": "string", "enum": ["circle", "square", "diamond", "cross", "x"], "description": "Marker shape for points" },
@@ -731,28 +748,46 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
         }
         "geokit_raster" => {
-            let (Some(action), Some(input), Some(out)) = (
-                str_arg(args, "action"),
-                str_arg(args, "input"),
-                str_arg(args, "out"),
-            ) else {
-                return (
-                    "Missing required arguments: action, input, out".into(),
-                    true,
-                );
+            let (Some(action), Some(out)) = (str_arg(args, "action"), str_arg(args, "out")) else {
+                return ("Missing required arguments: action, out".into(), true);
             };
-            cli_args.extend([
-                "raster".into(),
-                action.into(),
-                input.into(),
-                "--out".into(),
-                out.into(),
-            ]);
+            cli_args.extend(["raster".into(), action.into()]);
+            if let Some(input) = str_arg(args, "input") {
+                cli_args.push(input.into());
+            }
+            cli_args.extend(["--out".into(), out.into()]);
             if let Some(z) = str_arg(args, "zones") {
                 cli_args.extend(["--zones".into(), z.into()]);
             }
             if let Some(zf) = str_arg(args, "zone_field") {
                 cli_args.extend(["--zone-field".into(), zf.into()]);
+            }
+            if let Some(r) = str_arg(args, "rules") {
+                cli_args.extend(["--rules".into(), r.into()]);
+            }
+            if bool_arg(args, "smooth") {
+                cli_args.push("--smooth".into());
+            }
+            if let Some(ins) = str_arg(args, "inputs") {
+                cli_args.extend(["--inputs".into(), ins.into()]);
+            }
+            if let Some(cls) = args.get("classes").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--classes".into(), cls.to_string()]);
+            }
+            if let Some(po) = str_arg(args, "polygon_out") {
+                cli_args.extend(["--polygon-out".into(), po.into()]);
+            }
+            if let Some(fld) = str_arg(args, "field") {
+                cli_args.extend(["--field".into(), fld.into()]);
+            }
+            if let Some(m) = str_arg(args, "method") {
+                cli_args.extend(["--method".into(), m.into()]);
+            }
+            if let Some(cs) = args.get("cell_size").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--cell-size".into(), cs.to_string()]);
+            }
+            if let Some(msk) = str_arg(args, "mask") {
+                cli_args.extend(["--mask".into(), msk.into()]);
             }
         }
         "geokit_hydro" => {
@@ -862,6 +897,27 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(hl) = str_arg(args, "hide_legend") {
                 cli_args.extend(["--hide-legend".into(), hl.into()]);
+            }
+            if let Some(nm) = str_arg(args, "name") {
+                cli_args.extend(["--name".into(), nm.into()]);
+            }
+            if let Some(pad) = args.get("padding").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--padding".into(), pad.to_string()]);
+            }
+            if let Some(sc) = str_arg(args, "scale") {
+                cli_args.extend(["--scale".into(), sc.into()]);
+            }
+            if let Some(h) = args.get("halo").and_then(|v| v.as_bool()) {
+                cli_args.extend(["--halo".into(), h.to_string()]);
+            }
+            if let Some(fs) = args.get("font_size").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--font-size".into(), fs.to_string()]);
+            }
+            if let Some(tpl) = str_arg(args, "template") {
+                cli_args.extend(["--template".into(), tpl.into()]);
+            }
+            if let Some(gr) = args.get("grid").and_then(|v| v.as_bool()) {
+                cli_args.extend(["--grid".into(), gr.to_string()]);
             }
             if let Some(lyr) = str_arg(args, "lyr") {
                 cli_args.extend(["--lyr".into(), lyr.into()]);
