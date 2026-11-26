@@ -110,6 +110,16 @@ IID_IGeometry = _guid("{1B07790D-38C5-11D0-92D2-00805F7C28B0}")
 CLSID_UID = _guid("{78FF7FA1-FB2F-11D1-94A2-080009EEBECB}")
 IID_IUID = _guid("{1714D59B-FB22-11D1-94A2-080009EEBECB}")
 
+IID_IScaleBar = _guid("{6DFAE8E2-ECAA-11D0-8682-0000F8751720}")
+IID_ILegendItem = _guid("{52AA5BC0-CB21-11D0-87F9-080009EC732A}")
+CLSID_FormattedGridLabel = _guid("{CE41C507-9DF9-11D2-AADE-000000000000}")
+IID_IFormattedGridLabel = _guid("{CE41C505-9DF9-11D2-AADE-000000000000}")
+IID_IGridLabel = _guid("{CE41C501-9DF9-11D2-AADE-000000000000}")
+CLSID_NumericFormat = _guid("{7E4F4719-8E54-11D2-AAD8-000000000000}")
+IID_INumericFormat = _guid("{7E4F4710-8E54-11D2-AAD8-000000000000}")
+IID_INumberFormat = _guid("{7E4F470D-8E54-11D2-AAD8-000000000000}")
+IID_IFont = _guid("{BEF6E002-A874-101A-8BBA-00AA00300CAB}")
+
 SURROUND_LEGEND_CLSID = u"{7A3F91E4-B9E3-11D1-8756-0000F8751720}"
 SURROUND_NORTH_CLSID = u"{7A3F91DD-B9E3-11D1-8756-0000F8751720}"
 SURROUND_SCALEBAR_CLSID = u"{6589F147-F7F7-11D2-B872-00600802E603}"
@@ -741,11 +751,20 @@ def hide_legend_layers(mxdoc, layer_names_to_hide):
     return removed
 
 
-def make_text_symbol(size=10.0, rgb=(30, 30, 30), halign=1, valign=2, halo=False, halo_size=1.5):
+def make_text_symbol(size=10.0, rgb=(30, 30, 30), halign=1, valign=2, halo=False, halo_size=1.5, bold=False):
     """Creates an ITextSymbol (halign: 0=left,1=center,2=right; valign: 0=top,1=center,2=baseline,3=bottom)."""
     ts = _co(CLSID_TextSymbol, IID_ITextSymbol)
     col = make_rgb(*rgb)
     icol = _qi(col, IID_IColor)
+    if bold:
+        fnt = c_void_p()
+        if _vcall(ts, 3, POINTER(c_void_p))(ts, byref(fnt)) == 0 and fnt.value:
+            ifnt = _qi(fnt, IID_IFont)
+            if ifnt:
+                _vcall(ifnt, 8, c_short)(ifnt, -1)  # put_Bold(True)
+                _release(ifnt)
+            _vcall(ts, 4, c_void_p)(ts, fnt)  # put_Font
+            _release(fnt)
     _vcall(ts, 6, c_double)(ts, float(size))
     _vcall(ts, 8, c_void_p)(ts, icol)
     _vcall(ts, 12, c_long)(ts, int(halign))
@@ -853,9 +872,9 @@ def _add_rect(gc, xmin, ymin, xmax, ymax, fill_rgb=None, outline_rgb=(40, 40, 40
     _release(re)
 
 
-def _add_text(gc, x, y, text, size=10.0, rgb=(25, 25, 25), halign=1, valign=1, name="geokit_text"):
+def _add_text(gc, x, y, text, size=10.0, rgb=(25, 25, 25), halign=1, valign=1, name="geokit_text", bold=False):
     te = _co(CLSID_TextElement, IID_ITextElement)
-    ts = make_text_symbol(size=size, rgb=rgb, halign=halign, valign=valign, halo=False)
+    ts = make_text_symbol(size=size, rgb=rgb, halign=halign, valign=valign, halo=False, bold=bold)
     _vcall(te, 4, c_void_p)(te, ts)  # put_Symbol
     tb = _bstr(text)
     _vcall(te, 6, c_void_p)(te, tb)  # put_Text
@@ -957,16 +976,16 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
     # Clear old MapSurrounds on FocusMap so no stale duplicate legends remain
     _vcall(fmap, 35)(fmap)  # ClearMapSurrounds()
 
-    # 2. Position Left MapFrame (1.7, 1.7) -> (20.4, 19.3) cm (leaves clean 1.0 cm margin for UTM grid labels)
+    # 2. Position Left MapFrame (1.7, 1.6) -> (19.9, 19.4) cm (leaves clean 1.2 cm gutter before right panel!)
     if mf and mf_el:
-        mf_env = _make_envelope(1.7, 1.7, 20.4, 19.3)
+        mf_env = _make_envelope(1.7, 1.6, 19.9, 19.4)
         mf_geom = _qi(mf_env, IID_IGeometry)
         _vcall(mf_el, 4, c_void_p)(mf_el, mf_geom)  # put_Geometry
         _vcall(gc, 14, c_void_p)(gc, mf_el)         # UpdateElement
         _release(mf_geom)
         _release(mf_env)
 
-        # Attach UTM MeasuredGrid to MapFrame
+        # Attach PerKaBIG-style UTM MeasuredGrid (clean round coords, 0 decimals, vertical L/R labels)
         if add_grid:
             mgrids = _qi(mf, IID_IMapGrids)
             if mgrids:
@@ -979,9 +998,33 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
                     _free_bstr(nb)
                     _vcall(mgrid, 31, c_void_p)(mgrid, mf)  # SetDefaults(mf)
                     interval = _nice_grid_interval(span_meters)
-                    _vcall(mg_obj, 6, c_double)(mg_obj, interval)   # put_XIntervalSize
-                    _vcall(mg_obj, 10, c_double)(mg_obj, interval)  # put_YIntervalSize
-                    grid_line = make_line_symbol(160, 174, 192, width=0.35, style="solid")
+                    _vcall(mg_obj, 14, c_short)(mg_obj, -1)         # FixedOrigin = True (round UTM!)
+                    _vcall(mg_obj, 4, c_double)(mg_obj, 0.0)        # XOrigin = 0.0
+                    _vcall(mg_obj, 8, c_double)(mg_obj, 0.0)        # YOrigin = 0.0
+                    _vcall(mg_obj, 12, c_long)(mg_obj, 9)           # Units = 9 (esriMeters)
+                    _vcall(mg_obj, 6, c_double)(mg_obj, interval)   # XIntervalSize
+                    _vcall(mg_obj, 10, c_double)(mg_obj, interval)  # YIntervalSize
+                    # Clean integer coordinate labels (0 decimals, vertical on Left & Right axes)
+                    try:
+                        fgl = _co(CLSID_FormattedGridLabel, IID_IFormattedGridLabel)
+                        nf = _co(CLSID_NumericFormat, IID_INumericFormat)
+                        _vcall(nf, 3, c_long)(nf, 0)    # esriRoundNumberOfDecimals
+                        _vcall(nf, 5, c_long)(nf, 0)    # 0 decimal places
+                        _vcall(nf, 11, c_short)(nf, 0)  # UseSeparator = False
+                        _vcall(nf, 13, c_short)(nf, 0)  # ZeroPad = False
+                        inf = _qi(nf, IID_INumberFormat)
+                        _vcall(fgl, 4, c_void_p)(fgl, inf)  # put_Format
+                        igl = _qi(fgl, IID_IGridLabel)
+                        _vcall(igl, 14, c_long, c_short)(igl, 3, -1)  # Left axis vertical
+                        _vcall(igl, 14, c_long, c_short)(igl, 4, -1)  # Right axis vertical
+                        _vcall(mgrid, 10, c_void_p)(mgrid, igl)       # put_LabelFormat
+                        _release(igl)
+                        _release(inf)
+                        _release(nf)
+                        _release(fgl)
+                    except Exception:
+                        pass
+                    grid_line = make_line_symbol(176, 190, 197, width=0.3, style="solid")
                     igline = _qi(grid_line, IID_ILineSymbol)
                     _vcall(mgrid, 6, c_void_p)(mgrid, igline)  # put_LineSymbol
                     _vcall(mgrid, 24, c_short)(mgrid, -1)      # Visible = True
@@ -992,27 +1035,27 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
                 _release(mg_obj)
                 _release(mgrids)
 
-    # 3. Draw Outer Page Border & Right Info Panel Boxes (21.1 -> 29.0 cm)
-    _add_rect(gc, 0.7, 0.7, 29.0, 20.3, outline_rgb=(30, 30, 30), outline_width=1.4, hollow=True, name="outer_frame")
-    _add_rect(gc, 21.1, 16.4, 29.0, 20.3, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_title")
-    _add_rect(gc, 21.1, 12.6, 29.0, 16.4, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_scale")
-    _add_rect(gc, 21.1, 4.2, 29.0, 12.6, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_legend")
-    _add_rect(gc, 21.1, 0.7, 29.0, 4.2, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_info")
+    # 3. Draw Outer Page Border & Proportional Right Info Panel Boxes (21.1 -> 29.1 cm, center x=25.1)
+    _add_rect(gc, 0.6, 0.6, 29.1, 20.4, outline_rgb=(30, 30, 30), outline_width=1.4, hollow=True, name="outer_frame")
+    _add_rect(gc, 21.1, 17.2, 29.1, 20.4, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_title")
+    _add_rect(gc, 21.1, 13.4, 29.1, 17.2, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_scale")
+    _add_rect(gc, 21.1, 4.2, 29.1, 13.4, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_legend")
+    _add_rect(gc, 21.1, 0.6, 29.1, 4.2, outline_rgb=(50, 50, 50), outline_width=0.9, hollow=True, name="box_info")
 
-    # 4. Box 1: Title & Subtitle (centered neatly inside 21.1..29.0, center x=25.05)
+    # 4. Box 1: Bold Title & Subtitle (centered cleanly inside 21.1..29.1, y=17.2..20.4)
     wrapped_title = _wrap_text(title.upper(), max_chars=24)
-    _add_text(gc, 25.05, 18.7, wrapped_title, size=11.5, rgb=(20, 25, 35), halign=1, valign=1, name="judul_peta")
+    _add_text(gc, 25.1, 19.3, wrapped_title, size=11.5, rgb=(18, 24, 34), halign=1, valign=1, name="judul_peta", bold=True)
     if subtitle:
-        _add_text(gc, 25.05, 17.0, _wrap_text(subtitle, max_chars=34), size=8.0, rgb=(70, 80, 90), halign=1, valign=1, name="subjudul_peta")
+        _add_text(gc, 25.1, 17.9, _wrap_text(subtitle, max_chars=34), size=8.0, rgb=(70, 80, 92), halign=1, valign=1, name="subjudul_peta")
 
-    # 5. Box 2: North Arrow + Alternating Scale Bar + Numeric Scale Text
+    # 5. Box 2: North Arrow + Scale Ratio + Metric Kilometers Scale Bar (y=13.4..17.2)
     if mf:
-        # North Arrow
+        # North Arrow (cleanly padded below top divider y=17.2)
         uid_na = _make_uid(SURROUND_NORTH_CLSID)
         na_sf = c_void_p()
         if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_na, None, byref(na_sf)) == 0 and na_sf.value:
             el = _qi(na_sf, IID_IElement)
-            env = _make_envelope(24.2, 14.7, 25.9, 16.1)
+            env = _make_envelope(24.4, 15.5, 25.8, 16.85)
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
@@ -1022,12 +1065,25 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
             _release(na_sf)
         _release(uid_na)
 
-        # Alternating Scale Bar
+        # Alternating Scale Bar in Kilometers (km)
         uid_sb = _make_uid(SURROUND_SCALEBAR_CLSID)
         sb_sf = c_void_p()
         if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_sb, None, byref(sb_sf)) == 0 and sb_sf.value:
+            sb_ms = c_void_p()
+            _vcall(sb_sf, 11, POINTER(c_void_p))(sb_sf, byref(sb_ms))  # get_MapSurround
+            if sb_ms.value:
+                sb = _qi(sb_ms, IID_IScaleBar)
+                if sb:
+                    _vcall(sb, 22, c_long)(sb, 10)   # Units = 10 (esriKilometers)
+                    ul = _bstr("km")
+                    _vcall(sb, 24, c_void_p)(sb, ul) # UnitLabel = "km"
+                    _free_bstr(ul)
+                    _vcall(sb, 16, c_short)(sb, 2)   # Divisions = 2
+                    _vcall(sb, 20, c_short)(sb, 2)   # Subdivisions = 2
+                    _release(sb)
+                _release(sb_ms)
             el = _qi(sb_sf, IID_IElement)
-            env = _make_envelope(21.6, 13.0, 28.5, 13.8)
+            env = _make_envelope(21.7, 13.75, 28.5, 14.55)
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
@@ -1038,9 +1094,9 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
         _release(uid_sb)
 
     if scale_text:
-        _add_text(gc, 25.05, 14.2, scale_text, size=8.5, rgb=(30, 30, 30), halign=1, valign=1, name="skala_angka")
+        _add_text(gc, 25.1, 15.05, scale_text, size=8.5, rgb=(25, 25, 25), halign=1, valign=1, name="skala_angka", bold=True)
 
-    # 6. Box 3: Clean Legend (positioned cleanly inside 21.5..28.6, y=4.6..12.2)
+    # 6. Box 3: Clean Legend with Multi-Class Layer Headings & No Raw Field Names (y=4.2..13.4)
     hidden = []
     if mf:
         uid_leg = _make_uid(SURROUND_LEGEND_CLSID)
@@ -1054,10 +1110,35 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
                     tb = _bstr("LEGENDA")
                     _vcall(leg, 16, c_void_p)(leg, tb)  # put_Title("LEGENDA")
                     _free_bstr(tb)
+                    # Clean legend item formatting: hide raw field headings, show multi-class layer names
+                    icnt = c_long(0)
+                    _vcall(leg, 25, POINTER(c_long))(leg, byref(icnt))
+                    for li in range(icnt.value):
+                        item = c_void_p()
+                        _vcall(leg, 26, c_long, POINTER(c_void_p))(leg, li, byref(item))
+                        if item.value:
+                            _vcall(item, 20, c_short)(item, 0)  # ShowHeading = False (no raw column name!)
+                            item_lyr = c_void_p()
+                            _vcall(item, 5, POINTER(c_void_p))(item, byref(item_lyr))
+                            if item_lyr.value:
+                                gfl = _qi(item_lyr, IID_IGeoFeatureLayer)
+                                if gfl:
+                                    rend = c_void_p()
+                                    if _vcall(gfl, 32, POINTER(c_void_p))(gfl, byref(rend)) == 0 and rend.value:
+                                        is_uv = _qi(rend, IID_IUniqueValueRenderer)
+                                        is_cb = _qi(rend, IID_IClassBreaksRenderer)
+                                        if is_uv or is_cb:
+                                            _vcall(item, 14, c_short)(item, -1)  # ShowLayerName = True for multi-class!
+                                        _release(is_uv)
+                                        _release(is_cb)
+                                        _release(rend)
+                                    _release(gfl)
+                                _release(item_lyr)
+                            _release(item)
                     _release(leg)
                 _release(ms)
             el = _qi(leg_sf, IID_IElement)
-            env = _make_envelope(21.5, 4.6, 28.6, 12.1)
+            env = _make_envelope(21.6, 4.6, 28.6, 13.0)
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
@@ -1070,14 +1151,14 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
     if hide_legend_names:
         hidden = hide_legend_layers(mxdoc, hide_legend_names)
 
-    # 7. Box 4: Projection & Source Info
+    # 7. Box 4: Projection & Source Info (y=0.6..4.2)
     info_lines = []
     if crs_text:
         info_lines.append("Sistem Proyeksi:\n" + _wrap_text(crs_text, max_chars=34))
     if source:
         info_lines.append(_wrap_text(source, max_chars=34))
     if info_lines:
-        _add_text(gc, 21.5, 3.8, "\n\n".join(info_lines), size=7.5, rgb=(50, 55, 60), halign=0, valign=0, name="sumber_data")
+        _add_text(gc, 21.6, 3.85, "\n\n".join(info_lines), size=7.5, rgb=(50, 55, 60), halign=0, valign=0, name="sumber_data")
 
     # Zoom layout to full page so user sees the entire A4 PerKaBIG sheet cleanly
     _vcall(pl, 12)(pl)  # ZoomToWhole()

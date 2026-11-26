@@ -4,6 +4,16 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-11-26
+
+### Improved
+- **PerKaBIG Cartographic Polish**:
+  - Metric **Kilometers (`km`)** alternating scale bar (`IScaleBar.put_Units(10)`, `Divisions=2`, `Subdivisions=2`) instead of default `Miles`.
+  - **Clean Round UTM Grid** (`FixedOrigin=True`, `XOrigin=0`, `YOrigin=0`, **0 decimal places** via `FormattedGridLabel` + `NumericFormat`) with **vertical Left/Right axis labels** and a wider `1.2 cm` gutter before the Right Info Panel so grid numbers never overlap `LEGENDA`.
+  - **True Bold Map Title** (`IFont.put_Bold`) + balanced vertical spacing between Title/Subtitle and North Arrow (zero overlap).
+  - **Smart Legend Headings**: automatically hides raw attribute field names (`ShowHeading=False`) while showing clean layer titles (`ShowLayerName=True`) for multi-class layers (`Tingkat Kerawanan`).
+  - **Tighter Proportional Framing**: added intermediate standard scales (`1:125.000`, `1:300.000`, `1:350.000`, `1:400.000`, `1:750.000`) with `8%` padding so study areas fill ~80% of the MapFrame cleanly.
+
 ## [2.1.1] - 2026-11-26
 
 ### Fixed

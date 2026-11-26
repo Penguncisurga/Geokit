@@ -485,16 +485,16 @@ def _handle_command_on_ui_thread(req):
         if template == "perkabig":
             if _ao is None:
                 return {"ok": False, "error": "ArcObjects COM module required for PerKaBIG layout."}
+            std_scales = [5000, 10000, 25000, 50000, 75000, 100000, 125000, 150000, 200000, 250000, 300000, 350000, 400000, 500000, 750000, 1000000]
             span_m = 40000.0
             if zoom_layer:
                 zl = _find_layer(mxd, df, zoom_layer)
                 if zl:
                     ext = zl.getExtent(True)
-                    dx = (ext.XMax - ext.XMin) * 0.12
-                    dy = (ext.YMax - ext.YMin) * 0.12
+                    dx = (ext.XMax - ext.XMin) * 0.08
+                    dy = (ext.YMax - ext.YMin) * 0.08
                     df.extent = arcpy.Extent(ext.XMin - dx, ext.YMin - dy, ext.XMax + dx, ext.YMax + dy)
                     span_m = max(ext.XMax - ext.XMin, ext.YMax - ext.YMin)
-                    std_scales = [5000, 10000, 25000, 50000, 75000, 100000, 150000, 200000, 250000, 500000, 1000000]
                     cur_s = df.scale
                     df.scale = next((s for s in std_scales if s >= cur_s), std_scales[-1])
             sr = getattr(df, "spatialReference", None)
@@ -527,10 +527,9 @@ def _handle_command_on_ui_thread(req):
                 zl = _find_layer(mxd, df, zoom_layer)
                 if zl:
                     ext = zl.getExtent(True)
-                    dx = (ext.XMax - ext.XMin) * 0.14
-                    dy = (ext.YMax - ext.YMin) * 0.14
+                    dx = (ext.XMax - ext.XMin) * 0.08
+                    dy = (ext.YMax - ext.YMin) * 0.08
                     df.extent = arcpy.Extent(ext.XMin - dx, ext.YMin - dy, ext.XMax + dx, ext.YMax + dy)
-                    std_scales = [5000, 10000, 25000, 50000, 75000, 100000, 150000, 200000, 250000, 500000, 1000000]
                     cur_s = df.scale
                     df.scale = next((s for s in std_scales if s >= cur_s), std_scales[-1])
                     final_s = int(round(df.scale)) if df.scale else 0
