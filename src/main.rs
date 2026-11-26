@@ -26,9 +26,9 @@ struct Cli {
     #[arg(long, global = true, env = "GEOKIT_PROPY")]
     propy: Option<PathBuf>,
 
-    /// Geoprocessing engine backend: auto (ArcGIS Pro if present, else GDAL), arcgis, or gdal
-    #[arg(long, global = true, env = "GEOKIT_ENGINE", default_value = "auto")]
-    engine: EngineBackend,
+    /// Geoprocessing engine backend: auto (ArcGIS Pro if present, else GDAL), arcgis, arcmap, or gdal
+    #[arg(long, global = true, env = "GEOKIT_ENGINE")]
+    engine: Option<EngineBackend>,
 
     #[command(subcommand)]
     command: Commands,
@@ -122,14 +122,29 @@ enum Commands {
     Mcp,
 }
 
+fn resolve_engine(cli_engine: Option<EngineBackend>, cfg_engine: Option<&str>) -> EngineBackend {
+    if let Some(e) = cli_engine {
+        return e;
+    }
+    match cfg_engine.map(|s| s.to_ascii_lowercase()).as_deref() {
+        Some("arcgis") => EngineBackend::Arcgis,
+        Some("arcmap") => EngineBackend::Arcmap,
+        Some("gdal") => EngineBackend::Gdal,
+        _ => EngineBackend::Auto,
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
-    let (cfg, _) = config::load_config(&cwd)?;
+    let (cfg, cfg_path) = config::load_config(&cwd)?;
     let effective_propy = cli.propy.as_deref().or(cfg.arcgis.propy.as_deref());
+    let effective_engine = resolve_engine(cli.engine, cfg.defaults.engine.as_deref());
 
     match cli.command {
-        Commands::Doctor { json } => commands::doctor::run(effective_propy, json),
+        Commands::Doctor { json } => {
+            commands::doctor::run(effective_propy, cfg_path.as_deref(), json)
+        }
         Commands::Init { path, force } => commands::init::run(&path, force),
         Commands::Audit { path, json } => commands::audit::run(&path, json),
         Commands::Organize {
@@ -146,12 +161,18 @@ fn main() -> Result<()> {
             include_xml,
             dry_run,
         } => commands::clean::run(&path, include_xml, dry_run),
-        Commands::Gp { command } => commands::gp::run(command, effective_propy, &cfg, cli.engine),
-        Commands::Layout { command } => {
-            commands::layout::run(command, effective_propy, &cfg, cli.engine)
+        Commands::Gp { command } => {
+            commands::gp::run(command, effective_propy, &cfg, effective_engine)
         }
-        Commands::Map { command } => commands::map::run(command, effective_propy, cli.engine),
-        Commands::Raster { command } => commands::raster::run(command, effective_propy, cli.engine),
+        Commands::Layout { command } => {
+            commands::layout::run(command, effective_propy, &cfg, effective_engine)
+        }
+        Commands::Map { command } => {
+            commands::map::run(command, effective_propy, &cfg, effective_engine)
+        }
+        Commands::Raster { command } => {
+            commands::raster::run(command, effective_propy, effective_engine)
+        }
         Commands::Hydro { command } => commands::hydro::run(command, effective_propy),
         Commands::Mcp => commands::mcp::run(),
     }

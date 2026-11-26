@@ -171,3 +171,24 @@ fn test_mcp_server_stdio_handshake_and_tools() {
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
 }
+
+#[test]
+fn test_organize_ignores_plain_json_but_moves_geojson() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(root.join("package.json"), b"{}").unwrap();
+    fs::write(root.join("batas.geojson"), b"{}").unwrap();
+
+    let org_out = geokit_bin()
+        .args(["organize", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(org_out.status.success());
+
+    // Plain .json must remain untouched in root
+    assert!(root.join("package.json").exists());
+    assert!(!root.join("01_Vector").join("package.json").exists());
+    // .geojson must be organized into 01_Vector
+    assert!(root.join("01_Vector").join("batas.geojson").exists());
+}

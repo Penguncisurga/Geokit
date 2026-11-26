@@ -1,10 +1,12 @@
 # geokit
 
+[![CI](https://github.com/Penguncisurga/Geokit/actions/workflows/ci.yml/badge.svg)](https://github.com/Penguncisurga/Geokit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Penguncisurga/Geokit)](https://github.com/Penguncisurga/Geokit/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **Fast GIS CLI toolkit written in Rust for spatial data hygiene and batch ArcGIS Pro geoprocessing.**
+> **Fast GIS CLI & built-in MCP server written in Rust for spatial data hygiene, batch ArcGIS Pro / ArcMap 10.x / GDAL geoprocessing, layouts, raster terrain, and watershed (DAS) hydrology.**
 
-[Baca dalam Bahasa Indonesia (README.id.md)](README.id.md)
+[Baca dalam Bahasa Indonesia (README.id.md)](README.id.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ---
 
@@ -27,15 +29,15 @@ GIS projects quickly accumulate messy folders, broken shapefiles, illegal filena
 ## Installation
 
 ### Option 1: Download Prebuilt Binary
-Download the latest `geokit-windows-x86_64.exe` from [GitHub Releases](https://github.com/Penguncisurga/geokit/releases), rename to `geokit.exe`, and place it in a folder on your `PATH`.
+Download the latest binary (`geokit-windows-x86_64.exe`, `geokit-linux-x86_64`, or `geokit-macos-arm64`) and verify against `SHA256SUMS.txt` from [GitHub Releases](https://github.com/Penguncisurga/Geokit/releases), rename to `geokit.exe` (or `geokit`), and place it on your `PATH`.
 
 ### Option 2: Build from Source
 Requires [Rust](https://rustup.rs/):
 
 ```bash
-git clone https://github.com/Penguncisurga/geokit.git
-cd geokit
-cargo build --release
+git clone https://github.com/Penguncisurga/Geokit.git
+cd Geokit
+cargo build --release --locked
 ```
 
 The compiled binary will be at `target/release/geokit.exe`.

@@ -3,7 +3,8 @@ use clap::Subcommand;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::engine::{abs_string, run_arcmap_job, run_arcpy_job, EngineBackend};
+use crate::config::GeokitConfig;
+use crate::engine::{abs_string, is_mxd_target, run_arcmap_job, run_arcpy_job, EngineBackend};
 
 #[derive(Debug, Subcommand)]
 pub enum MapCommand {
@@ -41,17 +42,15 @@ struct MapPayload {
     json: Option<bool>,
 }
 
-fn is_mxd_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("mxd"))
-        .unwrap_or(false)
-}
-
-pub fn run(cmd: MapCommand, override_propy: Option<&Path>, backend: EngineBackend) -> Result<()> {
+pub fn run(
+    cmd: MapCommand,
+    override_propy: Option<&Path>,
+    cfg: &GeokitConfig,
+    backend: EngineBackend,
+) -> Result<()> {
     let use_arcmap = match &cmd {
         MapCommand::BrokenLinks { input, .. } | MapCommand::FixLinks { input, .. } => {
-            backend == EngineBackend::Arcmap || is_mxd_path(input)
+            backend == EngineBackend::Arcmap || is_mxd_target(input)
         }
     };
 
@@ -90,7 +89,7 @@ pub fn run(cmd: MapCommand, override_propy: Option<&Path>, backend: EngineBacken
     };
 
     if use_arcmap {
-        run_arcmap_job(None, &payload)
+        run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
     } else {
         run_arcpy_job(override_propy, &payload)
     }

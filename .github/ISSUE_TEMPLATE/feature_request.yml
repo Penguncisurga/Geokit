@@ -1,0 +1,28 @@
+name: Feature Request
+description: Suggest a new GIS command, backend, or improvement for geokit
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What GIS workflow problem does this solve?
+      description: Describe the repetitive task or pain point.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed CLI command or behavior
+      placeholder: "geokit gp ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Target GIS backend
+      options:
+        - Native Rust (no GIS software required)
+        - ArcGIS Pro (arcpy)
+        - ArcMap 10.x (Python 2.7)
+        - GDAL / QGIS
+        - All / Any

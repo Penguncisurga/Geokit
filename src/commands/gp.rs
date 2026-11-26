@@ -533,7 +533,7 @@ pub fn run(
     };
 
     if backend == EngineBackend::Arcmap {
-        run_arcmap_job(None, &payload)
+        run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
     } else {
         run_arcpy_job(override_propy, &payload)
     }

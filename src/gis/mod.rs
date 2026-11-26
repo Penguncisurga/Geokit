@@ -14,7 +14,7 @@ pub enum GisCategory {
 }
 
 pub const VECTOR_PRIMARY_EXTS: &[&str] = &[
-    "shp", "gpkg", "geojson", "json", "kml", "kmz", "gml", "dxf", "dwg", "fgb",
+    "shp", "gpkg", "geojson", "kml", "kmz", "gml", "dxf", "dwg", "fgb",
 ];
 
 pub const RASTER_PRIMARY_EXTS: &[&str] = &[

@@ -8,16 +8,25 @@ use crate::engine::{detect_arcgis, ArcGisEnvironment};
 
 #[derive(Debug, Serialize)]
 struct DoctorReport {
+    config_file: Option<String>,
     arcgis: ArcGisEnvironment,
     gdal: GdalEnvironment,
 }
 
-pub fn run(override_propy: Option<&Path>, json_output: bool) -> Result<()> {
+pub fn run(
+    override_propy: Option<&Path>,
+    config_file: Option<&Path>,
+    json_output: bool,
+) -> Result<()> {
     let info = detect_arcgis(override_propy);
     let gdal = detect_gdal();
 
     if json_output {
-        let report = DoctorReport { arcgis: info, gdal };
+        let report = DoctorReport {
+            config_file: config_file.map(|p| p.display().to_string()),
+            arcgis: info,
+            gdal,
+        };
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
@@ -28,6 +37,17 @@ pub fn run(override_propy: Option<&Path>, json_output: bool) -> Result<()> {
         "[OK]".green().bold(),
         "Ready".green()
     );
+    match config_file {
+        Some(p) => println!(
+            "  {} Project Config (geokit.toml): {}",
+            "[OK]".green().bold(),
+            p.display()
+        ),
+        None => println!(
+            "  {} Project Config (geokit.toml): None (using defaults; run `geokit init` to create)",
+            "[INFO]".dimmed()
+        ),
+    }
 
     match &info.arcgis_pro_propy {
         Some(p) => {

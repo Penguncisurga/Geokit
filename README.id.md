@@ -1,10 +1,12 @@
 # geokit
 
+[![CI](https://github.com/Penguncisurga/Geokit/actions/workflows/ci.yml/badge.svg)](https://github.com/Penguncisurga/Geokit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Penguncisurga/Geokit)](https://github.com/Penguncisurga/Geokit/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **CLI GIS cepat berbasis Rust untuk merapikan struktur data spasial dan menjalankan batch geoprocessing ArcGIS Pro.**
+> **CLI GIS cepat & MCP Server bawaan berbasis Rust untuk merapikan struktur data spasial, batch geoprocessing (ArcGIS Pro / ArcMap 10.x / GDAL), export layout, raster, dan hidrologi DAS.**
 
-[Read in English (README.md)](README.md)
+[Read in English (README.md)](README.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ---
 
@@ -27,15 +29,15 @@ Proyek GIS sering dipenuhi folder yang berantakan, shapefile yang komponennya hi
 ## Instalasi
 
 ### Opsi 1: Unduh Binary Siap Pakai
-Unduh `geokit-windows-x86_64.exe` terbaru di halaman [GitHub Releases](https://github.com/Penguncisurga/geokit/releases), ubah namanya menjadi `geokit.exe`, lalu simpan di folder yang masuk `PATH`.
+Unduh binary terbaru (`geokit-windows-x86_64.exe`, `geokit-linux-x86_64`, atau `geokit-macos-arm64`) di halaman [GitHub Releases](https://github.com/Penguncisurga/Geokit/releases), ubah namanya menjadi `geokit.exe`, lalu simpan di folder yang masuk `PATH`.
 
 ### Opsi 2: Build dari Source
 Membutuhkan [Rust](https://rustup.rs/):
 
 ```bash
-git clone https://github.com/Penguncisurga/geokit.git
-cd geokit
-cargo build --release
+git clone https://github.com/Penguncisurga/Geokit.git
+cd Geokit
+cargo build --release --locked
 ```
 
 Hasil kompilasi berada di `target/release/geokit.exe`.

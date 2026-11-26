@@ -20,10 +20,12 @@ pub struct GeokitConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ArcGisConfig {
     pub propy: Option<PathBuf>,
+    pub arcmap_python: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefaultsConfig {
+    pub engine: Option<String>,
     pub epsg: Option<u32>,
     #[serde(default = "default_dpi")]
     pub dpi: u32,
@@ -42,6 +44,7 @@ fn default_format() -> String {
 impl Default for DefaultsConfig {
     fn default() -> Self {
         Self {
+            engine: None,
             epsg: None,
             dpi: default_dpi(),
             layout_format: default_format(),
@@ -130,10 +133,13 @@ pub fn starter_config_toml() -> &'static str {
 # Place this file in your GIS project root.
 
 [arcgis]
-# Optional: override auto-detected ArcGIS Pro propy.bat path
+# Optional: override auto-detected ArcGIS Pro propy.bat or ArcMap 10.x python.exe path
 # propy = "C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\Scripts\\propy.bat"
+# arcmap_python = "C:\\Python27\\ArcGIS10.7\\python.exe"
 
 [defaults]
+# Optional: default engine backend ("auto", "arcgis", "arcmap", or "gdal")
+# engine = "auto"
 # Optional: default EPSG used by `geokit gp project` when --epsg is omitted
 # Example: 32748 (UTM 48S), 32749 (UTM 49S), 4326 (WGS 84)
 # epsg = 32748

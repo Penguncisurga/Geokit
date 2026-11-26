@@ -91,6 +91,35 @@ fn find_default_arcmap_python() -> Option<PathBuf> {
     None
 }
 
+/// Returns true if `path` is an `.mxd` file OR a directory containing `.mxd` files (and no `.aprx`).
+pub fn is_mxd_target(path: &Path) -> bool {
+    if path.is_file() {
+        return path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("mxd"))
+            .unwrap_or(false);
+    }
+    if path.is_dir() {
+        let mut has_mxd = false;
+        let mut has_aprx = false;
+        for entry in walkdir::WalkDir::new(path).into_iter().flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+                if ext.eq_ignore_ascii_case("mxd") {
+                    has_mxd = true;
+                } else if ext.eq_ignore_ascii_case("aprx") {
+                    has_aprx = true;
+                }
+            }
+        }
+        return has_mxd && !has_aprx;
+    }
+    false
+}
+
 /// Resolves a path to an absolute string without Windows `\\?\` UNC prefix (which ArcPy rejects).
 pub fn abs_string(p: &Path) -> String {
     std::fs::canonicalize(p)

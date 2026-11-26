@@ -1,6 +1,5 @@
-# Rust build artifacts
+# Rust build artifacts (Cargo.lock is intentionally committed for reproducible CLI builds)
 /target/
-Cargo.lock
 
 # Editor / OS files
 .vscode/
@@ -12,3 +11,5 @@ Thumbs.db
 # Test GIS fixtures / temporary outputs
 /tmp/
 *.lock
+*.pyc
+__pycache__/
