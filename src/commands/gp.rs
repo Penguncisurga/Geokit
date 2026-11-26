@@ -3,7 +3,8 @@ use clap::Subcommand;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::engine::run_arcpy_job;
+use crate::config::GeokitConfig;
+use crate::engine::{abs_string, run_arcpy_job};
 
 #[derive(Debug, Subcommand)]
 pub enum GpCommand {
@@ -19,9 +20,9 @@ pub enum GpCommand {
     Project {
         /// Input file, folder, or .gdb
         input: PathBuf,
-        /// Target EPSG code (e.g. 32748 for UTM 48S, 32749 for UTM 49S, 4326 for WGS84)
+        /// Target EPSG code (e.g. 32748 for UTM 48S; optional if set in geokit.toml)
         #[arg(long)]
-        epsg: u32,
+        epsg: Option<u32>,
         /// Output file, folder, or .gdb
         #[arg(short, long)]
         out: PathBuf,
@@ -122,23 +123,7 @@ struct GpPayload {
     json: Option<bool>,
 }
 
-fn abs_string(p: &Path) -> String {
-    std::fs::canonicalize(p)
-        .unwrap_or_else(|_| {
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                std::env::current_dir()
-                    .map(|cwd| cwd.join(p))
-                    .unwrap_or_else(|_| p.to_path_buf())
-            }
-        })
-        .to_string_lossy()
-        .trim_start_matches(r"\\?\")
-        .to_string()
-}
-
-pub fn run(cmd: GpCommand, override_propy: Option<&Path>) -> Result<()> {
+pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) -> Result<()> {
     let payload = match cmd {
         GpCommand::Info { input, json } => {
             if !input.exists() {
@@ -162,11 +147,14 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>) -> Result<()> {
             if !input.exists() {
                 bail!("Input path does not exist: {}", input.display());
             }
+            let target_epsg = epsg.or(cfg.defaults.epsg).ok_or_else(|| {
+                anyhow::anyhow!("Missing --epsg code (and no `defaults.epsg` set in geokit.toml).")
+            })?;
             GpPayload {
                 action: "project".into(),
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
-                epsg: Some(epsg),
+                epsg: Some(target_epsg),
                 aoi: None,
                 dist: None,
                 dissolve: None,

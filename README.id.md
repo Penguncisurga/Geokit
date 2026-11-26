@@ -103,6 +103,35 @@ geokit gp calc-geom ./hasil.gdb --unit ha
 
 ---
 
+### 3. Export Layout & Cek Broken Links *(ArcGIS Pro `.aprx`)*
+
+- **`geokit layout list <path> [--json]`** — Tampilkan daftar layout dan ukuran halaman di satu `.aprx` atau folder proyek.
+- **`geokit layout export <path> --out <folder> [--format pdf|png|jpg] [--dpi 300] [--filter <teks>]`** — Batch export semua layout `.aprx` ke PDF/PNG/JPG dalam 1 sesi `arcpy`.
+- **`geokit map broken-links <path> [--json]`** — Deteksi layer dengan *broken data source* (tanda seru merah) di proyek `.aprx`.
+- **`geokit map fix-links <aprx> --find <lama> --replace <baru> [--out <salinan.aprx>]`** — Perbaiki path data source yang pindah folder/drive secara massal.
+
+```bash
+# Export semua layout di folder proyek ke PDF 300 DPI
+geokit layout export ./04_Projects --out ./exports --format pdf --dpi 300
+
+# Cek layer rusak sebelum peta dikirim/dicetak
+geokit map broken-links ./04_Projects
+```
+
+---
+
+### 4. Konfigurasi Proyek (`geokit.toml`)
+
+Buat file konfigurasi awal di folder proyek:
+
+```bash
+geokit init
+```
+
+Kamu bisa mengubah nama folder `organize`, default EPSG untuk `gp project`, default DPI/format untuk `layout export`, dan path `propy.bat` di dalam `geokit.toml`.
+
+---
+
 ## Lisensi
 
 Proyek ini dirilis dengan [Lisensi MIT](LICENSE).

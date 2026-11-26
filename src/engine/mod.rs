@@ -78,6 +78,23 @@ fn find_default_arcmap_python() -> Option<PathBuf> {
     None
 }
 
+/// Resolves a path to an absolute string without Windows `\\?\` UNC prefix (which ArcPy rejects).
+pub fn abs_string(p: &Path) -> String {
+    std::fs::canonicalize(p)
+        .unwrap_or_else(|_| {
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(p))
+                    .unwrap_or_else(|_| p.to_path_buf())
+            }
+        })
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string()
+}
+
 /// Runs the embedded `arcpy_runner.py` script in a single ArcGIS Pro Python session
 /// with the given JSON payload.
 pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -> Result<()> {

@@ -2,11 +2,17 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use std::path::Path;
 
+use crate::config::FolderConfig;
 use crate::gis::bundle::{collect_raster_bundle, collect_shapefile_bundle, move_path};
 use crate::gis::scanner::{is_gdb_dir, scan_directory};
 use crate::gis::GisCategory;
 
-pub fn run(path: &Path, output: Option<&Path>, dry_run: bool) -> Result<()> {
+pub fn run(
+    path: &Path,
+    output: Option<&Path>,
+    dry_run: bool,
+    folders: &FolderConfig,
+) -> Result<()> {
     if !path.is_dir() {
         bail!("Path must be an existing directory: {}", path.display());
     }
@@ -32,7 +38,7 @@ pub fn run(path: &Path, output: Option<&Path>, dry_run: bool) -> Result<()> {
     let mut skipped = 0usize;
 
     for ds in &report.datasets {
-        let dest_dir = target_root.join(ds.category.folder_name());
+        let dest_dir = target_root.join(folders.name_for(ds.category));
 
         // Skip if already inside the target category directory
         if ds.path.starts_with(&dest_dir) {

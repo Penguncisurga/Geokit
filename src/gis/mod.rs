@@ -13,18 +13,6 @@ pub enum GisCategory {
     Tabular,
 }
 
-impl GisCategory {
-    pub fn folder_name(self) -> &'static str {
-        match self {
-            GisCategory::Vector => "01_Vector",
-            GisCategory::Raster => "02_Raster",
-            GisCategory::Geodatabase => "03_Geodatabase",
-            GisCategory::Project => "04_Projects",
-            GisCategory::Tabular => "05_Tabular",
-        }
-    }
-}
-
 pub const VECTOR_PRIMARY_EXTS: &[&str] = &[
     "shp", "gpkg", "geojson", "json", "kml", "kmz", "gml", "dxf", "dwg", "fgb",
 ];

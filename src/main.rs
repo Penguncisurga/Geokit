@@ -1,4 +1,5 @@
 mod commands;
+mod config;
 mod engine;
 mod gis;
 
@@ -7,6 +8,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use commands::gp::GpCommand;
+use commands::layout::LayoutCommand;
+use commands::map::MapCommand;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -16,7 +19,7 @@ use commands::gp::GpCommand;
     long_about = None
 )]
 struct Cli {
-    /// Custom path to ArcGIS Pro propy.bat (overrides auto-detection and GEOKIT_PROPY)
+    /// Custom path to ArcGIS Pro propy.bat (overrides auto-detection, geokit.toml, and GEOKIT_PROPY)
     #[arg(long, global = true, env = "GEOKIT_PROPY")]
     propy: Option<PathBuf>,
 
@@ -31,6 +34,15 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Create a starter geokit.toml project configuration file
+    Init {
+        /// Target directory (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Overwrite existing geokit.toml
+        #[arg(long)]
+        force: bool,
     },
     /// Audit a GIS workspace for datasets, broken shapefiles, naming issues, and clutter
     Audit {
@@ -79,25 +91,44 @@ enum Commands {
         #[command(subcommand)]
         command: GpCommand,
     },
+    /// Inspect and batch export ArcGIS Pro (.aprx) map layouts
+    Layout {
+        #[command(subcommand)]
+        command: LayoutCommand,
+    },
+    /// Inspect and repair broken data sources in ArcGIS Pro (.aprx) projects
+    Map {
+        #[command(subcommand)]
+        command: MapCommand,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let cwd = std::env::current_dir()?;
+    let (cfg, _) = config::load_config(&cwd)?;
+    let effective_propy = cli.propy.as_deref().or(cfg.arcgis.propy.as_deref());
 
     match cli.command {
-        Commands::Doctor { json } => commands::doctor::run(cli.propy.as_deref(), json),
+        Commands::Doctor { json } => commands::doctor::run(effective_propy, json),
+        Commands::Init { path, force } => commands::init::run(&path, force),
         Commands::Audit { path, json } => commands::audit::run(&path, json),
         Commands::Organize {
             path,
             output,
             dry_run,
-        } => commands::organize::run(&path, output.as_deref(), dry_run),
+        } => {
+            let (dir_cfg, _) = config::load_config(&path)?;
+            commands::organize::run(&path, output.as_deref(), dry_run, &dir_cfg.folders)
+        }
         Commands::Sanitize { path, dry_run } => commands::sanitize::run(&path, dry_run),
         Commands::Clean {
             path,
             include_xml,
             dry_run,
         } => commands::clean::run(&path, include_xml, dry_run),
-        Commands::Gp { command } => commands::gp::run(command, cli.propy.as_deref()),
+        Commands::Gp { command } => commands::gp::run(command, effective_propy, &cfg),
+        Commands::Layout { command } => commands::layout::run(command, effective_propy, &cfg),
+        Commands::Map { command } => commands::map::run(command, effective_propy),
     }
 }

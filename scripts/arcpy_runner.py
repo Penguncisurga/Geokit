@@ -372,6 +372,151 @@ def cmd_calc_geom(payload):
     return 1 if failures else 0
 
 
+def collect_aprx_files(input_path: str):
+    if os.path.isfile(input_path):
+        return [input_path] if input_path.lower().endswith(".aprx") else []
+    aprx_files = []
+    for root, dirs, files in os.walk(input_path):
+        dirs[:] = [d for d in dirs if not d.lower().endswith(".gdb")]
+        for fname in sorted(files):
+            if fname.lower().endswith(".aprx"):
+                aprx_files.append(os.path.join(root, fname))
+    return aprx_files
+
+
+def cmd_layout_list(payload):
+    aprx_files = collect_aprx_files(payload["input"])
+    results = []
+    for aprx_path in aprx_files:
+        aprx = arcpy.mp.ArcGISProject(aprx_path)
+        for lyt in aprx.listLayouts():
+            results.append(
+                {
+                    "project": os.path.basename(aprx_path),
+                    "project_path": aprx_path,
+                    "layout": lyt.name,
+                    "page_width": lyt.pageWidth,
+                    "page_height": lyt.pageHeight,
+                    "page_units": lyt.pageUnits,
+                }
+            )
+    if payload.get("json"):
+        print(json.dumps(results, indent=2))
+        return 0
+    if not results:
+        print("No layouts found.")
+        return 0
+    for item in results:
+        print(
+            f"- [{item['project']}] {item['layout']} "
+            f"({item['page_width']} x {item['page_height']} {item['page_units']})"
+        )
+    return 0
+
+
+def cmd_layout_export(payload):
+    aprx_files = collect_aprx_files(payload["input"])
+    if not aprx_files:
+        print("No .aprx files found to export.")
+        return 0
+    out_dir = payload["out"]
+    os.makedirs(out_dir, exist_ok=True)
+    fmt = (payload.get("format") or "pdf").lower()
+    dpi = int(payload.get("dpi") or 300)
+    filt = (payload.get("filter") or "").lower()
+
+    exported = 0
+    failures = 0
+    multi_project = len(aprx_files) > 1
+
+    for aprx_path in aprx_files:
+        proj_stem = sanitize_gdb_name(aprx_path)
+        aprx = arcpy.mp.ArcGISProject(aprx_path)
+        for lyt in aprx.listLayouts():
+            if filt and filt not in lyt.name.lower():
+                continue
+            lyt_stem = sanitize_gdb_name(lyt.name)
+            base_name = f"{proj_stem}__{lyt_stem}" if multi_project else lyt_stem
+            ext = "jpg" if fmt == "jpeg" else fmt
+            out_file = os.path.join(out_dir, f"{base_name}.{ext}")
+            try:
+                if ext == "pdf":
+                    lyt.exportToPDF(out_file, resolution=dpi)
+                elif ext == "png":
+                    lyt.exportToPNG(out_file, resolution=dpi)
+                elif ext == "jpg":
+                    lyt.exportToJPEG(out_file, resolution=dpi)
+                exported += 1
+                print(f"[OK]  {os.path.basename(aprx_path)} :: {lyt.name} -> {out_file}")
+            except Exception as exc:
+                failures += 1
+                print(
+                    f"[ERR] {os.path.basename(aprx_path)} :: {lyt.name}: {exc}",
+                    file=sys.stderr,
+                )
+
+    print(f"Summary: {exported} layout(s) exported ({dpi} DPI, {fmt.upper()}), {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_map_broken_links(payload):
+    aprx_files = collect_aprx_files(payload["input"])
+    broken = []
+    for aprx_path in aprx_files:
+        aprx = arcpy.mp.ArcGISProject(aprx_path)
+        for m in aprx.listMaps():
+            for lyr in m.listLayers():
+                if getattr(lyr, "isBroken", False):
+                    ds = ""
+                    try:
+                        ds = lyr.dataSource
+                    except Exception:
+                        ds = "(unavailable)"
+                    broken.append(
+                        {
+                            "project": os.path.basename(aprx_path),
+                            "project_path": aprx_path,
+                            "map": m.name,
+                            "layer": lyr.longName,
+                            "data_source": ds,
+                        }
+                    )
+    if payload.get("json"):
+        print(json.dumps(broken, indent=2))
+        return 0
+    if not broken:
+        print("All layers have valid data sources! No broken links found.")
+        return 0
+    for item in broken:
+        print(
+            f"[BROKEN] {item['project']} | Map: {item['map']} | "
+            f"Layer: {item['layer']} | Source: {item['data_source']}"
+        )
+    print(f"Summary: {len(broken)} broken layer(s) found across {len(aprx_files)} project(s).")
+    return 0
+
+
+def cmd_map_fix_links(payload):
+    aprx_path = payload["input"]
+    find_str = payload["find"]
+    replace_str = payload["replace"]
+    out_path = payload.get("out")
+
+    aprx = arcpy.mp.ArcGISProject(aprx_path)
+    aprx.updateConnectionProperties(find_str, replace_str)
+
+    if out_path:
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        aprx.saveACopy(out_path)
+        print(f"OK Updated connection properties and saved copy -> {out_path}")
+    else:
+        aprx.save()
+        print(f"OK Updated connection properties and saved -> {aprx_path}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -383,6 +528,10 @@ HANDLERS = {
     "buffer": cmd_buffer,
     "dissolve": cmd_dissolve,
     "calc_geom": cmd_calc_geom,
+    "layout_list": cmd_layout_list,
+    "layout_export": cmd_layout_export,
+    "map_broken_links": cmd_map_broken_links,
+    "map_fix_links": cmd_map_fix_links,
 }
 
 

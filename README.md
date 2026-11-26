@@ -122,12 +122,63 @@ geokit gp unpack ./clipped.gdb --out ./delivery_shp
 
 ---
 
+### 3. Project Layouts & Broken Links *(ArcGIS Pro `.aprx`)*
+
+| Command | Description |
+| :--- | :--- |
+| `geokit layout list <path> [--json]` | List all layouts and page sizes in one `.aprx` or a folder of `.aprx` projects. |
+| `geokit layout export <path> --out <dir> [--format pdf\|png\|jpg] [--dpi 300] [--filter <text>]` | Batch export layouts from one or many `.aprx` projects in a single `arcpy` session. |
+| `geokit map broken-links <path> [--json]` | Detect layers with broken data sources (red exclamation mark) across `.aprx` projects. |
+| `geokit map fix-links <aprx> --find <old> --replace <new> [--out <copy.aprx>]` | Batch repair broken workspace paths in an `.aprx` project. |
+
+**Examples:**
+
+```bash
+# Export all layouts in a project folder to 300 DPI PDFs
+geokit layout export ./04_Projects --out ./exports --format pdf --dpi 300
+
+# Check for broken data sources before submitting maps
+geokit map broken-links ./04_Projects
+
+# Fix broken paths after moving a project drive
+geokit map fix-links ./04_Projects/peta_das.aprx --find "D:\OldData" --replace "E:\NewData" --out ./04_Projects/peta_das_fixed.aprx
+```
+
+---
+
+### 4. Project Configuration (`geokit.toml`)
+
+Generate a starter configuration file in your project root:
+
+```bash
+geokit init
+```
+
+Customize folder names for `organize`, default EPSG for `gp project`, default DPI/format for `layout export`, or a custom `propy.bat` path:
+
+```toml
+[defaults]
+epsg = 32748
+dpi = 300
+layout_format = "pdf"
+
+[folders]
+vector = "01_Vector"
+raster = "02_Raster"
+geodatabase = "03_Geodatabase"
+projects = "04_Projects"
+tabular = "05_Tabular"
+```
+
+---
+
 ## Roadmap
 
-- [ ] `geokit layout export` — Batch export `.aprx` layouts to PDF/PNG
-- [ ] `geokit map broken-links` — Detect and fix broken data sources in `.aprx`
-- [ ] `geokit.toml` — Custom folder templates and default EPSG per project
+- [x] `geokit layout list` & `geokit layout export` — Batch export `.aprx` layouts to PDF/PNG/JPG
+- [x] `geokit map broken-links` & `geokit map fix-links` — Detect and repair broken data sources in `.aprx`
+- [x] `geokit init` & `geokit.toml` — Custom folder templates, default EPSG, and layout defaults per project
 - [ ] Optional GDAL / QGIS CLI backend for non-ArcGIS environments
+- [ ] `geokit gp overlay` — Batch `intersect`, `erase`, and `spatial-join`
 
 ---
 

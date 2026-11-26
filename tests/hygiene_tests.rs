@@ -81,3 +81,40 @@ fn test_audit_organize_sanitize_clean_workflow() {
         .join("a00000001.gdbtable")
         .exists());
 }
+
+#[test]
+fn test_init_and_custom_config_organize() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    let init_out = geokit_bin()
+        .args(["init", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(init_out.status.success());
+    let cfg_path = root.join("geokit.toml");
+    assert!(cfg_path.is_file());
+
+    fs::write(
+        &cfg_path,
+        r#"
+[folders]
+vector = "SHP_Data"
+raster = "IMG_Data"
+"#,
+    )
+    .unwrap();
+
+    fs::write(root.join("sungai.shp"), b"shp").unwrap();
+    fs::write(root.join("sungai.dbf"), b"dbf").unwrap();
+    fs::write(root.join("dem.tif"), b"tif").unwrap();
+
+    let org_out = geokit_bin()
+        .args(["organize", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(org_out.status.success());
+    assert!(root.join("SHP_Data").join("sungai.shp").exists());
+    assert!(root.join("SHP_Data").join("sungai.dbf").exists());
+    assert!(root.join("IMG_Data").join("dem.tif").exists());
+}
