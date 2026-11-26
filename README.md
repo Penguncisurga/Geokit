@@ -97,6 +97,11 @@ geokit clean ./project_das
 | `geokit gp buffer <input> --dist "50 Meters" --out <out> [--dissolve]` | Batch buffer vector datasets. |
 | `geokit gp dissolve <input> --field <field> --out <out>` | Batch dissolve features by one or more comma-separated fields. |
 | `geokit gp calc-geom <input> [--unit ha\|m2\|km2\|km\|m]` | Batch calculate geodesic area (polygons) or length (lines) into a field (`AREA_HA`, `LEN_KM`, etc.). |
+| `geokit gp intersect <input> --with <overlay> --out <out>` | Batch intersect vector datasets with an overlay layer. |
+| `geokit gp erase <input> --mask <erase> --out <out>` | Batch erase features overlapping a mask layer. |
+| `geokit gp spatial-join <input> --join <layer> --out <out> [--match intersect\|within\|contains\|closest]` | Batch spatial join attributes from another layer. |
+
+> **GDAL / QGIS Backend:** Pass `--engine gdal` (or leave default `--engine auto` on machines without ArcGIS Pro) to run `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), and `unpack` using `ogr2ogr` / `gdalwarp` — automatically detected from `PATH` or QGIS on Windows!
 
 **Examples:**
 
@@ -177,8 +182,9 @@ tabular = "05_Tabular"
 - [x] `geokit layout list` & `geokit layout export` — Batch export `.aprx` layouts to PDF/PNG/JPG
 - [x] `geokit map broken-links` & `geokit map fix-links` — Detect and repair broken data sources in `.aprx`
 - [x] `geokit init` & `geokit.toml` — Custom folder templates, default EPSG, and layout defaults per project
-- [ ] Optional GDAL / QGIS CLI backend for non-ArcGIS environments
-- [ ] `geokit gp overlay` — Batch `intersect`, `erase`, and `spatial-join`
+- [x] Optional GDAL / QGIS CLI backend (`--engine auto|arcgis|gdal`) for cross-platform & non-ArcGIS environments
+- [x] Batch overlay geoprocessing (`intersect`, `erase`, `spatial-join`)
+- [ ] Raster batch toolkit (mosaic, slope/aspect/hillshade, zonal statistics)
 
 ---
 

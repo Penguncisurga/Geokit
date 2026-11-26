@@ -1,14 +1,24 @@
 use anyhow::Result;
 use colored::Colorize;
+use serde::Serialize;
 use std::path::Path;
 
-use crate::engine::detect_arcgis;
+use crate::engine::gdal::{detect_gdal, GdalEnvironment};
+use crate::engine::{detect_arcgis, ArcGisEnvironment};
+
+#[derive(Debug, Serialize)]
+struct DoctorReport {
+    arcgis: ArcGisEnvironment,
+    gdal: GdalEnvironment,
+}
 
 pub fn run(override_propy: Option<&Path>, json_output: bool) -> Result<()> {
     let info = detect_arcgis(override_propy);
+    let gdal = detect_gdal();
 
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&info)?);
+        let report = DoctorReport { arcgis: info, gdal };
+        println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
 
@@ -30,8 +40,25 @@ pub fn run(override_propy: Option<&Path>, json_output: bool) -> Result<()> {
         }
         None => {
             println!(
-                "  {} ArcGIS Pro (propy.bat): Not found — `geokit gp` commands require ArcGIS Pro (or set GEOKIT_PROPY / --propy)",
+                "  {} ArcGIS Pro (propy.bat): Not found — set GEOKIT_PROPY / --propy or use `--engine gdal`",
                 "[MISSING]".yellow().bold()
+            );
+        }
+    }
+
+    match &gdal.ogr2ogr {
+        Some(p) => {
+            println!(
+                "  {} GDAL / OGR (ogr2ogr): {} ({})",
+                "[OK]".green().bold(),
+                p.display(),
+                gdal.source.as_deref().unwrap_or("detected")
+            );
+        }
+        None => {
+            println!(
+                "  {} GDAL / OGR (ogr2ogr): Not detected (optional cross-platform backend)",
+                "[INFO]".dimmed()
             );
         }
     }

@@ -89,6 +89,11 @@ geokit clean ./proyek_das
 - **`geokit gp buffer <input> --dist "50 Meters" --out <out> [--dissolve]`** — Batch *buffer*.
 - **`geokit gp dissolve <input> --field <field> --out <out>`** — Batch *dissolve* berdasarkan atribut.
 - **`geokit gp calc-geom <input> [--unit ha|m2|km2|km|m]`** — Batch hitung luas poligon (`AREA_HA`, `AREA_M2`, `AREA_KM2`) atau panjang garis (`LEN_KM`, `LEN_M`).
+- **`geokit gp intersect <input> --with <overlay> --out <out>`** — Batch *intersect* layer vektor dengan layer overlay.
+- **`geokit gp erase <input> --mask <mask> --out <out>`** — Batch *erase* fitur yang tumpang tindih dengan poligon mask.
+- **`geokit gp spatial-join <input> --join <layer> --out <out> [--match intersect|within|contains|closest]`** — Batch *spatial join* atribut antar layer.
+
+> **Backend GDAL / QGIS:** Gunakan `--engine gdal` (atau otomatis via `--engine auto` jika ArcGIS Pro tidak terpasang) untuk menjalankan `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), dan `unpack` lewat `ogr2ogr` / `gdalwarp` (otomatis terdeteksi dari `PATH` maupun folder QGIS di Windows).
 
 ```bash
 # Reproject semua layer ke UTM Zona 48S

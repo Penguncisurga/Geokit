@@ -4,7 +4,10 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
-use crate::engine::{abs_string, run_arcpy_job};
+use crate::engine::gdal::{
+    detect_gdal, gdal_clip, gdal_info, gdal_merge, gdal_pack_gpkg, gdal_project, gdal_unpack,
+};
+use crate::engine::{abs_string, detect_arcgis, run_arcpy_job, EngineBackend};
 
 #[derive(Debug, Subcommand)]
 pub enum GpCommand {
@@ -46,20 +49,20 @@ pub enum GpCommand {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Pack all shapefiles (and optionally rasters) in a folder into a single File Geodatabase (.gdb)
+    /// Pack all shapefiles (and optionally rasters) in a folder into a single .gdb (ArcGIS) or .gpkg (GDAL)
     Pack {
         /// Input folder containing shapefiles/rasters
         input: PathBuf,
-        /// Target .gdb path (created automatically if it does not exist)
+        /// Target .gdb (or .gpkg with --engine gdal) path
         #[arg(short, long)]
         out: PathBuf,
-        /// Also import rasters into the geodatabase
+        /// Also import rasters into the geodatabase (ArcGIS engine)
         #[arg(long)]
         include_rasters: bool,
     },
-    /// Unpack all feature classes from a File Geodatabase (.gdb) into shapefiles in a folder
+    /// Unpack all feature classes from a .gdb or .gpkg into shapefiles in a folder
     Unpack {
-        /// Input .gdb directory
+        /// Input .gdb or .gpkg path
         input: PathBuf,
         /// Output directory for exported shapefiles
         #[arg(short, long)]
@@ -106,6 +109,42 @@ pub enum GpCommand {
         #[arg(long)]
         field: Option<String>,
     },
+    /// Batch intersect vector dataset(s) with an overlay layer
+    Intersect {
+        /// Input file, folder, or .gdb
+        input: PathBuf,
+        /// Overlay shapefile or feature class to intersect with
+        #[arg(long)]
+        with: PathBuf,
+        /// Output file, folder, or .gdb
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Batch erase features overlapping an erase/mask layer
+    Erase {
+        /// Input file, folder, or .gdb
+        input: PathBuf,
+        /// Mask/erase shapefile or feature class
+        #[arg(long)]
+        mask: PathBuf,
+        /// Output file, folder, or .gdb
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Batch spatial join attributes from a join layer onto target dataset(s)
+    SpatialJoin {
+        /// Target file, folder, or .gdb
+        input: PathBuf,
+        /// Join shapefile or feature class providing attributes
+        #[arg(long)]
+        join: PathBuf,
+        /// Output file, folder, or .gdb
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Match option: intersect, within, contains, or closest
+        #[arg(long = "match", default_value = "intersect")]
+        match_option: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -120,10 +159,87 @@ struct GpPayload {
     field: Option<String>,
     unit: Option<String>,
     include_rasters: Option<bool>,
+    overlay: Option<String>,
+    match_option: Option<String>,
     json: Option<bool>,
 }
 
-pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) -> Result<()> {
+fn should_use_gdal(backend: EngineBackend, override_propy: Option<&Path>) -> bool {
+    match backend {
+        EngineBackend::Gdal => true,
+        EngineBackend::Arcgis => false,
+        EngineBackend::Auto => {
+            let arc = detect_arcgis(override_propy);
+            arc.arcgis_pro_propy.is_none() && detect_gdal().is_available()
+        }
+    }
+}
+
+pub fn run(
+    cmd: GpCommand,
+    override_propy: Option<&Path>,
+    cfg: &GeokitConfig,
+    backend: EngineBackend,
+) -> Result<()> {
+    if should_use_gdal(backend, override_propy) {
+        let gdal = detect_gdal();
+        if !gdal.is_available() {
+            bail!(
+                "GDAL (ogr2ogr) was not found. Install GDAL/QGIS or switch to `--engine arcgis`."
+            );
+        }
+        return match cmd {
+            GpCommand::Info { input, .. } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_info(&gdal, &input)
+            }
+            GpCommand::Project { input, epsg, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                let target_epsg = epsg.or(cfg.defaults.epsg).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Missing --epsg code (and no `defaults.epsg` set in geokit.toml)."
+                    )
+                })?;
+                gdal_project(&gdal, &input, target_epsg, &out)
+            }
+            GpCommand::Clip { input, aoi, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                if !aoi.exists() {
+                    bail!("AOI path does not exist: {}", aoi.display());
+                }
+                gdal_clip(&gdal, &input, &aoi, &out)
+            }
+            GpCommand::Merge { input, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_merge(&gdal, &input, &out)
+            }
+            GpCommand::Pack { input, out, .. } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_pack_gpkg(&gdal, &input, &out)
+            }
+            GpCommand::Unpack { input, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_unpack(&gdal, &input, &out)
+            }
+            _ => bail!(
+                "This subcommand currently requires the ArcGIS Pro backend (`--engine arcgis`).\n\
+                 GDAL backend supports: info, project, clip, merge, pack (.gpkg), unpack."
+            ),
+        };
+    }
+
     let payload = match cmd {
         GpCommand::Info { input, json } => {
             if !input.exists() {
@@ -140,6 +256,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: Some(json),
             }
         }
@@ -161,6 +279,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -182,6 +302,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -200,6 +322,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -222,6 +346,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: Some(include_rasters),
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -240,6 +366,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -258,6 +386,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -281,6 +411,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: None,
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -299,6 +431,8 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field: Some(field),
                 unit: None,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
                 json: None,
             }
         }
@@ -317,6 +451,82 @@ pub fn run(cmd: GpCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) ->
                 field,
                 unit,
                 include_rasters: None,
+                overlay: None,
+                match_option: None,
+                json: None,
+            }
+        }
+        GpCommand::Intersect { input, with, out } => {
+            if !input.exists() {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            if !with.exists() {
+                bail!("Overlay path does not exist: {}", with.display());
+            }
+            GpPayload {
+                action: "intersect".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                epsg: None,
+                aoi: None,
+                dist: None,
+                dissolve: None,
+                field: None,
+                unit: None,
+                include_rasters: None,
+                overlay: Some(abs_string(&with)),
+                match_option: None,
+                json: None,
+            }
+        }
+        GpCommand::Erase { input, mask, out } => {
+            if !input.exists() {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            if !mask.exists() {
+                bail!("Mask path does not exist: {}", mask.display());
+            }
+            GpPayload {
+                action: "erase".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                epsg: None,
+                aoi: None,
+                dist: None,
+                dissolve: None,
+                field: None,
+                unit: None,
+                include_rasters: None,
+                overlay: Some(abs_string(&mask)),
+                match_option: None,
+                json: None,
+            }
+        }
+        GpCommand::SpatialJoin {
+            input,
+            join,
+            out,
+            match_option,
+        } => {
+            if !input.exists() {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            if !join.exists() {
+                bail!("Join layer path does not exist: {}", join.display());
+            }
+            GpPayload {
+                action: "spatial_join".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                epsg: None,
+                aoi: None,
+                dist: None,
+                dissolve: None,
+                field: None,
+                unit: None,
+                include_rasters: None,
+                overlay: Some(abs_string(&join)),
+                match_option: Some(match_option),
                 json: None,
             }
         }

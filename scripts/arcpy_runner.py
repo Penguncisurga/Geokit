@@ -517,6 +517,77 @@ def cmd_map_fix_links(payload):
     return 0
 
 
+def cmd_intersect(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found to intersect.")
+        return 0
+    overlay = payload["overlay"]
+    ctype = ensure_output_container(payload["out"], len(items) > 1)
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        dst = resolve_out_target(src, "vector", payload["out"], ctype)
+        try:
+            arcpy.analysis.Intersect([src, overlay], dst)
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} ∩ {os.path.basename(overlay)} -> {dst}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} intersected, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_erase(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found to erase.")
+        return 0
+    mask = payload["overlay"]
+    ctype = ensure_output_container(payload["out"], len(items) > 1)
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        dst = resolve_out_target(src, "vector", payload["out"], ctype)
+        try:
+            arcpy.analysis.Erase(src, mask, dst)
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} - {os.path.basename(mask)} -> {dst}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} erased, {failures} failed.")
+    return 1 if failures else 0
+
+
+def cmd_spatial_join(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found for spatial join.")
+        return 0
+    join_fc = payload["overlay"]
+    match_map = {
+        "intersect": "INTERSECT",
+        "within": "WITHIN",
+        "contains": "CONTAINS",
+        "closest": "CLOSEST",
+    }
+    raw_match = (payload.get("match_option") or "intersect").lower()
+    if raw_match not in match_map:
+        print(f"Unsupported match option '{raw_match}'. Use intersect, within, contains, or closest.", file=sys.stderr)
+        return 1
+    match_opt = match_map[raw_match]
+    ctype = ensure_output_container(payload["out"], len(items) > 1)
+    failures = 0
+    for idx, src in enumerate(items, 1):
+        dst = resolve_out_target(src, "vector", payload["out"], ctype)
+        try:
+            arcpy.analysis.SpatialJoin(src, join_fc, dst, match_option=match_opt)
+            print(f"[{idx}/{len(items)}] OK   {os.path.basename(src)} + {os.path.basename(join_fc)} ({match_opt}) -> {dst}")
+        except Exception as exc:
+            failures += 1
+            print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    print(f"Summary: {len(items) - failures} joined, {failures} failed.")
+    return 1 if failures else 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -528,6 +599,9 @@ HANDLERS = {
     "buffer": cmd_buffer,
     "dissolve": cmd_dissolve,
     "calc_geom": cmd_calc_geom,
+    "intersect": cmd_intersect,
+    "erase": cmd_erase,
+    "spatial_join": cmd_spatial_join,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
     "map_broken_links": cmd_map_broken_links,

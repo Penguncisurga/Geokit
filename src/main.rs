@@ -10,18 +10,23 @@ use std::path::PathBuf;
 use commands::gp::GpCommand;
 use commands::layout::LayoutCommand;
 use commands::map::MapCommand;
+use engine::EngineBackend;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "geokit",
     version,
-    about = "Fast GIS CLI toolkit for spatial data hygiene and batch ArcGIS Pro geoprocessing",
+    about = "Fast GIS CLI toolkit for spatial data hygiene and batch ArcGIS Pro / GDAL geoprocessing",
     long_about = None
 )]
 struct Cli {
     /// Custom path to ArcGIS Pro propy.bat (overrides auto-detection, geokit.toml, and GEOKIT_PROPY)
     #[arg(long, global = true, env = "GEOKIT_PROPY")]
     propy: Option<PathBuf>,
+
+    /// Geoprocessing engine backend: auto (ArcGIS Pro if present, else GDAL), arcgis, or gdal
+    #[arg(long, global = true, env = "GEOKIT_ENGINE", default_value = "auto")]
+    engine: EngineBackend,
 
     #[command(subcommand)]
     command: Commands,
@@ -127,7 +132,7 @@ fn main() -> Result<()> {
             include_xml,
             dry_run,
         } => commands::clean::run(&path, include_xml, dry_run),
-        Commands::Gp { command } => commands::gp::run(command, effective_propy, &cfg),
+        Commands::Gp { command } => commands::gp::run(command, effective_propy, &cfg, cli.engine),
         Commands::Layout { command } => commands::layout::run(command, effective_propy, &cfg),
         Commands::Map { command } => commands::map::run(command, effective_propy),
     }

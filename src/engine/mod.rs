@@ -1,9 +1,20 @@
+pub mod gdal;
+
 use anyhow::{bail, Context, Result};
+use clap::ValueEnum;
 use serde::Serialize;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::Builder;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineBackend {
+    Auto,
+    Arcgis,
+    Gdal,
+}
 
 const ARCPY_RUNNER_SCRIPT: &str = include_str!("../../scripts/arcpy_runner.py");
 
