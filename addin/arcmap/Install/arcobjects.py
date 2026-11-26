@@ -921,7 +921,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
     page = c_void_p()
     _vcall(pl, 3, POINTER(c_void_p))(pl, byref(page))  # get_Page
     if page.value:
-        _vcall(page, 8, c_long)(page, 9)               # put_Units(9 = esriCentimeters)
+        _vcall(page, 8, c_long)(page, 8)               # put_Units(8 = esriCentimeters)
         _vcall(page, 6, c_short)(page, 2)              # put_Orientation(2 = Landscape)
         _vcall(page, 25, c_double, c_double)(page, 29.7, 21.0)  # PutCustomSize(29.7, 21.0)
         _release(page)
@@ -930,12 +930,9 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
     fmap = c_void_p()
     _vcall(mxdoc, 9, POINTER(c_void_p))(mxdoc, byref(fmap))
 
-    # Locate the main MapFrame before clearing old decorative elements
-    mf_frame = c_void_p()
-    _vcall(gc, 13, c_void_p, POINTER(c_void_p))(gc, fmap, byref(mf_frame))  # FindFrame(fmap)
-    mf = _qi(mf_frame, IID_IMapFrame) if mf_frame.value else None
-
-    # Clear all non-MapFrame layout elements so we start completely clean
+    # Locate the main MapFrame & clear all non-MapFrame layout elements cleanly
+    mf = None
+    mf_el = None
     to_delete = []
     _vcall(gc, 4)(gc)  # Reset
     while True:
@@ -945,8 +942,12 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
             break
         is_mf = _qi(el, IID_IMapFrame)
         if is_mf:
-            _release(is_mf)
-            _release(el)
+            if mf is None:
+                mf = is_mf
+                mf_el = el
+            else:
+                _release(is_mf)
+                _release(el)
         else:
             to_delete.append(el)
     for el in to_delete:
@@ -957,15 +958,13 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
     _vcall(fmap, 35)(fmap)  # ClearMapSurrounds()
 
     # 2. Position Left MapFrame (1.7, 1.7) -> (20.4, 19.3) cm (leaves clean 1.0 cm margin for UTM grid labels)
-    if mf and mf_frame.value:
-        mf_el = _qi(mf_frame, IID_IElement)
+    if mf and mf_el:
         mf_env = _make_envelope(1.7, 1.7, 20.4, 19.3)
         mf_geom = _qi(mf_env, IID_IGeometry)
         _vcall(mf_el, 4, c_void_p)(mf_el, mf_geom)  # put_Geometry
         _vcall(gc, 14, c_void_p)(gc, mf_el)         # UpdateElement
         _release(mf_geom)
         _release(mf_env)
-        _release(mf_el)
 
         # Attach UTM MeasuredGrid to MapFrame
         if add_grid:
@@ -1084,7 +1083,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", sour
     _vcall(pl, 12)(pl)  # ZoomToWhole()
 
     _release(mf)
-    _release(mf_frame)
+    _release(mf_el)
     _release(fmap)
     _release(gc)
     _release(pl)

@@ -4,6 +4,12 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-11-26
+
+### Fixed
+- **ArcMap Live PerKaBIG Layout COM Fix**: Replaced `IGraphicsContainer.FindFrame` raw-pointer call (which expects a COM `VARIANT`) with direct `IMapFrame` detection via `IGraphicsContainer.Next`, and corrected `IPage.put_Units` to `8` (`esriCentimeters` instead of `9` = `esriMeters`) so A4 Landscape sheets render at true `29.7 × 21.0 cm` and export in seconds.
+- **Spatial Interpolation Mask Clipping**: `geokit raster interpolate --mask <aoi>` now explicitly applies `ExtractByMask` after IDW/Spline/Kriging so output surfaces are cleanly clipped to polygon boundaries in ArcMap 10.x (where `Idw` ignores `arcpy.env.mask`).
+
 ## [2.1.0] - 2026-11-26
 
 ### Added

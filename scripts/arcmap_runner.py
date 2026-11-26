@@ -1357,7 +1357,7 @@ def cmd_raster_weighted_sum(payload):
 
 def cmd_raster_interpolate(payload):
     arcpy.CheckOutExtension("Spatial")
-    from arcpy.sa import Idw, Spline, Kriging, KrigingModelOrdinary
+    from arcpy.sa import Idw, Spline, Kriging, KrigingModelOrdinary, ExtractByMask
 
     in_pts = payload["input"]
     field = payload["field"]
@@ -1368,12 +1368,13 @@ def cmd_raster_interpolate(payload):
     parent = os.path.dirname(out_r)
     if parent and not os.path.exists(parent):
         os.makedirs(parent)
+    if arcpy.Exists(out_r):
+        arcpy.Delete_management(out_r)
 
     prev_mask = arcpy.env.mask
     prev_ext = arcpy.env.extent
     try:
         if mask:
-            arcpy.env.mask = mask
             arcpy.env.extent = mask
         if method == "spline":
             surf = Spline(in_pts, field, cell_size) if cell_size else Spline(in_pts, field)
@@ -1381,6 +1382,8 @@ def cmd_raster_interpolate(payload):
             surf = Kriging(in_pts, field, KrigingModelOrdinary("SPHERICAL"), cell_size) if cell_size else Kriging(in_pts, field, KrigingModelOrdinary("SPHERICAL"))
         else:
             surf = Idw(in_pts, field, cell_size) if cell_size else Idw(in_pts, field)
+        if mask:
+            surf = ExtractByMask(surf, mask)
         surf.save(out_r)
     finally:
         arcpy.env.mask = prev_mask
