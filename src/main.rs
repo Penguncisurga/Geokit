@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use commands::fetch::FetchCommand;
 use commands::gp::GpCommand;
 use commands::hydro::HydroCommand;
 use commands::layout::LayoutCommand;
@@ -157,10 +158,38 @@ enum Commands {
         #[arg(short, long, default_value = "geokit_report.html")]
         out: PathBuf,
     },
+    /// Download free public spatial data (OpenStreetMap roads/rivers/buildings & 30m SRTM DEM) for any AOI (no ArcGIS needed)
+    Fetch {
+        #[command(subcommand)]
+        command: FetchCommand,
+    },
+    /// Export any .shp or .geojson layer into a single self-contained interactive Leaflet HTML webmap (no ArcGIS needed)
+    Webmap {
+        /// Input shapefile (.shp) or GeoJSON (.geojson)
+        input: PathBuf,
+        /// Output standalone .html file path
+        #[arg(short, long, default_value = "geokit_webmap.html")]
+        out: PathBuf,
+        /// Attribute field to colorize & summarize in legend (e.g. KELAS, TUTUPAN)
+        #[arg(long)]
+        field: Option<String>,
+        /// Color palette preset: hazard-pastel, hazard, viridis, blue, or category
+        #[arg(long, default_value = "hazard-pastel")]
+        preset: String,
+        /// Map title displayed in the header card
+        #[arg(long)]
+        title: Option<String>,
+        /// Default basemap: satellite, osm, light, topo, or dark
+        #[arg(long, default_value = "satellite")]
+        basemap: String,
+        /// Optional coordinate simplification tolerance in degrees (e.g. 0.0002 to keep huge shapefiles lightweight)
+        #[arg(long, default_value_t = 0.0001)]
+        simplify: f64,
+    },
     /// Control a currently open ArcMap 10.x window live (add/remove/zoom/select/export/run-gp)
     Live {
         #[command(subcommand)]
-        command: LiveCommand,
+        command: Box<LiveCommand>,
     },
     /// Run geokit as a Model Context Protocol (MCP) JSON-RPC 2.0 server over stdio
     Mcp,
@@ -254,7 +283,25 @@ fn real_main() -> Result<()> {
             effective_engine,
         ),
         Commands::Report { path, out } => commands::report::run(&path, &out),
-        Commands::Live { command } => commands::live::run(command),
+        Commands::Fetch { command } => commands::fetch::run(command),
+        Commands::Webmap {
+            input,
+            out,
+            field,
+            preset,
+            title,
+            basemap,
+            simplify,
+        } => commands::webmap::run(
+            &input,
+            &out,
+            field.as_deref(),
+            &preset,
+            title.as_deref(),
+            &basemap,
+            simplify,
+        ),
+        Commands::Live { command } => commands::live::run(*command),
         Commands::Mcp => commands::mcp::run(),
     }
 }

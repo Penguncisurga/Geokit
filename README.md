@@ -133,6 +133,7 @@ geokit clean ./project_das
 | `geokit gp classify <input> --field <src> --out-field <dst> --rules "<rules>"` | Score or classify categories (`"Hutan=1;Sawah=3"`) or numeric ranges (`"<=8:1;8-15:2;>15:3"`). |
 | `geokit gp calc-field <input> --field <dst> --expr "<formula>"` | Calculate weighted overlay totals or math expressions safely across fields (`"0.4 * A + 0.6 * B"`). |
 | `geokit gp union <layer1> <layer2> [...] --out <out>` | Union multiple polygon layers (or all layers in a folder/`.gdb`) for multi-parameter overlay analysis. |
+| `geokit gp summary <layer.shp\|.geojson> --group-by KELAS [--out rekap.md\|.csv\|.html]` | Compute instant class count, total area (ha), and percentage (%) tables ready for Word/Excel reports (**100% native Rust, zero ArcGIS needed**). |
 
 > **GDAL / QGIS Backend:** Pass `--engine gdal` (or leave default `--engine auto` on machines without ArcGIS Pro) to run `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), and `unpack` using `ogr2ogr` / `gdalwarp` — automatically detected from `PATH` or QGIS on Windows!
 
@@ -194,6 +195,11 @@ geokit map fix-links ./04_Projects/peta_das.aprx --find "D:\OldData" --replace "
 | `geokit raster reclass <in.tif> --rules "0-8:1;8-15:2;>15:3" --out <cls.tif> [--smooth]` | Reclassify continuous rasters into discrete classes with optional majority-filter smoothing (Spatial Analyst). |
 | `geokit raster weighted-sum --inputs "r1.tif:0.4,r2.tif:0.6" --out <out.tif> [--classes 5 --polygon-out <poly.shp> --smooth]` | Multi-parameter raster weighted overlay with optional auto-reclass (1..N) and clean dissolved polygon export (`KELAS`, `AREA_HA`). |
 | `geokit raster interpolate <pts.shp> --field <col> --out <surface.tif> [--method idw\|spline\|kriging] [--mask <aoi>]` | Spatial surface interpolation from point data (e.g. rainfall stations, boreholes) using IDW, Spline, or Ordinary Kriging. |
+| `geokit raster index --type ndvi\|ndwi\|ndbi\|savi\|nbr --band-a <b1> --band-b <b2> --out <idx.tif>` | Calculate satellite spectral indices (NDVI, NDWI, NDBI, SAVI, NBR) with optional N-class polygon export. |
+| `geokit raster contour <dem.tif> --interval 25 --out <kontur.shp> [--index-every 4]` | Generate topographic contours from DEM with automatic BIG RBI index-contour flag (`INDEX_KTR`). |
+| `geokit fetch osm --aoi <poly.shp> --layers road,river,building --out <dir>` | Download OpenStreetMap vectors for any AOI (auto UTM→WGS84) into clean GeoJSON (**100% native Rust, zero ArcGIS needed**). |
+| `geokit fetch dem --aoi <poly.shp> --out <dir>` | Download free 30m SRTM elevation tiles (`.hgt`) covering any AOI (**100% native Rust, zero API key**). |
+| `geokit webmap <layer.shp\|.geojson> --field KELAS --out <map.html>` | Export any UTM/WGS84 shapefile or GeoJSON into a single self-contained interactive Leaflet HTML webmap with satellite basemap, popups, opacity slider & area chart (**100% native Rust**). |
 | `geokit hydro delineate <dem.tif> --out <dir> [--threshold 1000] [--pour-point <outlet.shp>]` | Automated DAS pipeline: `Fill` → `FlowDirection` → `FlowAccumulation` → `Streams (.shp)` → `Watershed (.shp)`. |
 | `geokit hydro basin <dem.tif> --out <dir>` | Automatically delineate all drainage basins from a DEM into a polygon shapefile. |
 
@@ -247,7 +253,7 @@ tabular = "05_Tabular"
 
 ### 6. Built-in MCP Server (`geokit mcp`) & ArcMap 10.x Support
 
-`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio` exposing **15 GIS tools** and **3 built-in GIS SOP Playbook Prompts** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — see [AGENT_GUIDE.md](AGENT_GUIDE.md)), allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run end-to-end GIS workflows natively.
+`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio` exposing **18 GIS tools** and **3 built-in GIS SOP Playbook Prompts** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — see [AGENT_GUIDE.md](AGENT_GUIDE.md)), allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run end-to-end GIS workflows natively.
 
 Add to your MCP client configuration:
 

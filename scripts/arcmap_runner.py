@@ -1393,6 +1393,91 @@ def cmd_raster_interpolate(payload):
     return 0
 
 
+def cmd_raster_index(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Float, Raster, Con, Reclassify, RemapRange
+
+    idx_type = (payload.get("index_type") or "ndvi").lower()
+    b1 = Float(Raster(payload["band_a"]))
+    b2 = Float(Raster(payload["band_b"]))
+    out_r = payload["out"]
+    parent = os.path.dirname(out_r)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent)
+    if arcpy.Exists(out_r):
+        arcpy.Delete_management(out_r)
+
+    denom = b1 + b2
+    if idx_type == "savi":
+        # Soil-Adjusted Vegetation Index (L = 0.5)
+        res = Con((denom + 0.5) != 0, ((b1 - b2) / (denom + 0.5)) * 1.5, 0.0)
+    else:
+        # NDVI, NDWI, NDBI, NBR all follow normalized difference (A - B) / (A + B)
+        res = Con(denom != 0, (b1 - b2) / denom, 0.0)
+    res.save(out_r)
+    print("OK Spectral index (%s) -> %s" % (idx_type.upper(), out_r))
+
+    n_classes = payload.get("classes")
+    poly_out = payload.get("polygon_out")
+    if n_classes or poly_out:
+        n_cls = int(n_classes or 5)
+        step = 2.0 / float(n_cls)
+        ranges = [[-1.001 + i * step, -1.0 + (i + 1) * step + (0.001 if i == n_cls - 1 else 0.0), i + 1] for i in range(n_cls)]
+        cls_tif = os.path.join(arcpy.env.scratchFolder, "geokit_idx_cls.tif")
+        if arcpy.Exists(cls_tif):
+            arcpy.Delete_management(cls_tif)
+        Reclassify(out_r, "Value", RemapRange(ranges), "NODATA").save(cls_tif)
+        if poly_out:
+            p_parent = os.path.dirname(poly_out)
+            if p_parent and not os.path.exists(p_parent):
+                os.makedirs(p_parent)
+            raw_poly = os.path.join(arcpy.env.scratchGDB, "geokit_idx_raw_poly")
+            if arcpy.Exists(raw_poly):
+                arcpy.Delete_management(raw_poly)
+            if arcpy.Exists(poly_out):
+                arcpy.Delete_management(poly_out)
+            arcpy.RasterToPolygon_conversion(cls_tif, raw_poly, "SIMPLIFY", "Value")
+            arcpy.Dissolve_management(raw_poly, poly_out, ["gridcode"])
+            arcpy.AddField_management(poly_out, "KELAS", "TEXT", field_length=32)
+            with arcpy.da.UpdateCursor(poly_out, ["gridcode", "KELAS"]) as cur:
+                for row in cur:
+                    row[1] = "%s Kelas %s" % (idx_type.upper(), row[0])
+                    cur.updateRow(row)
+            print("OK Classified %s polygon (%d classes) -> %s" % (idx_type.upper(), n_cls, poly_out))
+    return 0
+
+
+def cmd_raster_contour(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Contour
+
+    in_dem = payload["input"]
+    out_fc = payload["out"]
+    interval = float(payload.get("interval") or 25.0)
+    base_c = float(payload.get("base_contour") or 0.0)
+    idx_every = int(payload.get("index_every") or 4)
+    parent = os.path.dirname(out_fc)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent)
+    if arcpy.Exists(out_fc):
+        arcpy.Delete_management(out_fc)
+
+    Contour(in_dem, out_fc, interval, base_c)
+    arcpy.AddField_management(out_fc, "INDEX_KTR", "SHORT")
+    idx_step = interval * float(idx_every)
+    cnt = 0
+    with arcpy.da.UpdateCursor(out_fc, ["Contour", "INDEX_KTR"]) as cur:
+        for row in cur:
+            cnt += 1
+            val = float(row[0] or 0.0)
+            rem = abs((val - base_c) % idx_step)
+            is_idx = 1 if (rem < 1e-3 or abs(rem - idx_step) < 1e-3) else 0
+            row[1] = is_idx
+            cur.updateRow(row)
+    print("OK Contours (interval=%.2f, index every %d -> %d lines) -> %s" % (interval, idx_every, cnt, out_fc))
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -1428,6 +1513,8 @@ HANDLERS = {
     "raster_reclass": cmd_raster_reclass,
     "raster_weighted_sum": cmd_raster_weighted_sum,
     "raster_interpolate": cmd_raster_interpolate,
+    "raster_index": cmd_raster_index,
+    "raster_contour": cmd_raster_contour,
     "hydro_delineate": cmd_hydro_delineate,
     "hydro_basin": cmd_hydro_basin,
 }

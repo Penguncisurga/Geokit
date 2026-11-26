@@ -288,9 +288,12 @@ pub enum LiveCommand {
         /// Comma-separated layer names to remove from the Layout Legend (e.g. "hillshade,Basemap")
         #[arg(long)]
         hide_legend: Option<String>,
-        /// Add UTM MeasuredGrid on the MapFrame (default: true for perkabig template)
+        /// Add grid/graticule on the MapFrame (default: true for perkabig template)
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         grid: bool,
+        /// Grid mode for perkabig layout: utm (default black UTM), dms (blue WGS84 DMS), or dual (RBI Cetak UTM + DMS!)
+        #[arg(long, default_value = "utm")]
+        grid_mode: String,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
@@ -816,6 +819,7 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
             zoom_layer,
             hide_legend,
             grid,
+            grid_mode,
             port,
         } => send_live_request(
             port,
@@ -837,6 +841,7 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
                 "zoom_layer": zoom_layer,
                 "hide_legend": hide_legend,
                 "grid": grid,
+                "grid_mode": grid_mode,
             }),
         )?,
         LiveCommand::RunGp { tool, args, port } => send_live_request(

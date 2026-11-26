@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod clean;
 pub mod doctor;
+pub mod fetch;
 pub mod gp;
 pub mod hydro;
 pub mod init;
@@ -15,3 +16,4 @@ pub mod raster;
 pub mod report;
 pub mod sanitize;
 pub mod toolbox;
+pub mod webmap;

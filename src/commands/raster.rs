@@ -105,6 +105,44 @@ pub enum RasterCommand {
         #[arg(long)]
         mask: Option<PathBuf>,
     },
+    /// Calculate remote sensing spectral indices (NDVI, NDWI, NDBI, SAVI, NBR) from satellite bands
+    Index {
+        /// Spectral index type: ndvi, ndwi, ndbi, savi, or nbr
+        #[arg(long = "type", value_name = "INDEX")]
+        index_type: String,
+        /// Band A raster path (NIR for NDVI/SAVI/NBR, Green for NDWI, SWIR1 for NDBI)
+        #[arg(long)]
+        band_a: PathBuf,
+        /// Band B raster path (Red for NDVI/SAVI, NIR for NDWI/NDBI, SWIR2 for NBR)
+        #[arg(long)]
+        band_b: PathBuf,
+        /// Output floating-point spectral index GeoTIFF path
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Optional number of discrete classes (e.g. 5) to classify & optionally export polygon
+        #[arg(long)]
+        classes: Option<usize>,
+        /// Optional classified polygon shapefile path
+        #[arg(long)]
+        polygon_out: Option<PathBuf>,
+    },
+    /// Generate topographic contour lines from a DEM with BIG RBI index-contour flag (INDEX_KTR)
+    Contour {
+        /// Input DEM raster path (.tif, .hgt, .img)
+        input: PathBuf,
+        /// Contour interval in elevation units (e.g. 12.5, 25, 50)
+        #[arg(long, default_value_t = 25.0)]
+        interval: f64,
+        /// Output contour polyline shapefile or .gdb feature class
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Base contour elevation (default: 0.0)
+        #[arg(long, default_value_t = 0.0)]
+        base: f64,
+        /// Mark every Nth contour as an Index Contour (INDEX_KTR = 1; default: 4 per BIG RBI)
+        #[arg(long, default_value_t = 4)]
+        index_every: usize,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -126,6 +164,12 @@ struct RasterPayload {
     method: Option<String>,
     cell_size: Option<f64>,
     mask: Option<String>,
+    index_type: Option<String>,
+    band_a: Option<String>,
+    band_b: Option<String>,
+    interval: Option<f64>,
+    base_contour: Option<f64>,
+    index_every: Option<usize>,
 }
 
 pub fn run(
@@ -317,6 +361,70 @@ pub fn run(
                 method: Some(method.to_ascii_lowercase()),
                 cell_size,
                 mask: mask.as_deref().map(abs_string),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Index {
+            index_type,
+            band_a,
+            band_b,
+            out,
+            classes,
+            polygon_out,
+        } => {
+            if !band_a.exists() {
+                bail!("Band A raster does not exist: {}", band_a.display());
+            }
+            if !band_b.exists() {
+                bail!("Band B raster does not exist: {}", band_b.display());
+            }
+            if resolved == ResolvedBackend::Gdal {
+                bail!("`geokit raster index` requires ArcGIS Pro or ArcMap 10.x Spatial Analyst.");
+            }
+            let payload = RasterPayload {
+                action: "raster_index".into(),
+                input: abs_string(&band_a),
+                out: abs_string(&out),
+                index_type: Some(index_type.to_ascii_lowercase()),
+                band_a: Some(abs_string(&band_a)),
+                band_b: Some(abs_string(&band_b)),
+                classes,
+                polygon_out: polygon_out.as_deref().map(abs_string),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Contour {
+            input,
+            interval,
+            out,
+            base,
+            index_every,
+        } => {
+            if !input.exists() {
+                bail!("Input DEM does not exist: {}", input.display());
+            }
+            if resolved == ResolvedBackend::Gdal {
+                bail!(
+                    "`geokit raster contour` requires ArcGIS Pro or ArcMap 10.x Spatial Analyst."
+                );
+            }
+            let payload = RasterPayload {
+                action: "raster_contour".into(),
+                input: abs_string(&input),
+                out: abs_string(&out),
+                interval: Some(interval),
+                base_contour: Some(base),
+                index_every: Some(index_every.max(1)),
                 ..Default::default()
             };
             if resolved == ResolvedBackend::Arcmap {

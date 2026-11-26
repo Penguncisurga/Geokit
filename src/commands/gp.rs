@@ -255,6 +255,23 @@ pub enum GpCommand {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Generate a ready-to-publish class area/count summary table (Markdown, CSV, HTML, or JSON) — 100% native Rust, zero ArcGIS needed!
+    Summary {
+        /// Input shapefile (.shp) or GeoJSON (.geojson)
+        input: PathBuf,
+        /// Attribute field to group by (e.g. KELAS, TUTUPAN, KECAMATAN)
+        #[arg(long)]
+        group_by: String,
+        /// Optional numeric area/value field to sum (auto-detects AREA_HA / LUAS_HA / AREA_KM2 if omitted)
+        #[arg(long)]
+        area_field: Option<String>,
+        /// Optional output file path (.md, .csv, .html, or .json)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Print JSON summary to stdout
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -292,6 +309,24 @@ pub fn run(
     cfg: &GeokitConfig,
     backend: EngineBackend,
 ) -> Result<()> {
+    // 100% native Rust summary runs in milliseconds without ArcGIS or GDAL!
+    if let GpCommand::Summary {
+        input,
+        group_by,
+        area_field,
+        out,
+        json: as_json,
+    } = cmd
+    {
+        return run_native_summary(
+            &input,
+            &group_by,
+            area_field.as_deref(),
+            out.as_deref(),
+            as_json,
+        );
+    }
+
     let resolved = resolve_backend(backend, override_propy, cfg.arcgis.arcmap_python.as_deref());
     if resolved == ResolvedBackend::Gdal {
         let gdal = detect_gdal();
@@ -712,6 +747,7 @@ pub fn run(
                 ..Default::default()
             }
         }
+        GpCommand::Summary { .. } => unreachable!(),
     };
 
     if resolved == ResolvedBackend::Arcmap {
@@ -719,4 +755,226 @@ pub fn run(
     } else {
         run_arcpy_job(override_propy, &payload)
     }
+}
+
+fn run_native_summary(
+    input: &Path,
+    group_by: &str,
+    area_field: Option<&str>,
+    out: Option<&Path>,
+    as_json: bool,
+) -> Result<()> {
+    use crate::gis::shp::read_dbf_records;
+    use comfy_table::{presets::UTF8_FULL, Table};
+    use serde_json::{json, Map, Value};
+    use std::collections::BTreeMap;
+
+    if !input.is_file() {
+        bail!("Input dataset does not exist: {}", input.display());
+    }
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let records: Vec<Map<String, Value>> = if ext == "shp" || ext == "dbf" {
+        read_dbf_records(&input.with_extension("dbf"))?
+    } else if ext == "geojson" || ext == "json" {
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(input)?)?;
+        v.get("features")
+            .and_then(|f| f.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|f| f.get("properties").and_then(|p| p.as_object()).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        bail!("`geokit gp summary` supports .shp, .dbf, or .geojson files.");
+    };
+
+    if records.is_empty() {
+        bail!("No records found in {}", input.display());
+    }
+
+    let first_keys: Vec<String> = records[0].keys().cloned().collect();
+    let grp_key = first_keys
+        .iter()
+        .find(|k| k.eq_ignore_ascii_case(group_by))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Field '{}' not found. Available fields: {}",
+                group_by,
+                first_keys.join(", ")
+            )
+        })?;
+
+    let area_key = if let Some(af) = area_field {
+        first_keys
+            .iter()
+            .find(|k| k.eq_ignore_ascii_case(af))
+            .cloned()
+    } else {
+        ["AREA_HA", "LUAS_HA", "AREA_KM2", "AREA_M2", "LUAS", "AREA"]
+            .iter()
+            .find_map(|cand| {
+                first_keys
+                    .iter()
+                    .find(|k| k.eq_ignore_ascii_case(cand))
+                    .cloned()
+            })
+    };
+
+    let mut groups: BTreeMap<String, (usize, f64)> = BTreeMap::new();
+    for rec in &records {
+        let label = match rec.get(&grp_key) {
+            Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => "(Kosong)".to_string(),
+        };
+        let area = area_key
+            .as_ref()
+            .and_then(|ak| rec.get(ak))
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
+            })
+            .unwrap_or(0.0);
+        let entry = groups.entry(label).or_insert((0, 0.0));
+        entry.0 += 1;
+        entry.1 += area;
+    }
+
+    let total_count: usize = groups.values().map(|(c, _)| *c).sum();
+    let total_area: f64 = groups.values().map(|(_, a)| *a).sum();
+    let has_area = area_key.is_some() && total_area > 0.0;
+    let area_col_name = area_key.as_deref().unwrap_or("AREA");
+
+    let mut rows_json = Vec::new();
+    for (k, (cnt, area)) in &groups {
+        let pct = if has_area {
+            (*area / total_area) * 100.0
+        } else if total_count > 0 {
+            (*cnt as f64 / total_count as f64) * 100.0
+        } else {
+            0.0
+        };
+        rows_json.push(json!({
+            "class": k,
+            "count": cnt,
+            "area": (area * 100.0).round() / 100.0,
+            "percent": (pct * 100.0).round() / 100.0,
+        }));
+    }
+
+    let summary_obj = json!({
+        "dataset": input.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        "group_by": grp_key,
+        "area_field": area_key,
+        "total_features": total_count,
+        "total_area": (total_area * 100.0).round() / 100.0,
+        "classes": rows_json,
+    });
+
+    if let Some(out_path) = out {
+        if let Some(parent) = out_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let oext = out_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("md")
+            .to_ascii_lowercase();
+        let content = if oext == "json" {
+            serde_json::to_string_pretty(&summary_obj)?
+        } else if oext == "csv" {
+            let mut s = format!("{grp_key},Jumlah_Fitur,{area_col_name},Persen\n");
+            for (k, (cnt, area)) in &groups {
+                let pct = if has_area {
+                    (*area / total_area) * 100.0
+                } else {
+                    (*cnt as f64 / total_count as f64) * 100.0
+                };
+                s.push_str(&format!(
+                    "\"{}\",{},{:.2},{:.2}\n",
+                    k.replace('"', "\"\""),
+                    cnt,
+                    area,
+                    pct
+                ));
+            }
+            s.push_str(&format!(
+                "\"TOTAL\",{},{:.2},100.00\n",
+                total_count, total_area
+            ));
+            s
+        } else if oext == "html" {
+            let mut trs = String::new();
+            for (k, (cnt, area)) in &groups {
+                let pct = if has_area {
+                    (*area / total_area) * 100.0
+                } else {
+                    (*cnt as f64 / total_count as f64) * 100.0
+                };
+                trs.push_str(&format!(
+                    "<tr><td>{}</td><td style='text-align:right'>{}</td><td style='text-align:right'>{:.2}</td><td style='text-align:right'>{:.2}%</td></tr>\n",
+                    k, cnt, area, pct
+                ));
+            }
+            format!(
+                "<!doctype html><html><head><meta charset='utf-8'><title>Rekap {grp_key}</title><style>body{{font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:2rem auto;color:#1e293b}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #cbd5e1;padding:8px 12px}}th{{background:#0f172a;color:#fff}}tfoot td{{font-weight:700;background:#f1f5f9}}</style></head><body><h2>Rekapitulasi Kelas ({grp_key})</h2><table><thead><tr><th>{grp_key}</th><th>Fitur</th><th>{area_col_name}</th><th>Persentase</th></tr></thead><tbody>{trs}</tbody><tfoot><tr><td>TOTAL</td><td style='text-align:right'>{total_count}</td><td style='text-align:right'>{total_area:.2}</td><td style='text-align:right'>100.00%</td></tr></tfoot></table></body></html>"
+            )
+        } else {
+            let mut s = format!("| {grp_key} | Fitur | {area_col_name} | Persentase (%) |\n| :--- | ---: | ---: | ---: |\n");
+            for (k, (cnt, area)) in &groups {
+                let pct = if has_area {
+                    (*area / total_area) * 100.0
+                } else {
+                    (*cnt as f64 / total_count as f64) * 100.0
+                };
+                s.push_str(&format!("| {k} | {cnt} | {area:.2} | {pct:.2}% |\n"));
+            }
+            s.push_str(&format!(
+                "| **TOTAL** | **{total_count}** | **{total_area:.2}** | **100.00%** |\n"
+            ));
+            s
+        };
+        std::fs::write(out_path, content)?;
+        if !as_json {
+            println!("OK Exported summary table -> {}", out_path.display());
+        }
+    }
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&summary_obj)?);
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_header(vec![grp_key.as_str(), "Fitur", area_col_name, "Persen (%)"]);
+    for (k, (cnt, area)) in &groups {
+        let pct = if has_area {
+            (*area / total_area) * 100.0
+        } else {
+            (*cnt as f64 / total_count as f64) * 100.0
+        };
+        table.add_row(vec![
+            k.clone(),
+            cnt.to_string(),
+            format!("{area:.2}"),
+            format!("{pct:.2}%"),
+        ]);
+    }
+    table.add_row(vec![
+        "TOTAL".into(),
+        total_count.to_string(),
+        format!("{total_area:.2}"),
+        "100.00%".into(),
+    ]);
+    println!("{table}");
+    Ok(())
 }

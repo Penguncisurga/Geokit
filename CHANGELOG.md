@@ -4,6 +4,23 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-11-26
+
+### Added
+- **PerKaBIG RBI Cetak Polish & Dual Grid (`--grid-mode utm|dms|dual`)**:
+  - Upgraded PerKaBIG A4/A3 typography across all 7 right-panel sections (centered bold 3-line header `9.2/7.0/11.8 pt`, bold `40 pt` North Arrow + `9.0 pt` `SKALA 1 : N` + round `km`/`m` alternating scale bar with crisp `7.0 pt` labels, larger `6.8 pt` Projection/Author blocks, `7.0 pt` vertical L/R UTM labels).
+  - Added `--grid-mode dual` (official BIG RBI Cetak dual grid: black UTM vertical L/R + blue `#0070C0` WGS84 DMS graticule!).
+- **`geokit fetch` — Public Open GIS Data Downloader *(100% Native Rust, Zero ArcGIS Needed)***:
+  - `geokit fetch osm --aoi <poly.shp|geojson> --layers road,river,building --out <dir>` — extracts WGS84 bbox automatically (built-in pure-Rust `.shp` + `.prj` UTM→WGS84 inverse Transverse Mercator!) and downloads OpenStreetMap layers via Overpass API straight into GeoJSON.
+  - `geokit fetch dem --aoi <poly.shp|geojson> --out <dir>` — downloads & decompresses free 30m SRTM `.hgt` elevation tiles from AWS Terrain Tiles.
+- **Remote Sensing, Contours & Class Summary Tables**:
+  - `geokit raster index --type ndvi|ndwi|ndbi|savi|nbr --band-a <b1.tif> --band-b <b2.tif> --out <idx.tif> [--classes 5 --polygon-out <poly.shp>]`
+  - `geokit raster contour <dem.tif> --interval 25 --out <kontur.shp> [--index-every 4]` (automatically computes BIG RBI `INDEX_KTR` index contour flag!).
+  - `geokit gp summary <input.shp|.geojson> --group-by KELAS [--area-field AREA_HA] [--out <rekap.md|.csv|.html>]` — 100% native Rust millisecond class area & percentage tables ready for Word/Excel/Markdown reports!
+- **`geokit webmap` — Single-File Interactive HTML WebMap *(100% Native Rust, Zero ArcGIS Needed)***:
+  - `geokit webmap <input.shp|.geojson> --field KELAS --preset hazard-pastel --title "..." --out <map.html>` — converts any UTM or WGS84 shapefile/GeoJSON directly into a standalone Leaflet HTML webmap with basemap switcher (Satellite/OSM/Light/Topo/Dark), opacity slider, hover/click attribute popups, and a live class-area percentage bar chart.
+- **MCP Server (`18 tools`)**: Added `geokit_fetch`, `geokit_webmap`, `geokit_summary`, plus `index`/`contour` on `geokit_raster` and `grid_mode` on `geokit_live`.
+
 ## [2.2.0] - 2026-11-26
 
 ### Added

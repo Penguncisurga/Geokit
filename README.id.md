@@ -125,6 +125,7 @@ geokit clean ./proyek_das
 - **`geokit gp classify <input> --field <asal> --out-field <tujuan> --rules "<aturan>"`** — Skoring & klasifikasi otomatis berbasis kategori (`"Hutan=1;Sawah=3"`) atau rentang angka (`"<=8:1;8-15:2;>15:3"`).
 - **`geokit gp calc-field <input> --field <tujuan> --expr "<rumus>"`** — Hitung total skor berbobot/rumus matematika antar kolom dengan aman (`"0.4 * SKOR_LERENG + 0.6 * SKOR_TANAH"`).
 - **`geokit gp union <layer1> <layer2> [...] --out <out>`** — Overlay (*Union*) beberapa layer poligon (atau seluruh folder/`.gdb`) sekaligus untuk analisis kerawanan/kesesuaian multi-parameter.
+- **`geokit gp summary <layer.shp|.geojson> --group-by KELAS [--out rekap.md|.csv|.html]`** — Buat tabel rekap luas (ha) & persentase (%) per kelas siap tempel ke Bab IV Word/Excel (**100% native Rust, tanpa butuh ArcGIS**).
 
 > **Backend GDAL / QGIS:** Gunakan `--engine gdal` (atau otomatis via `--engine auto` jika ArcGIS Pro tidak terpasang) untuk menjalankan `info`, `project`, `clip`, `merge`, `pack` (`.gpkg`), dan `unpack` lewat `ogr2ogr` / `gdalwarp` (otomatis terdeteksi dari `PATH` maupun folder QGIS di Windows).
 
@@ -166,6 +167,11 @@ geokit map broken-links ./04_Projects
 - **`geokit raster reclass <in.tif> --rules "0-8:1;8-15:2;>15:3" --out <cls.tif> [--smooth]`** — Reklasifikasi raster kontinu ke kelas diskrit dengan opsi penghalusan *MajorityFilter* (`--smooth`).
 - **`geokit raster weighted-sum --inputs "r1.tif:0.4,r2.tif:0.6" --out <out.tif> [--classes 5 --polygon-out <poly.shp> --smooth]`** — Overlay raster berbobot multi-parameter, otomatis reklasifikasi 1..N dan opsional ekspor langsung ke poligon bersih ter-*dissolve* (`KELAS`, `AREA_HA`).
 - **`geokit raster interpolate <titik.shp> --field <kolom> --out <permukaan.tif> [--method idw|spline|kriging] [--mask <aoi>]`** — Interpolasi spasial data titik (mis. stasiun hujan/bor) menggunakan IDW, Spline, atau Ordinary Kriging.
+- **`geokit raster index --type ndvi|ndwi|ndbi|savi|nbr --band-a <b1> --band-b <b2> --out <idx.tif>`** — Hitung indeks citra satelit (NDVI, NDWI, NDBI, SAVI, NBR) lengkap dengan opsi ekspor poligon kelas.
+- **`geokit raster contour <dem.tif> --interval 25 --out <kontur.shp> [--index-every 4]`** — Buat garis kontur dari DEM lengkap dengan kolom `INDEX_KTR` (kontur indeks standar BIG RBI).
+- **`geokit fetch osm --aoi <batas.shp> --layers road,river,building --out <folder>`** — Unduh otomatis data OpenStreetMap (jalan/sungai/bangunan) langsung sesuai AOI UTM/WGS84 jadi GeoJSON (**100% native Rust, tanpa ArcGIS**).
+- **`geokit fetch dem --aoi <batas.shp> --out <folder>`** — Unduh gratis DEM SRTM 30m (`.hgt`) sesuai AOI (**100% native Rust, tanpa API key**).
+- **`geokit webmap <layer.shp|.geojson> --field KELAS --out <peta.html>`** — Ekspor shapefile UTM/WGS84 atau GeoJSON menjadi **1 file `.html` peta interaktif** (Leaflet + citra satelit + popup + slider transparansi + grafik luas) yang bisa dibuka di HP/browser tanpa install GIS!
 - **`geokit hydro delineate <dem.tif> --out <folder> [--threshold 1000] [--pour-point <outlet.shp>]`** — Pipeline delineasi DAS otomatis: `Fill` → `FlowDirection` → `FlowAccumulation` → `Jaringan Sungai (.shp)` → `Poligon DAS (.shp)`.
 - **`geokit hydro basin <dem.tif> --out <folder>`** — Delineasi otomatis seluruh poligon *Basin* dari DEM tanpa perlu titik outlet.
 
@@ -200,7 +206,7 @@ Kamu bisa mengubah nama folder `organize`, default EPSG untuk `gp project`, defa
 
 ### 6. Built-in MCP Server (`geokit mcp`) & Dukungan ArcMap 10.x (`.mxd`)
 
-`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio` dengan **15 tool GIS** dan **3 SOP Playbook Prompt bawaan** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — lihat [AGENT_GUIDE.md](AGENT_GUIDE.md)), sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa mengolah folder bahan mentah menjadi peta analisis lengkap secara otomatis!
+`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio` dengan **18 tool GIS** dan **3 SOP Playbook Prompt bawaan** (`peta_kerawanan`, `peta_persebaran`, `analisis_das` — lihat [AGENT_GUIDE.md](AGENT_GUIDE.md)), sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa mengolah folder bahan mentah menjadi peta analisis lengkap secara otomatis!
 
 Tambahkan ke konfigurasi MCP client kamu:
 

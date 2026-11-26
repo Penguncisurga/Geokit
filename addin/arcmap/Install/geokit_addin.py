@@ -483,6 +483,7 @@ def _handle_command_on_ui_thread(req):
         zoom_layer = req.get("zoom_layer")
         hide_legend_raw = req.get("hide_legend")
         add_grid = bool(req.get("grid", True))
+        grid_mode = (req.get("grid_mode") or "utm").lower()
 
         if template == "perkabig" or view == "layout":
             mxd.activeView = "PAGE_LAYOUT"
@@ -542,6 +543,7 @@ def _handle_command_on_ui_thread(req):
                     span_meters=span_m,
                     hide_legend_names=hide_names,
                     add_grid=add_grid,
+                    grid_mode=grid_mode,
                 )
             finally:
                 _ao._release(mxdoc)

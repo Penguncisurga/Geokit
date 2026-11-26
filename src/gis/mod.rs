@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod scanner;
+pub mod shp;
 
 use serde::Serialize;
 

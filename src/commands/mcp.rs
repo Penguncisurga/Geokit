@@ -360,25 +360,31 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_raster",
-            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, or point-to-raster interpolation (IDW/Spline/Kriging).",
+            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, point-to-raster interpolation (IDW/Spline/Kriging), satellite spectral index (NDVI/NDWI/NDBI/SAVI/NBR), or topographic contour lines (with BIG INDEX_KTR).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate"] },
-                    "input": { "type": "string", "description": "Input raster, point layer (for interpolate), or folder" },
+                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate", "index", "contour"] },
+                    "input": { "type": "string", "description": "Input raster, point layer (for interpolate), DEM (for contour), or folder" },
                     "inputs": { "type": "string", "description": "Comma-separated '<raster>:<weight>' pairs (for weighted-sum)" },
                     "out": { "type": "string", "description": "Output file or directory" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"] },
                     "zones": { "type": "string", "description": "Zone polygon path (for zonal-stats)" },
                     "zone_field": { "type": "string", "description": "Zone field name (for zonal-stats)" },
-                    "rules": { "type": "string", "description": "ArcGIS Reclassify remap string (for reclass)" },
+                    "rules": { "type": "string", "description": "Reclassify remap string e.g. '<=8:1;8-15:2;>15:3' (for reclass)" },
                     "smooth": { "type": "boolean", "description": "Apply MajorityFilter smoothing (for reclass or weighted-sum)" },
-                    "classes": { "type": "integer", "description": "Optional number of classes (for weighted-sum)" },
-                    "polygon_out": { "type": "string", "description": "Optional classified polygon output path (for weighted-sum)" },
+                    "classes": { "type": "integer", "description": "Optional number of classes (for weighted-sum or index)" },
+                    "polygon_out": { "type": "string", "description": "Optional classified polygon output path (for weighted-sum or index)" },
                     "field": { "type": "string", "description": "Value field to interpolate (for interpolate)" },
                     "method": { "type": "string", "enum": ["idw", "spline", "kriging"], "description": "Interpolation method (for interpolate)" },
                     "cell_size": { "type": "number", "description": "Output cell size in map units (for interpolate)" },
-                    "mask": { "type": "string", "description": "Optional polygon mask/AOI (for interpolate)" }
+                    "mask": { "type": "string", "description": "Optional polygon mask/AOI (for interpolate)" },
+                    "index_type": { "type": "string", "enum": ["ndvi", "ndwi", "ndbi", "savi", "nbr"], "description": "Spectral index formula (for index)" },
+                    "band_a": { "type": "string", "description": "Band A raster path e.g. NIR/Green/SWIR1 (for index)" },
+                    "band_b": { "type": "string", "description": "Band B raster path e.g. Red/NIR/SWIR2 (for index)" },
+                    "interval": { "type": "number", "description": "Contour elevation interval e.g. 12.5 or 25 (for contour)" },
+                    "base": { "type": "number", "description": "Base contour elevation (for contour)" },
+                    "index_every": { "type": "integer", "description": "Index contour interval count (default 4 per BIG RBI, for contour)" }
                 },
                 "required": ["action", "out"]
             }
@@ -459,7 +465,8 @@ fn tool_definitions() -> Value {
                     "note": { "type": "string", "description": "Footer disclaimer/note text" },
                     "logo": { "type": "string", "description": "Optional PNG logo path for institution block" },
                     "inset_layer": { "type": "string", "description": "Optional context polygon shapefile (e.g. Province boundaries) to build an automatic DIAGRAM LOKASI inset map with red extent box" },
-                    "grid": { "type": "boolean", "description": "Attach vertical-L/R round UTM MeasuredGrid to MapFrame (for perkabig layout)" },
+                    "grid": { "type": "boolean", "description": "Attach grid/graticule to MapFrame (for perkabig layout)" },
+                    "grid_mode": { "type": "string", "enum": ["utm", "dms", "dual"], "description": "Grid mode: utm (black UTM), dms (blue WGS84), or dual (RBI Cetak UTM + DMS)" },
                     "width": { "type": "number", "description": "Line width in pt for polylines" },
                     "size": { "type": "number", "description": "Marker size in pt for points" },
                     "marker": { "type": "string", "enum": ["circle", "square", "diamond", "cross", "x"], "description": "Marker shape for points" },
@@ -537,6 +544,52 @@ fn tool_definitions() -> Value {
                     "out": { "type": "string", "description": "Output report file path (.md, .html, or .json)" }
                 },
                 "required": ["path", "out"]
+            }
+        },
+        {
+            "name": "geokit_fetch",
+            "description": "Download free public spatial data (OpenStreetMap roads/rivers/buildings/boundary/poi or 30m SRTM DEM tiles) for any AOI shapefile, GeoJSON, or WGS84 bbox (100% native Rust, zero ArcGIS needed).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string", "enum": ["osm", "dem"], "description": "Data source: osm or dem" },
+                    "aoi": { "type": "string", "description": "Optional AOI .shp or .geojson file path" },
+                    "bbox": { "type": "string", "description": "Optional WGS84 bbox 'min_lon,min_lat,max_lon,max_lat'" },
+                    "layers": { "type": "string", "description": "Comma-separated OSM layers: road,river,building,boundary,poi (for osm)" },
+                    "out": { "type": "string", "description": "Output directory path" }
+                },
+                "required": ["source", "out"]
+            }
+        },
+        {
+            "name": "geokit_webmap",
+            "description": "Export any .shp or .geojson layer into a single self-contained interactive Leaflet HTML webmap with basemap switcher, class colors, opacity slider, popups, and area bar chart (zero ArcGIS needed).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string", "description": "Input .shp or .geojson path" },
+                    "out": { "type": "string", "description": "Output standalone .html path" },
+                    "field": { "type": "string", "description": "Optional attribute field to colorize & summarize (e.g. KELAS)" },
+                    "preset": { "type": "string", "enum": ["hazard-pastel", "hazard", "viridis", "blue", "category"] },
+                    "title": { "type": "string", "description": "Header card title" },
+                    "basemap": { "type": "string", "enum": ["satellite", "osm", "light", "topo", "dark"] },
+                    "simplify": { "type": "number", "description": "Simplification tolerance in degrees (default: 0.0001)" }
+                },
+                "required": ["input", "out"]
+            }
+        },
+        {
+            "name": "geokit_summary",
+            "description": "Compute ready-to-publish class count, total area (ha), and percentage (%) summary tables from any .shp or .geojson into Markdown, CSV, HTML, or JSON (100% native Rust, zero ArcGIS needed).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string", "description": "Input .shp or .geojson path" },
+                    "group_by": { "type": "string", "description": "Attribute field to group by (e.g. KELAS)" },
+                    "area_field": { "type": "string", "description": "Optional numeric area field (auto-detects AREA_HA/LUAS_HA)" },
+                    "out": { "type": "string", "description": "Optional export path (.md, .csv, .html, or .json)" }
+                },
+                "required": ["input", "group_by"]
             }
         }
     ]"#,
@@ -797,6 +850,24 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             if let Some(msk) = str_arg(args, "mask") {
                 cli_args.extend(["--mask".into(), msk.into()]);
             }
+            if let Some(it) = str_arg(args, "index_type") {
+                cli_args.extend(["--type".into(), it.into()]);
+            }
+            if let Some(ba) = str_arg(args, "band_a") {
+                cli_args.extend(["--band-a".into(), ba.into()]);
+            }
+            if let Some(bb) = str_arg(args, "band_b") {
+                cli_args.extend(["--band-b".into(), bb.into()]);
+            }
+            if let Some(iv) = args.get("interval").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--interval".into(), iv.to_string()]);
+            }
+            if let Some(bs) = args.get("base").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--base".into(), bs.to_string()]);
+            }
+            if let Some(ie) = args.get("index_every").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--index-every".into(), ie.to_string()]);
+            }
         }
         "geokit_hydro" => {
             let (Some(action), Some(dem), Some(out)) = (
@@ -951,6 +1022,9 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             if let Some(gr) = args.get("grid").and_then(|v| v.as_bool()) {
                 cli_args.extend(["--grid".into(), gr.to_string()]);
             }
+            if let Some(gm) = str_arg(args, "grid_mode") {
+                cli_args.extend(["--grid-mode".into(), gm.into()]);
+            }
             if let Some(lyr) = str_arg(args, "lyr") {
                 cli_args.extend(["--lyr".into(), lyr.into()]);
             }
@@ -1034,6 +1108,62 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
                 return ("Missing required arguments: path, out".into(), true);
             };
             cli_args.extend(["report".into(), path.into(), "--out".into(), out.into()]);
+        }
+        "geokit_fetch" => {
+            let (Some(src), Some(out)) = (str_arg(args, "source"), str_arg(args, "out")) else {
+                return ("Missing required arguments: source, out".into(), true);
+            };
+            cli_args.extend(["fetch".into(), src.into(), "--out".into(), out.into()]);
+            if let Some(aoi) = str_arg(args, "aoi") {
+                cli_args.extend(["--aoi".into(), aoi.into()]);
+            }
+            if let Some(bbox) = str_arg(args, "bbox") {
+                cli_args.extend(["--bbox".into(), bbox.into()]);
+            }
+            if let Some(lyrs) = str_arg(args, "layers") {
+                cli_args.extend(["--layers".into(), lyrs.into()]);
+            }
+        }
+        "geokit_webmap" => {
+            let (Some(input), Some(out)) = (str_arg(args, "input"), str_arg(args, "out")) else {
+                return ("Missing required arguments: input, out".into(), true);
+            };
+            cli_args.extend(["webmap".into(), input.into(), "--out".into(), out.into()]);
+            if let Some(f) = str_arg(args, "field") {
+                cli_args.extend(["--field".into(), f.into()]);
+            }
+            if let Some(p) = str_arg(args, "preset") {
+                cli_args.extend(["--preset".into(), p.into()]);
+            }
+            if let Some(t) = str_arg(args, "title") {
+                cli_args.extend(["--title".into(), t.into()]);
+            }
+            if let Some(bm) = str_arg(args, "basemap") {
+                cli_args.extend(["--basemap".into(), bm.into()]);
+            }
+            if let Some(sm) = args.get("simplify").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--simplify".into(), sm.to_string()]);
+            }
+        }
+        "geokit_summary" => {
+            let (Some(input), Some(gb)) = (str_arg(args, "input"), str_arg(args, "group_by"))
+            else {
+                return ("Missing required arguments: input, group_by".into(), true);
+            };
+            cli_args.extend([
+                "gp".into(),
+                "summary".into(),
+                input.into(),
+                "--group-by".into(),
+                gb.into(),
+                "--json".into(),
+            ]);
+            if let Some(af) = str_arg(args, "area_field") {
+                cli_args.extend(["--area-field".into(), af.into()]);
+            }
+            if let Some(out) = str_arg(args, "out") {
+                cli_args.extend(["--out".into(), out.into()]);
+            }
         }
         _ => return (format!("Unknown tool: {name}"), true),
     }

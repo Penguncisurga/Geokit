@@ -1662,6 +1662,89 @@ def cmd_raster_interpolate(payload):
     return 0
 
 
+def cmd_raster_index(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Float, Raster, Con, Reclassify, RemapRange
+
+    idx_type = (payload.get("index_type") or "ndvi").lower()
+    b1 = Float(Raster(payload["band_a"]))
+    b2 = Float(Raster(payload["band_b"]))
+    out_r = payload["out"]
+    parent = os.path.dirname(out_r)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if arcpy.Exists(out_r):
+        arcpy.management.Delete(out_r)
+
+    denom = b1 + b2
+    if idx_type == "savi":
+        res = Con((denom + 0.5) != 0, ((b1 - b2) / (denom + 0.5)) * 1.5, 0.0)
+    else:
+        res = Con(denom != 0, (b1 - b2) / denom, 0.0)
+    res.save(out_r)
+    print(f"OK Spectral index ({idx_type.upper()}) -> {out_r}")
+
+    n_classes = payload.get("classes")
+    poly_out = payload.get("polygon_out")
+    if n_classes or poly_out:
+        n_cls = int(n_classes or 5)
+        step = 2.0 / float(n_cls)
+        ranges = [[-1.001 + i * step, -1.0 + (i + 1) * step + (0.001 if i == n_cls - 1 else 0.0), i + 1] for i in range(n_cls)]
+        cls_tif = os.path.join(arcpy.env.scratchFolder, "geokit_idx_cls.tif")
+        if arcpy.Exists(cls_tif):
+            arcpy.management.Delete(cls_tif)
+        Reclassify(out_r, "Value", RemapRange(ranges), "NODATA").save(cls_tif)
+        if poly_out:
+            p_parent = os.path.dirname(poly_out)
+            if p_parent:
+                os.makedirs(p_parent, exist_ok=True)
+            raw_poly = os.path.join(arcpy.env.scratchGDB, "geokit_idx_raw_poly")
+            if arcpy.Exists(raw_poly):
+                arcpy.management.Delete(raw_poly)
+            if arcpy.Exists(poly_out):
+                arcpy.management.Delete(poly_out)
+            arcpy.conversion.RasterToPolygon(cls_tif, raw_poly, "SIMPLIFY", "Value")
+            arcpy.management.Dissolve(raw_poly, poly_out, ["gridcode"])
+            arcpy.management.AddField(poly_out, "KELAS", "TEXT", field_length=32)
+            with arcpy.da.UpdateCursor(poly_out, ["gridcode", "KELAS"]) as cur:
+                for row in cur:
+                    row[1] = f"{idx_type.upper()} Kelas {row[0]}"
+                    cur.updateRow(row)
+            print(f"OK Classified {idx_type.upper()} polygon ({n_cls} classes) -> {poly_out}")
+    return 0
+
+
+def cmd_raster_contour(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Contour
+
+    in_dem = payload["input"]
+    out_fc = payload["out"]
+    interval = float(payload.get("interval") or 25.0)
+    base_c = float(payload.get("base_contour") or 0.0)
+    idx_every = int(payload.get("index_every") or 4)
+    parent = os.path.dirname(out_fc)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if arcpy.Exists(out_fc):
+        arcpy.management.Delete(out_fc)
+
+    Contour(in_dem, out_fc, interval, base_c)
+    arcpy.management.AddField(out_fc, "INDEX_KTR", "SHORT")
+    idx_step = interval * float(idx_every)
+    cnt = 0
+    with arcpy.da.UpdateCursor(out_fc, ["Contour", "INDEX_KTR"]) as cur:
+        for row in cur:
+            cnt += 1
+            val = float(row[0] or 0.0)
+            rem = abs((val - base_c) % idx_step)
+            is_idx = 1 if (rem < 1e-3 or abs(rem - idx_step) < 1e-3) else 0
+            row[1] = is_idx
+            cur.updateRow(row)
+    print(f"OK Contours (interval={interval:.2f}, index every {idx_every} -> {cnt} lines) -> {out_fc}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -1700,6 +1783,8 @@ HANDLERS = {
     "raster_reclass": cmd_raster_reclass,
     "raster_weighted_sum": cmd_raster_weighted_sum,
     "raster_interpolate": cmd_raster_interpolate,
+    "raster_index": cmd_raster_index,
+    "raster_contour": cmd_raster_contour,
     "hydro_delineate": cmd_hydro_delineate,
     "hydro_basin": cmd_hydro_basin,
 }
