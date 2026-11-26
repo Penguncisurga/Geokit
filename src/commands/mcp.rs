@@ -248,22 +248,44 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_live",
-            "description": "Control an open ArcMap 10.x window live via the GeoKit Python Add-In bridge (ping, layers, add, remove, visible, zoom, select, clear-selection, export, run-gp).",
+            "description": "Control an open ArcMap 10.1-10.8 window in real time via the GeoKit Live-UI Add-In bridge. Supports full ArcToolbox discovery (tools/tool-usage) and execution (run-gp with auto extension checkout), plus live cartography (add, remove, visible, zoom, select, clear-selection, layer-info, definition-query, symbology, labels, export, save).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["ping", "layers", "add", "remove", "visible", "zoom", "select", "clear-selection", "export", "run-gp", "install-addin"]
+                        "enum": [
+                            "ping",
+                            "layers",
+                            "layer-info",
+                            "add",
+                            "remove",
+                            "visible",
+                            "definition-query",
+                            "symbology",
+                            "labels",
+                            "zoom",
+                            "select",
+                            "clear-selection",
+                            "export",
+                            "save",
+                            "tools",
+                            "tool-usage",
+                            "run-gp",
+                            "install-addin"
+                        ]
                     },
                     "path": { "type": "string", "description": "Dataset path (for add)" },
-                    "layer": { "type": "string", "description": "Layer name in ArcMap TOC (for remove, visible, zoom, select, clear-selection)" },
-                    "show": { "type": "boolean", "description": "Visibility true/false (for visible)" },
-                    "where": { "type": "string", "description": "SQL WHERE clause (for select)" },
-                    "out": { "type": "string", "description": "Output image/PDF path (for export)" },
+                    "layer": { "type": "string", "description": "Layer name in ArcMap TOC" },
+                    "show": { "type": "boolean", "description": "True/false toggle (for visible or labels)" },
+                    "field": { "type": "string", "description": "Label field name e.g. NAMOBJ (for labels)" },
+                    "lyr": { "type": "string", "description": "Path to .lyr symbology file (for symbology)" },
+                    "where": { "type": "string", "description": "SQL WHERE clause (for select or definition-query)" },
+                    "out": { "type": "string", "description": "Output file path (for export or save)" },
                     "dpi": { "type": "integer", "description": "Export DPI (for export)" },
-                    "tool": { "type": "string", "description": "ArcPy tool name e.g. Buffer_analysis (for run-gp)" },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "ArcPy tool arguments (for run-gp)" }
+                    "pattern": { "type": "string", "description": "Keyword/wildcard filter e.g. 'clip' or '*_sa' (for tools)" },
+                    "tool": { "type": "string", "description": "Exact ArcPy tool name e.g. Buffer_analysis or Slope_sa (for tool-usage or run-gp)" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Positional tool arguments in order (for run-gp)" }
                 },
                 "required": ["action"]
             }
@@ -464,8 +486,17 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             if let Some(layer) = str_arg(args, "layer") {
                 cli_args.push(layer.into());
             }
+            if let Some(pattern) = str_arg(args, "pattern") {
+                cli_args.push(pattern.into());
+            }
             if let Some(show) = args.get("show").and_then(|v| v.as_bool()) {
                 cli_args.extend(["--show".into(), show.to_string()]);
+            }
+            if let Some(field) = str_arg(args, "field") {
+                cli_args.extend(["--field".into(), field.into()]);
+            }
+            if let Some(lyr) = str_arg(args, "lyr") {
+                cli_args.extend(["--lyr".into(), lyr.into()]);
             }
             if let Some(w) = str_arg(args, "where") {
                 cli_args.extend(["--where".into(), w.into()]);

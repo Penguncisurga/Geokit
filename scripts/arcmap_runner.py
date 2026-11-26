@@ -600,7 +600,7 @@ def cmd_hydro_delineate(payload):
     facc.save(os.path.join(out_dir, "03_flow_acc.tif"))
 
     print("[4/5] Extracting Stream Network (threshold >= %d cells)..." % threshold)
-    streams_shp = os.path.join(out_dir, "04_streams.shp")
+    streams_shp = os.path.join(out_dir, "streams.shp")
     stream_ras = sa.Con(facc >= threshold, 1)
     try:
         sa.StreamToFeature(stream_ras, fdir, streams_shp, "SIMPLIFY")
@@ -612,8 +612,8 @@ def cmd_hydro_delineate(payload):
         print("[5/5] Snapping pour point (%s map units) & delineating watershed..." % snap_dist)
         snapped = sa.SnapPourPoint(pour_point, facc, snap_dist)
         ws_ras = sa.Watershed(fdir, snapped)
-        ws_ras.save(os.path.join(out_dir, "05_watershed.tif"))
-        ws_shp = os.path.join(out_dir, "05_watershed.shp")
+        ws_ras.save(os.path.join(out_dir, "watershed.tif"))
+        ws_shp = os.path.join(out_dir, "watershed.shp")
         arcpy.RasterToPolygon_conversion(ws_ras, ws_shp, "SIMPLIFY", "VALUE")
         print("      -> %s" % ws_shp)
     else:
@@ -634,18 +634,18 @@ def cmd_hydro_basin(payload):
 
     print("[1/4] Filling DEM sinks...")
     filled = sa.Fill(dem)
-    filled.save(os.path.join(out_dir, "01_dem_filled.tif"))
+    filled.save(os.path.join(out_dir, "dem_filled.tif"))
 
     print("[2/4] Computing D8 Flow Direction...")
     fdir = sa.FlowDirection(filled, "NORMAL")
-    fdir.save(os.path.join(out_dir, "02_flow_dir.tif"))
+    fdir.save(os.path.join(out_dir, "flow_dir.tif"))
 
     print("[3/4] Delineating all drainage basins...")
     basin_ras = sa.Basin(fdir)
-    basin_ras.save(os.path.join(out_dir, "03_basins.tif"))
+    basin_ras.save(os.path.join(out_dir, "basins.tif"))
 
     print("[4/4] Converting basins to polygon shapefile...")
-    basins_shp = os.path.join(out_dir, "04_basins.shp")
+    basins_shp = os.path.join(out_dir, "basins.shp")
     arcpy.RasterToPolygon_conversion(basin_ras, basins_shp, "SIMPLIFY", "VALUE")
     print("OK Drainage basins saved -> %s" % basins_shp)
     return 0

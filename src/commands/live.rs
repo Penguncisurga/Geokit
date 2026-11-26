@@ -13,9 +13,9 @@ const ARCMAP_ADDIN_BYTES: &[u8] = include_bytes!("../../addin/arcmap/geokit-arcm
 
 #[derive(Debug, Subcommand)]
 pub enum LiveCommand {
-    /// Install the GeoKit Live-UI Python Add-In (.esriaddin) into ArcMap 10.x automatically
+    /// Install the GeoKit Live-UI Python Add-In (.esriaddin) into ArcMap 10.1-10.8 automatically
     InstallAddin {
-        /// ArcMap version folder (e.g. 10.7, 10.8; defaults to auto-detecting installed Desktop10.x)
+        /// ArcMap version (e.g. 10.5, 10.7, 10.8; defaults to auto-detecting all installed Desktop10.x)
         #[arg(long)]
         version: Option<String>,
     },
@@ -27,6 +27,13 @@ pub enum LiveCommand {
     },
     /// List all layers currently loaded in the open ArcMap window
     Layers {
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Inspect fields, CRS, feature count, and sample rows of a layer currently in ArcMap
+    LayerInfo {
+        /// Layer name in ArcMap Table of Contents
+        layer: String,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
@@ -51,6 +58,39 @@ pub enum LiveCommand {
         /// Show (true) or hide (false)
         #[arg(long, action = clap::ArgAction::Set)]
         show: bool,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Set or clear a SQL definition query on a layer live in ArcMap
+    DefinitionQuery {
+        /// Layer name in ArcMap Table of Contents
+        layer: String,
+        /// SQL WHERE filter (pass empty string "" to clear)
+        #[arg(long = "where")]
+        where_clause: String,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Apply a .lyr symbology file live onto a layer in ArcMap
+    Symbology {
+        /// Target layer name in ArcMap Table of Contents
+        layer: String,
+        /// Path to source .lyr style file
+        #[arg(long = "lyr")]
+        lyr_file: PathBuf,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Toggle map labels (and optionally label field) live on a layer in ArcMap
+    Labels {
+        /// Layer name in ArcMap Table of Contents
+        layer: String,
+        /// Show (true) or hide (false) labels
+        #[arg(long, action = clap::ArgAction::Set)]
+        show: bool,
+        /// Optional attribute field name to label (e.g. NAMOBJ)
+        #[arg(long)]
+        field: Option<String>,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
@@ -89,9 +129,32 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Run an ArcPy geoprocessing tool inside the live ArcMap window and auto-add the output to the map
+    /// Save the currently open ArcMap document (or save a copy to --out)
+    Save {
+        /// Optional output .mxd path to save a copy
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Search available ArcToolbox tools inside live ArcMap (e.g. `geokit live tools clip`)
+    Tools {
+        /// Wildcard/keyword filter (e.g. "buffer", "*_sa", "clip")
+        #[arg(default_value = "*")]
+        pattern: String,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Show exact parameter usage syntax for any ArcToolbox tool (e.g. Buffer_analysis, Fill_sa)
+    ToolUsage {
+        /// Exact ArcPy tool name
+        tool: String,
+        #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
+        port: u16,
+    },
+    /// Run ANY ArcToolbox tool inside the live ArcMap window (auto-checks out Spatial/3D/Network extensions)
     RunGp {
-        /// ArcPy tool name (e.g. Buffer_analysis, Clip_analysis, Dissolve_management)
+        /// ArcPy tool name (e.g. Buffer_analysis, Clip_analysis, Slope_sa, Dissolve_management)
         tool: String,
         /// Tool arguments in order
         args: Vec<String>,
@@ -106,11 +169,11 @@ fn send_live_request(port: u16, payload: &Value) -> Result<Value> {
         format!(
             "Could not connect to GeoKit ArcMap Live Bridge at {addr}.\n\
              Make sure:\n\
-             1. You ran `geokit live install-addin`.\n\
-             2. ArcMap 10.x is open (restarted after installing the add-in)."
+             1. Close ArcMap, run `geokit live install-addin`, then open ArcMap 10.x.\n\
+             2. ArcMap 10.x is currently open."
         )
     })?;
-    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(300)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
     let msg = format!("{}\n", serde_json::to_string(payload)?);
@@ -134,16 +197,40 @@ fn send_live_request(port: u16, payload: &Value) -> Result<Value> {
     Ok(resp)
 }
 
+/// Auto-detects installed ArcMap 10.1–10.8 versions from both Program Files and %APPDATA%\ESRI
+/// (works even when ArcMap is installed on a custom drive like D:\).
 fn detect_arcmap_versions() -> Vec<String> {
     let mut found = Vec::new();
+
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let esri_dir = PathBuf::from(appdata).join("ESRI");
+        if let Ok(entries) = std::fs::read_dir(&esri_dir) {
+            for entry in entries.flatten() {
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                if let Some(name) = entry.file_name().to_str() {
+                    if let Some(ver) = name.strip_prefix("Desktop") {
+                        if ver.starts_with("10.") && !found.iter().any(|v| v == ver) {
+                            found.push(ver.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for ver in [
         "10.8", "10.7", "10.6", "10.5", "10.4", "10.3", "10.2", "10.1",
     ] {
         let p = Path::new(r"C:\Program Files (x86)\ArcGIS").join(format!("Desktop{ver}"));
-        if p.is_dir() {
+        if p.is_dir() && !found.iter().any(|v| v == ver) {
             found.push(ver.to_string());
         }
     }
+
+    found.sort();
+    found.reverse();
     found
 }
 
@@ -191,15 +278,14 @@ fn install_addin(version: Option<&str>) -> Result<()> {
             let detected = detect_arcmap_versions();
             if detected.is_empty() {
                 bail!(
-                    "No ArcGIS Desktop 10.x installation detected in C:\\Program Files (x86)\\ArcGIS.\n\
-                     Pass `--version 10.7` (or your ArcMap version) explicitly."
+                    "No ArcGIS Desktop 10.x installation detected.\n\
+                     Pass `--version 10.7` (or 10.5, 10.6, 10.8) explicitly."
                 );
             }
             detected
         }
     };
 
-    // Store in %USERPROFILE%\.geokit\addins (avoids OneDrive cloud-placeholder & Controlled Folder Access issues)
     let addin_dir = PathBuf::from(&user_profile).join(".geokit").join("addins");
     std::fs::create_dir_all(&addin_dir)
         .with_context(|| format!("Failed to create {}", addin_dir.display()))?;
@@ -212,7 +298,6 @@ fn install_addin(version: Option<&str>) -> Result<()> {
         dst.display()
     );
 
-    // Register folder in ArcMap's official per-user AddInFoldersList.xml (no admin required)
     let dir_str = addin_dir.display().to_string();
     for ver in &versions {
         let xml_path = register_addin_folder_xml(ver, &dir_str)?;
@@ -232,85 +317,101 @@ fn install_addin(version: Option<&str>) -> Result<()> {
 }
 
 pub fn run(cmd: LiveCommand) -> Result<()> {
-    match cmd {
-        LiveCommand::InstallAddin { version } => install_addin(version.as_deref()),
-        LiveCommand::Ping { port } => {
-            let resp = send_live_request(port, &json!({ "action": "ping" }))?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
-        }
+    let resp = match cmd {
+        LiveCommand::InstallAddin { version } => return install_addin(version.as_deref()),
+        LiveCommand::Ping { port } => send_live_request(port, &json!({ "action": "ping" }))?,
         LiveCommand::Layers { port } => {
-            let resp = send_live_request(port, &json!({ "action": "list_layers" }))?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
+            send_live_request(port, &json!({ "action": "list_layers" }))?
+        }
+        LiveCommand::LayerInfo { layer, port } => {
+            send_live_request(port, &json!({ "action": "layer_info", "layer": layer }))?
         }
         LiveCommand::Add { path, port } => {
             if !path.exists() {
                 bail!("Path does not exist: {}", path.display());
             }
-            let resp = send_live_request(
+            send_live_request(
                 port,
                 &json!({ "action": "add_layer", "path": abs_string(&path) }),
-            )?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
+            )?
         }
         LiveCommand::Remove { layer, port } => {
-            let resp =
-                send_live_request(port, &json!({ "action": "remove_layer", "layer": layer }))?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
+            send_live_request(port, &json!({ "action": "remove_layer", "layer": layer }))?
         }
-        LiveCommand::Visible { layer, show, port } => {
-            let resp = send_live_request(
+        LiveCommand::Visible { layer, show, port } => send_live_request(
+            port,
+            &json!({ "action": "set_visibility", "layer": layer, "visible": show }),
+        )?,
+        LiveCommand::DefinitionQuery {
+            layer,
+            where_clause,
+            port,
+        } => send_live_request(
+            port,
+            &json!({ "action": "set_definition_query", "layer": layer, "where": where_clause }),
+        )?,
+        LiveCommand::Symbology {
+            layer,
+            lyr_file,
+            port,
+        } => {
+            if !lyr_file.exists() {
+                bail!("Symbology .lyr file does not exist: {}", lyr_file.display());
+            }
+            send_live_request(
                 port,
-                &json!({ "action": "set_visibility", "layer": layer, "visible": show }),
-            )?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
+                &json!({
+                    "action": "apply_symbology",
+                    "layer": layer,
+                    "lyr_file": abs_string(&lyr_file)
+                }),
+            )?
         }
+        LiveCommand::Labels {
+            layer,
+            show,
+            field,
+            port,
+        } => send_live_request(
+            port,
+            &json!({ "action": "set_labels", "layer": layer, "show": show, "field": field }),
+        )?,
         LiveCommand::Zoom { layer, port } => {
             let target = layer.unwrap_or_else(|| "__full__".to_string());
-            let resp =
-                send_live_request(port, &json!({ "action": "zoom_to_layer", "layer": target }))?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
+            send_live_request(port, &json!({ "action": "zoom_to_layer", "layer": target }))?
         }
         LiveCommand::Select {
             layer,
             where_clause,
             port,
-        } => {
-            let resp = send_live_request(
-                port,
-                &json!({ "action": "select", "layer": layer, "where": where_clause }),
-            )?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
+        } => send_live_request(
+            port,
+            &json!({ "action": "select", "layer": layer, "where": where_clause }),
+        )?,
+        LiveCommand::ClearSelection { layer, port } => send_live_request(
+            port,
+            &json!({ "action": "clear_selection", "layer": layer }),
+        )?,
+        LiveCommand::Export { out, dpi, port } => send_live_request(
+            port,
+            &json!({ "action": "export_view", "out": abs_string(&out), "dpi": dpi }),
+        )?,
+        LiveCommand::Save { out, port } => send_live_request(
+            port,
+            &json!({ "action": "save_mxd", "out": out.as_deref().map(abs_string) }),
+        )?,
+        LiveCommand::Tools { pattern, port } => {
+            send_live_request(port, &json!({ "action": "list_tools", "pattern": pattern }))?
         }
-        LiveCommand::ClearSelection { layer, port } => {
-            let resp = send_live_request(
-                port,
-                &json!({ "action": "clear_selection", "layer": layer }),
-            )?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
+        LiveCommand::ToolUsage { tool, port } => {
+            send_live_request(port, &json!({ "action": "tool_usage", "tool": tool }))?
         }
-        LiveCommand::Export { out, dpi, port } => {
-            let resp = send_live_request(
-                port,
-                &json!({ "action": "export_view", "out": abs_string(&out), "dpi": dpi }),
-            )?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
-        }
-        LiveCommand::RunGp { tool, args, port } => {
-            let resp = send_live_request(
-                port,
-                &json!({ "action": "run_gp", "tool": tool, "args": args, "add_to_map": true }),
-            )?;
-            println!("{}", serde_json::to_string_pretty(&resp)?);
-            Ok(())
-        }
-    }
+        LiveCommand::RunGp { tool, args, port } => send_live_request(
+            port,
+            &json!({ "action": "run_gp", "tool": tool, "args": args, "add_to_map": true }),
+        )?,
+    };
+
+    println!("{}", serde_json::to_string_pretty(&resp)?);
+    Ok(())
 }

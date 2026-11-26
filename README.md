@@ -228,22 +228,51 @@ Add to your MCP client configuration:
 
 ---
 
-### 7. Live-UI Control for ArcMap 10.x (`geokit live` & MCP `geokit_live`)
+### 7. Live-UI Control for ArcMap 10.1 – 10.8 (`geokit live` & MCP `geokit_live`)
 
-Control an **open ArcMap 10.x window in real time** (just like QGIS MCP) via the embedded `geokit-arcmap.esriaddin` Python Add-In!
+Control an **open ArcMap 10.1 – 10.8.2 window in real time** (just like QGIS MCP) — including **all 800+ ArcToolbox tools** — via the embedded `geokit-arcmap.esriaddin` Python Add-In!
+
+**3-Step Setup for Any AI Agent (Claude Desktop, Antigravity, Cursor, Claude Code, Codex):**
+
+1. **Close ArcMap**, then run once:
+   ```bash
+   geokit live install-addin
+   ```
+2. **Add `geokit` to your AI client's MCP config** (e.g. Claude Desktop `claude_desktop_config.json`, Cursor `.cursor/mcp.json`, Antigravity, or Codex):
+   ```json
+   {
+     "mcpServers": {
+       "geokit": {
+         "command": "geokit",
+         "args": ["mcp"]
+       }
+     }
+   }
+   ```
+   *(For Claude Code CLI: `claude mcp add geokit -- geokit mcp`)*
+3. **Open ArcMap 10.x** — GeoKit Live Bridge auto-starts automatically on port `9877`. Start chatting with your AI!
+
+**CLI Live Control Examples:**
 
 ```bash
-# 1. Install the embedded ArcMap Python Add-In (one-time setup)
-geokit live install-addin
-
-# 2. Restart ArcMap 10.x once, then control the open map live:
+# Check live connection & inspect loaded layers + fields/sample rows
 geokit live ping
 geokit live layers
+geokit live layer-info batas_desa
+
+# Add, zoom, filter, style, label, select, export, and save live
 geokit live add ./01_Vector/batas_desa.shp
 geokit live zoom batas_desa
+geokit live definition-query batas_desa --where "KECAMATAN = 'Boja'"
+geokit live symbology batas_desa --lyr ./styles/batas_desa.lyr
+geokit live labels batas_desa --show true --field NAMOBJ
 geokit live select batas_desa --where "KELAS = 'Hutan'"
-geokit live visible batas_desa --show false
 geokit live export --out ./current_view.png --dpi 200
+geokit live save --out ./peta_kerja.mxd
+
+# Discover & run ANY tool in ArcToolbox (auto-checks out Spatial/3D/Network extensions!)
+geokit live tools slope
+geokit live tool-usage Slope_sa
 geokit live run-gp Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
 ```
 

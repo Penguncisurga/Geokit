@@ -10,7 +10,7 @@ Thumbs.db
 
 # Test GIS fixtures / temporary outputs
 /tmp/
-/demo/
+/demo*/
 *.lock
 *.pyc
 __pycache__/

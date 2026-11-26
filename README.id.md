@@ -181,22 +181,51 @@ Untuk **ArcMap 10.x (`.mxd` / Python 2.7)** — *100% fitur didukung penuh*:
 
 ---
 
-### 7. Kontrol Layar Live ArcMap 10.x (`geokit live` & MCP `geokit_live`)
+### 7. Kontrol Layar Live ArcMap 10.1 – 10.8 (`geokit live` & MCP `geokit_live`)
 
-Kontrol jendela **ArcMap 10.x yang sedang terbuka secara *real-time*** (seperti QGIS MCP) menggunakan Python Add-In `geokit-arcmap.esriaddin` bawaan!
+Kontrol jendela **ArcMap 10.1 – 10.8.2 yang sedang terbuka secara *real-time*** (seperti QGIS MCP) — termasuk **seluruh 800+ tool di ArcToolbox** — lewat Python Add-In `geokit-arcmap.esriaddin` bawaan!
+
+**3 Langkah Setup untuk AI Agent Mana Pun (Claude Desktop, Antigravity, Cursor, Claude Code, Codex):**
+
+1. **Tutup ArcMap**, lalu jalankan sekali:
+   ```bash
+   geokit live install-addin
+   ```
+2. **Daftarkan `geokit` di konfigurasi MCP aplikasi AI kamu** (`claude_desktop_config.json`, Cursor, Antigravity, Codex):
+   ```json
+   {
+     "mcpServers": {
+       "geokit": {
+         "command": "geokit",
+         "args": ["mcp"]
+       }
+     }
+   }
+   ```
+   *(Untuk Claude Code CLI: `claude mcp add geokit -- geokit mcp`)*
+3. **Buka ArcMap 10.x** — Live Bridge otomatis nyala di port `9877`, langsung bisa kamu kontrol lewat chat AI!
+
+**Contoh Perintah Live:**
 
 ```bash
-# 1. Pasang Add-In ArcMap cukup 1 perintah (sekali saja)
-geokit live install-addin
-
-# 2. Tutup & buka ulang ArcMap 10.x sekali, lalu kontrol langsung secara live:
+# Cek koneksi, daftar layer, & baca field + contoh baris atribut
 geokit live ping
 geokit live layers
+geokit live layer-info batas_desa
+
+# Tambah layer, zoom, filter, terapkan simbologi .lyr, nyalakan label, seleksi, export & simpan .mxd
 geokit live add ./01_Vector/batas_desa.shp
 geokit live zoom batas_desa
+geokit live definition-query batas_desa --where "KECAMATAN = 'Boja'"
+geokit live symbology batas_desa --lyr ./styles/batas_desa.lyr
+geokit live labels batas_desa --show true --field NAMOBJ
 geokit live select batas_desa --where "KELAS = 'Hutan'"
-geokit live visible batas_desa --show false
 geokit live export --out ./tampilan_aktif.png --dpi 200
+geokit live save --out ./peta_kerja.mxd
+
+# Cari & jalankan SEMUA tool di ArcToolbox (otomatis checkout ekstensi Spatial/3D/Network!)
+geokit live tools slope
+geokit live tool-usage Slope_sa
 geokit live run-gp Buffer_analysis ./sungai.shp ./sungai_buf.shp "100 Meters"
 ```
 
