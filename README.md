@@ -315,8 +315,8 @@ geokit live style batas_kab --preset boundary --outline-style admin-kab --outlin
 geokit live style dem_kendal --mode raster --preset terrain
 geokit live order sungai --position top
 geokit live labels "Batas Administrasi Desa" --show true --field NAMOBJ --halo true --font-size 8.5
-# One-command PerKaBIG A4 Landscape layout (70% Left MapFrame + UTM Grid, 28% Right Title/North/Scale/Legend/Source Panel)
-geokit live layout --template perkabig --title "PETA KERAWANAN BANJIR" --subtitle "Analisis Multi-Parameter" --source "Sumber: DEM SRTM 30m & GeoKit" --zoom-layer batas_kab --hide-legend "hillshade,Basemap" --grid true
+# Full 7-section PerKaBIG No. 3/2016 layout (A4 or A3: vertical UTM grid, North+km Scale, Diagram Lokasi inset, CRS, Author, KETERANGAN, Source)
+geokit live layout --template perkabig --paper a4 --title "PETA KERAWANAN BENCANA" --region "KABUPATEN KENDAL" --author "Laboratorium SIG" --inset-layer ./batas_provinsi.shp --source "1. DEM SRTM 30m & Pengolahan GeoKit" --zoom-layer batas_kab --hide-legend "hillshade,Basemap" --grid true
 geokit live select "Batas Administrasi Desa" --where "KELAS = 'Hutan'"
 geokit live export --out ./peta_perkabig.png --dpi 200
 geokit live save --out ./peta_kerja.mxd

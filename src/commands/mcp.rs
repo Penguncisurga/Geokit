@@ -450,8 +450,16 @@ fn tool_definitions() -> Value {
                     "scale": { "type": "string", "description": "Target scale or 'auto' to snap to standard scale (for zoom)" },
                     "halo": { "type": "boolean", "description": "White halo around labels (for labels, default: true)" },
                     "font_size": { "type": "number", "description": "Label font size in pt (for labels)" },
-                    "template": { "type": "string", "enum": ["perkabig"], "description": "Built-in A4 Landscape PerKaBIG layout generator (for layout)" },
-                    "grid": { "type": "boolean", "description": "Attach UTM MeasuredGrid to MapFrame (for perkabig layout)" },
+                    "template": { "type": "string", "enum": ["perkabig"], "description": "Built-in PerKaBIG No. 3/2016 7-section layout generator (for layout)" },
+                    "paper": { "type": "string", "enum": ["a4", "a3"], "description": "Paper size for perkabig layout: a4 (default) or a3" },
+                    "region": { "type": "string", "description": "Region / study area name (bold header line 3, e.g. 'KABUPATEN KENDAL')" },
+                    "sheet_number": { "type": "string", "description": "Optional BIG sheet number in blue (e.g. 'Lembar: 33.24.01.2001')" },
+                    "author": { "type": "string", "description": "Map author / publisher / institution name (PerKaBIG Section 5)" },
+                    "edition": { "type": "string", "description": "Edition & year text (default: 'Edisi 1 - Tahun 2026')" },
+                    "note": { "type": "string", "description": "Footer disclaimer/note text" },
+                    "logo": { "type": "string", "description": "Optional PNG logo path for institution block" },
+                    "inset_layer": { "type": "string", "description": "Optional context polygon shapefile (e.g. Province boundaries) to build an automatic DIAGRAM LOKASI inset map with red extent box" },
+                    "grid": { "type": "boolean", "description": "Attach vertical-L/R round UTM MeasuredGrid to MapFrame (for perkabig layout)" },
                     "width": { "type": "number", "description": "Line width in pt for polylines" },
                     "size": { "type": "number", "description": "Marker size in pt for points" },
                     "marker": { "type": "string", "enum": ["circle", "square", "diamond", "cross", "x"], "description": "Marker shape for points" },
@@ -915,6 +923,30 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(tpl) = str_arg(args, "template") {
                 cli_args.extend(["--template".into(), tpl.into()]);
+            }
+            if let Some(pp) = str_arg(args, "paper") {
+                cli_args.extend(["--paper".into(), pp.into()]);
+            }
+            if let Some(reg) = str_arg(args, "region") {
+                cli_args.extend(["--region".into(), reg.into()]);
+            }
+            if let Some(sn) = str_arg(args, "sheet_number") {
+                cli_args.extend(["--sheet-number".into(), sn.into()]);
+            }
+            if let Some(au) = str_arg(args, "author") {
+                cli_args.extend(["--author".into(), au.into()]);
+            }
+            if let Some(ed) = str_arg(args, "edition") {
+                cli_args.extend(["--edition".into(), ed.into()]);
+            }
+            if let Some(nt) = str_arg(args, "note") {
+                cli_args.extend(["--note".into(), nt.into()]);
+            }
+            if let Some(lg) = str_arg(args, "logo") {
+                cli_args.extend(["--logo".into(), lg.into()]);
+            }
+            if let Some(il) = str_arg(args, "inset_layer") {
+                cli_args.extend(["--inset-layer".into(), il.into()]);
             }
             if let Some(gr) = args.get("grid").and_then(|v| v.as_bool()) {
                 cli_args.extend(["--grid".into(), gr.to_string()]);

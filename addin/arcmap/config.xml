@@ -3,7 +3,7 @@
   <Name>GeoKit ArcMap Live Bridge</Name>
   <AddInID>{9a5c7e14-4f2b-4d88-b6a3-8c1e9f0d2b41}</AddInID>
   <Description>Live-UI TCP bridge enabling real-time control of ArcMap 10.x from geokit CLI and MCP AI agents.</Description>
-  <Version>2.1.2</Version>
+  <Version>2.2.0</Version>
   <Image>Images\geokit16.png</Image>
   <Author>Penguncisurga</Author>
   <Company>geokit</Company>

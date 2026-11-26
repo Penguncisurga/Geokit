@@ -241,23 +241,47 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Build a PerKaBIG A4 Landscape layout (panel kanan + UTM grid + clean legend) or update layout view/text live
+    /// Build a PerKaBIG No. 3/2016 Landscape layout (A4/A3: vertical UTM grid, North+Scale, Diagram Lokasi inset, CRS, Author, KETERANGAN, Source) or update layout view/text live
     Layout {
         /// View mode: layout or data
         #[arg(long)]
         view: Option<String>,
-        /// Optional built-in layout generator: "perkabig" (A4 Landscape: 70% map + UTM grid on left, 28% info panel on right!)
+        /// Built-in layout generator: "perkabig" (strict PerKaBIG No. 3 Tahun 2016 7-section layout)
         #[arg(long)]
         template: Option<String>,
-        /// Map title text (updates layout title text element)
+        /// Paper size for perkabig template: a4 (29.7x21.0 cm) or a3 (42.0x29.7 cm)
+        #[arg(long, default_value = "a4")]
+        paper: String,
+        /// Map type title text (e.g. "PETA KERAWANAN BENCANA")
         #[arg(long)]
         title: Option<String>,
-        /// Subtitle text (updates layout subtitle text element)
+        /// Region / study area name (bold header line 3, e.g. "KABUPATEN KENDAL")
+        #[arg(long)]
+        region: Option<String>,
+        /// Optional BIG sheet number in blue (e.g. "Lembar: 33.24.01.2001")
+        #[arg(long)]
+        sheet_number: Option<String>,
+        /// Subtitle text (shown in BIG blue when sheet_number is omitted)
         #[arg(long)]
         subtitle: Option<String>,
-        /// Data source credit text (updates layout source text element)
+        /// Data source & map history text
         #[arg(long)]
         source: Option<String>,
+        /// Map author / publisher / institution name (PerKaBIG Section 5)
+        #[arg(long)]
+        author: Option<String>,
+        /// Map edition & year text (default: "Edisi 1 - Tahun 2026")
+        #[arg(long)]
+        edition: Option<String>,
+        /// Optional footer note / disclaimer (defaults to official PerKaBIG disclaimer)
+        #[arg(long)]
+        note: Option<String>,
+        /// Optional PNG logo path for the institution block
+        #[arg(long)]
+        logo: Option<PathBuf>,
+        /// Optional context polygon shapefile (e.g. Province/Regency boundaries) to build an automatic DIAGRAM LOKASI inset map with red extent box!
+        #[arg(long)]
+        inset_layer: Option<PathBuf>,
         /// Optional layer name to zoom the map frame extent to
         #[arg(long)]
         zoom_layer: Option<String>,
@@ -778,9 +802,17 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
         LiveCommand::Layout {
             view,
             template,
+            paper,
             title,
+            region,
+            sheet_number,
             subtitle,
             source,
+            author,
+            edition,
+            note,
+            logo,
+            inset_layer,
             zoom_layer,
             hide_legend,
             grid,
@@ -791,9 +823,17 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
                 "action": "layout_update",
                 "view": view,
                 "template": template,
+                "paper": paper,
                 "title": title,
+                "region": region,
+                "sheet_number": sheet_number,
                 "subtitle": subtitle,
                 "source": source,
+                "author": author,
+                "edition": edition,
+                "note": note,
+                "logo": logo.as_deref().map(abs_string),
+                "inset_layer": inset_layer.as_deref().map(abs_string),
                 "zoom_layer": zoom_layer,
                 "hide_legend": hide_legend,
                 "grid": grid,

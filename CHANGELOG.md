@@ -4,6 +4,21 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-11-26
+
+### Added
+- **Full PerKaBIG No. 3 Tahun 2016 Layout Engine (`geokit live layout --template perkabig`)**:
+  - Supports **A4 Landscape (`29.7 × 21.0 cm`)** and **A3 Landscape (`42.0 × 29.7 cm`)** via `--paper a4|a3`.
+  - Exact 7-section PerKaBIG Right Info Panel:
+    1. 3-line Header (`--title`, BIG Blue `#0070C0` `--sheet-number`/`--subtitle`, bold `--region`)
+    2. Side-by-side **North Arrow** (explicit `INorthArrow.Size`, zero overlap!) + **`SKALA 1 : N`** + **Metric Alternating Scale Bar (`m`/`km`)**
+    3. Automatic **`DIAGRAM LOKASI` Inset Map** (`--inset-layer <provinsi.shp>`) creating a 2nd `MapFrame` with a red `LocatorRectangle` extent indicator!
+    4. 3-line **Sistem Referensi Koordinat** (`Proyeksi`, `Sistem Grid`, `Datum Horizontal: SRGI 2013 / WGS 1984`)
+    5. **Pembuat / Instansi & Hak Cipta** (`--author`, `--edition`, optional `--logo <logo.png>`)
+    6. **`KETERANGAN`** (official PerKaBIG legend with multi-class layer headings, hidden field names & hillshade)
+    7. **`SUMBER DATA DAN RIWAYAT PETA`** + official **`CATATAN`** disclaimer (`--note`)
+  - **True Vertical Left & Right UTM Grid Labels** (`IGridLabel.LabelAlignment(Left/Right, False)` = vertical, 0 decimal places, compact PerKaBIG font, Tabel 5 intervals).
+
 ## [2.1.2] - 2026-11-26
 
 ### Improved

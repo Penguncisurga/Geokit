@@ -471,7 +471,15 @@ def _handle_command_on_ui_thread(req):
         template = (req.get("template") or "").lower()
         title = req.get("title")
         subtitle = req.get("subtitle")
+        region = req.get("region")
+        sheet_number = req.get("sheet_number")
         source = req.get("source")
+        author = req.get("author")
+        edition = req.get("edition")
+        note = req.get("note")
+        logo_path = req.get("logo")
+        inset_layer = req.get("inset_layer")
+        paper = (req.get("paper") or "a4").lower()
         zoom_layer = req.get("zoom_layer")
         hide_legend_raw = req.get("hide_legend")
         add_grid = bool(req.get("grid", True))
@@ -481,40 +489,56 @@ def _handle_command_on_ui_thread(req):
         elif view == "data":
             mxd.activeView = df.name
 
-        # Build full A4 Landscape PerKaBIG layout directly via ArcObjects COM!
+        # Build full PerKaBIG No. 3 Tahun 2016 Landscape layout (A4 or A3) directly via ArcObjects COM!
         if template == "perkabig":
             if _ao is None:
                 return {"ok": False, "error": "ArcObjects COM module required for PerKaBIG layout."}
             std_scales = [5000, 10000, 25000, 50000, 75000, 100000, 125000, 150000, 200000, 250000, 300000, 350000, 400000, 500000, 750000, 1000000]
             span_m = 40000.0
+            zoom_ext = None
             if zoom_layer:
                 zl = _find_layer(mxd, df, zoom_layer)
                 if zl:
-                    ext = zl.getExtent(True)
-                    dx = (ext.XMax - ext.XMin) * 0.08
-                    dy = (ext.YMax - ext.YMin) * 0.08
-                    df.extent = arcpy.Extent(ext.XMin - dx, ext.YMin - dy, ext.XMax + dx, ext.YMax + dy)
-                    span_m = max(ext.XMax - ext.XMin, ext.YMax - ext.YMin)
+                    zoom_ext = zl.getExtent(True)
+                    dx = (zoom_ext.XMax - zoom_ext.XMin) * 0.08
+                    dy = (zoom_ext.YMax - zoom_ext.YMin) * 0.08
+                    df.extent = arcpy.Extent(zoom_ext.XMin - dx, zoom_ext.YMin - dy, zoom_ext.XMax + dx, zoom_ext.YMax + dy)
+                    span_m = max(zoom_ext.XMax - zoom_ext.XMin, zoom_ext.YMax - zoom_ext.YMin)
                     cur_s = df.scale
                     df.scale = next((s for s in std_scales if s >= cur_s), std_scales[-1])
             sr = getattr(df, "spatialReference", None)
             crs_str = ""
+            utm_zone = ""
             if sr and getattr(sr, "name", "Unknown") != "Unknown":
                 epsg = getattr(sr, "factoryCode", 0)
-                crs_str = sr.name.replace("_", " ") + ((" (EPSG:%d)" % epsg) if epsg else "")
-            scale_int = int(round(df.scale)) if df.scale else 0
-            scale_txt = ("Skala 1 : %s" % ("{:,}".format(scale_int).replace(",", "."))) if scale_int else ""
+                nm_clean = sr.name.replace("_", " ")
+                crs_str = nm_clean + ((" (EPSG:%d)" % epsg) if epsg else "")
+                if "UTM" in nm_clean.upper() and "ZONE" in nm_clean.upper():
+                    parts = nm_clean.upper().split("ZONE")
+                    utm_zone = "UTM Zona " + parts[-1].strip()
+                else:
+                    utm_zone = nm_clean
             hide_names = [n.strip() for n in (hide_legend_raw or "hillshade,Basemap").split(",") if n.strip()]
+            has_inset = bool(inset_layer and os.path.exists(inset_layer))
 
             mxdoc = _ao.get_current_mxdoc()
             try:
-                hidden = _ao.build_perkabig_layout(
+                hidden, inset_ok = _ao.build_perkabig_layout(
                     mxdoc,
                     title=title or "PETA TEMATIK WILAYAH",
                     subtitle=subtitle or "",
-                    source=source or "Sumber: Pengolahan Data Spasial GeoKit",
+                    region=region or "",
+                    sheet_number=sheet_number or "",
+                    source=source or "1. Pengolahan Data Spasial GeoKit.",
+                    author=author or "Laboratorium SIG / Penyusun",
+                    edition=edition or "Edisi 1 - Tahun 2026",
+                    note=note or "",
+                    logo_path=logo_path if (logo_path and os.path.exists(logo_path)) else "",
+                    has_inset=has_inset,
+                    paper=paper,
                     crs_text=crs_str,
-                    scale_text=scale_txt,
+                    utm_zone=utm_zone,
+                    scale_val=df.scale or 0,
                     span_meters=span_m,
                     hide_legend_names=hide_names,
                     add_grid=add_grid,
@@ -535,16 +559,45 @@ def _handle_command_on_ui_thread(req):
                     final_s = int(round(df.scale)) if df.scale else 0
                     if final_s:
                         for el in arcpy.mapping.ListLayoutElements(mxd, "TEXT_ELEMENT", "skala_angka"):
-                            el.text = "Skala 1 : %s" % ("{:,}".format(final_s).replace(",", "."))
+                            el.text = "SKALA 1 : %s" % ("{:,}".format(final_s).replace(",", "."))
+
+            # Populate, project, style & zoom Diagram Lokasi inset DataFrame when inset_layer is supplied!
+            inset_populated = False
+            if has_inset and inset_ok:
+                try:
+                    for cand_df in arcpy.mapping.ListDataFrames(mxd):
+                        if cand_df.name == "Diagram Lokasi":
+                            if sr and getattr(sr, "name", "Unknown") != "Unknown":
+                                try:
+                                    cand_df.spatialReference = sr
+                                except Exception:
+                                    pass
+                            in_lyr = arcpy.mapping.Layer(inset_layer)
+                            arcpy.mapping.AddLayer(cand_df, in_lyr, "TOP")
+                            added_in = arcpy.mapping.ListLayers(mxd, "", cand_df)
+                            if zoom_ext is not None:
+                                w = max(zoom_ext.XMax - zoom_ext.XMin, 1000.0)
+                                h = max(zoom_ext.YMax - zoom_ext.YMin, 1000.0)
+                                cx_m = (zoom_ext.XMin + zoom_ext.XMax) / 2.0
+                                cy_m = (zoom_ext.YMin + zoom_ext.YMax) / 2.0
+                                cand_df.extent = arcpy.Extent(cx_m - w * 2.8, cy_m - h * 1.8, cx_m + w * 2.8, cy_m + h * 1.8)
+                            elif added_in:
+                                cand_df.extent = added_in[0].getExtent(True)
+                            inset_populated = True
+                            break
+                except Exception:
+                    pass
+
             _force_refresh()
             return {
                 "ok": True,
                 "template": "perkabig",
-                "page": "A4 Landscape (29.7 x 21.0 cm)",
+                "paper": "A3 Landscape (42.0 x 29.7 cm)" if paper == "a3" else "A4 Landscape (29.7 x 21.0 cm)",
                 "active_view": mxd.activeView,
                 "scale": int(round(df.scale)),
                 "crs": crs_str,
                 "hidden_legend_items": hidden,
+                "inset": inset_populated,
                 "grid": add_grid,
             }
 
