@@ -465,8 +465,10 @@ fn tool_definitions() -> Value {
                     "note": { "type": "string", "description": "Footer disclaimer/note text" },
                     "logo": { "type": "string", "description": "Optional PNG logo path for institution block" },
                     "inset_layer": { "type": "string", "description": "Optional context polygon shapefile (e.g. Province boundaries) to build an automatic DIAGRAM LOKASI inset map with red extent box" },
+                    "inset_petunjuk": { "type": "string", "description": "Optional local context polygon shapefile (e.g. Regency/District boundaries) to build dual official PerKaBIG insets (PETUNJUK LETAK PETA + DIAGRAM LOKASI)" },
                     "grid": { "type": "boolean", "description": "Attach grid/graticule to MapFrame (for perkabig layout)" },
-                    "grid_mode": { "type": "string", "enum": ["utm", "dms", "dual"], "description": "Grid mode: utm (black UTM), dms (blue WGS84), or dual (RBI Cetak UTM + DMS)" },
+                    "grid_mode": { "type": "string", "enum": ["utm", "dms", "dual"], "description": "Grid mode: utm (black UTM), dms (blue WGS84), or dual (RBI Cetak UTM + blue DMS ticks)" },
+                    "north_style": { "type": "string", "enum": ["big", "classic"], "description": "North arrow style: big (official Indonesian PerKaBIG 'U' vector arrow, default) or classic (compass rose)" },
                     "width": { "type": "number", "description": "Line width in pt for polylines" },
                     "size": { "type": "number", "description": "Marker size in pt for points" },
                     "marker": { "type": "string", "enum": ["circle", "square", "diamond", "cross", "x"], "description": "Marker shape for points" },
@@ -563,11 +565,12 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_webmap",
-            "description": "Export any .shp or .geojson layer into a single self-contained interactive Leaflet HTML webmap with basemap switcher, class colors, opacity slider, popups, and area bar chart (zero ArcGIS needed).",
+            "description": "Export one or more .shp/.geojson layers into a single self-contained multi-layer interactive Leaflet HTML webmap with layer switcher checkboxes, basemap switcher, class colors, opacity slider, popups, and area bar chart (zero ArcGIS needed).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "input": { "type": "string", "description": "Input .shp or .geojson path" },
+                    "input": { "type": "string", "description": "Single .shp or .geojson path (or use inputs array for multi-layer map)" },
+                    "inputs": { "type": "array", "items": { "type": "string" }, "description": "Multiple .shp/.geojson layer paths to overlay with interactive checkbox layer switcher" },
                     "out": { "type": "string", "description": "Output standalone .html path" },
                     "field": { "type": "string", "description": "Optional attribute field to colorize & summarize (e.g. KELAS)" },
                     "preset": { "type": "string", "enum": ["hazard-pastel", "hazard", "viridis", "blue", "category"] },
@@ -575,7 +578,7 @@ fn tool_definitions() -> Value {
                     "basemap": { "type": "string", "enum": ["satellite", "osm", "light", "topo", "dark"] },
                     "simplify": { "type": "number", "description": "Simplification tolerance in degrees (default: 0.0001)" }
                 },
-                "required": ["input", "out"]
+                "required": ["out"]
             }
         },
         {
@@ -1019,11 +1022,17 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             if let Some(il) = str_arg(args, "inset_layer") {
                 cli_args.extend(["--inset-layer".into(), il.into()]);
             }
+            if let Some(ip) = str_arg(args, "inset_petunjuk") {
+                cli_args.extend(["--inset-petunjuk".into(), ip.into()]);
+            }
             if let Some(gr) = args.get("grid").and_then(|v| v.as_bool()) {
                 cli_args.extend(["--grid".into(), gr.to_string()]);
             }
             if let Some(gm) = str_arg(args, "grid_mode") {
                 cli_args.extend(["--grid-mode".into(), gm.into()]);
+            }
+            if let Some(ns) = str_arg(args, "north_style") {
+                cli_args.extend(["--north-style".into(), ns.into()]);
             }
             if let Some(lyr) = str_arg(args, "lyr") {
                 cli_args.extend(["--lyr".into(), lyr.into()]);
@@ -1125,10 +1134,27 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             }
         }
         "geokit_webmap" => {
-            let (Some(input), Some(out)) = (str_arg(args, "input"), str_arg(args, "out")) else {
-                return ("Missing required arguments: input, out".into(), true);
+            let Some(out) = str_arg(args, "out") else {
+                return ("Missing required argument: out".into(), true);
             };
-            cli_args.extend(["webmap".into(), input.into(), "--out".into(), out.into()]);
+            cli_args.push("webmap".into());
+            let mut pushed_any = false;
+            if let Some(arr) = args.get("inputs").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        cli_args.push(s.into());
+                        pushed_any = true;
+                    }
+                }
+            }
+            if let Some(input) = str_arg(args, "input") {
+                cli_args.push(input.into());
+                pushed_any = true;
+            }
+            if !pushed_any {
+                return ("Missing required argument: input or inputs".into(), true);
+            }
+            cli_args.extend(["--out".into(), out.into()]);
             if let Some(f) = str_arg(args, "field") {
                 cli_args.extend(["--field".into(), f.into()]);
             }

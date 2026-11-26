@@ -4,6 +4,17 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-11-27
+
+### Added
+- **PerKaBIG Pro (`geokit live layout --template perkabig`)**:
+  - **Official Dual Insets (`--inset-petunjuk` + `--inset-layer`)**: Renders side-by-side **`PETUNJUK LETAK PETA`** (blue BIG `#0070C0` frame) and **`DIAGRAM LOKASI`** (black frame) with automatic neutral gray styling (`#F3F4F6`/`#64748B`) and red `LocatorRectangle` extent indicators per Lampiran D PerKaBIG No. 3 Tahun 2016.
+  - **Authentic PerKaBIG `U` North Arrow (`--north-style big|classic`)**: Draws the official Indonesian Gambar D.5 bold **`U`** + split black/white vector arrowhead via pure ArcObjects `PolygonElement` (default `big`, zero overlap at any DPI; optional `classic` compass rose).
+  - **Clean RBI Dual-Grid Border Ticks**: In `--grid-mode dual`, the blue WGS84 geographic graticule renders crisp BIG Blue `#0070C0` border ticks + vertical DMS labels without cluttering the map face with extra crisscrossing lines.
+- **Multi-Layer Interactive `geokit webmap`**:
+  - Now accepts multiple `.shp`/`.geojson` layers (`geokit webmap lyr1.shp lyr2.shp lyr3.shp --field KELAS --out map.html`) and builds a floating **Layer Switcher with checkboxes**, smart per-layer styling (choropleth polygons, river blue lines, hollow dashed admin boundaries, haloed point markers), per-layer popups, opacity slider, and area bar chart.
+- **`geokit fetch osm` IPv4 + User-Agent Hardening**: Forces IPv4 (`-4`) and sets a proper `User-Agent` header to prevent IPv6 blackhole hangs on Windows Overpass queries.
+
 ## [2.3.1] - 2026-11-27
 
 ### Fixed

@@ -135,6 +135,9 @@ IID_IPictureElement = _guid("{C0A341C2-CFE2-11D1-9140-0000F87808EE}")
 CLSID_Graticule = _guid("{03762C8F-F4D0-11D1-ADE8-080009EC732A}")
 CLSID_DMSGridLabel = _guid("{CE41C506-9DF9-11D2-AADE-000000000000}")
 IID_IDMSGridLabel = _guid("{CE41C503-9DF9-11D2-AADE-000000000000}")
+CLSID_PolygonElement = _guid("{3A9767C7-F253-11D0-83A4-080009B996CC}")
+CLSID_Polygon = _guid("{00A5CB42-52DA-11D0-A8F2-00608C85EDE5}")
+IID_IPointCollection = _guid("{DE08A214-4FC2-11D1-834E-0000F8775BE9}")
 
 SURROUND_LEGEND_CLSID = u"{7A3F91E4-B9E3-11D1-8756-0000F8751720}"
 SURROUND_NORTH_CLSID = u"{7A3F91DD-B9E3-11D1-8756-0000F8751720}"
@@ -987,6 +990,113 @@ def _add_picture(gc, xmin, ymin, xmax, ymax, img_path, name="logo_instansi"):
         pass
 
 
+def _add_polygon_el(gc, pts_xy, fill_rgb=(0, 0, 0), outline_rgb=(0, 0, 0), outline_width=0.7, hollow=False, name="geokit_poly"):
+    poly = _co(CLSID_Polygon, IID_IPointCollection)
+    for x, y in pts_xy:
+        pt = _make_point(x, y)
+        _vcall(poly, 5, c_void_p, c_void_p, c_void_p)(poly, pt, None, None)  # AddPoint
+        _release(pt)
+    pe = _co(CLSID_PolygonElement, IID_IFillShapeElement)
+    r, g, b = fill_rgb
+    fs = make_fill_symbol(r, g, b, outline_rgb=outline_rgb, outline_width=outline_width, hollow=hollow)
+    ifs = _qi(fs, IID_IFillSymbol)
+    _vcall(pe, 4, c_void_p)(pe, ifs)
+    el = _qi(pe, IID_IElement)
+    geom = _qi(poly, IID_IGeometry)
+    _vcall(el, 4, c_void_p)(el, geom)
+    ep = _qi(pe, IID_IElementProperties)
+    if ep:
+        nb = _bstr(name)
+        _vcall(ep, 4, c_void_p)(ep, nb)
+        _free_bstr(nb)
+        _release(ep)
+    _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
+    _release(geom)
+    _release(el)
+    _release(ifs)
+    _release(fs)
+    _release(pe)
+    _release(poly)
+
+
+def _add_big_north_arrow(gc, cx, y_bot, y_top, s=1.0):
+    """Draws the official Indonesian PerKaBIG Gambar D.5 vector North Arrow (bold 'U' + split black/white needle)."""
+    h = y_top - y_bot
+    _add_text(gc, cx, y_top - 0.02 * s, "U", size=9.0 * s, rgb=(0, 0, 0), halign=1, valign=0, name="arah_utara_u", bold=True)
+    tip_y = y_top - 0.36 * s
+    base_y = y_bot + 0.06 * s
+    notch_y = base_y + (tip_y - base_y) * 0.28
+    half_w = min(0.32 * s, h * 0.24)
+    # Left half: solid black
+    _add_polygon_el(
+        gc,
+        [(cx, tip_y), (cx - half_w, base_y), (cx, notch_y), (cx, tip_y)],
+        fill_rgb=(0, 0, 0),
+        outline_rgb=(0, 0, 0),
+        outline_width=0.7 * s,
+        hollow=False,
+        name="arah_utara_left",
+    )
+    # Right half: crisp white with black outline
+    _add_polygon_el(
+        gc,
+        [(cx, tip_y), (cx, notch_y), (cx + half_w, base_y), (cx, tip_y)],
+        fill_rgb=(255, 255, 255),
+        outline_rgb=(0, 0, 0),
+        outline_width=0.7 * s,
+        hollow=False,
+        name="arah_utara_right",
+    )
+
+
+def _create_inset_mapframe(gc, main_mf, frame_name, xmin, ymin, xmax, ymax, border_rgb=(0, 0, 0)):
+    """Creates a secondary inset MapFrame with a styled border and red LocatorRectangle linked to main_mf."""
+    in_map = _co(CLSID_Map, IID_IMap)
+    in_nb = _bstr(frame_name)
+    _vcall(in_map, 4, c_void_p)(in_map, in_nb)
+    _free_bstr(in_nb)
+    in_mf = _co(CLSID_MapFrame, IID_IMapFrame)
+    _vcall(in_mf, 12, c_void_p)(in_mf, in_map)
+    fp = _qi(in_mf, IID_IFrameProperties)
+    if fp:
+        sbdr = _co(CLSID_SymbolBorder, IID_ISymbolBorder)
+        bln = make_line_symbol(border_rgb[0], border_rgb[1], border_rgb[2], width=0.85, style="solid")
+        ibln = _qi(bln, IID_ILineSymbol)
+        _vcall(sbdr, 11, c_void_p)(sbdr, ibln)
+        ibdr = _qi(sbdr, IID_IBorder)
+        _vcall(fp, 4, c_void_p)(fp, ibdr)
+        _release(ibdr)
+        _release(ibln)
+        _release(bln)
+        _release(sbdr)
+        _release(fp)
+    lrect = _co(CLSID_LocatorRectangle, IID_ILocatorRectangle)
+    _vcall(lrect, 3, c_void_p)(lrect, main_mf)
+    rbdr = _co(CLSID_SymbolBorder, IID_ISymbolBorder)
+    rln = make_line_symbol(220, 38, 38, width=1.6, style="solid")
+    irln = _qi(rln, IID_ILineSymbol)
+    _vcall(rbdr, 11, c_void_p)(rbdr, irln)
+    irbdr = _qi(rbdr, IID_IBorder)
+    _vcall(lrect, 6, c_void_p)(lrect, irbdr)
+    _vcall(in_mf, 22, c_void_p)(in_mf, lrect)
+    _release(irbdr)
+    _release(irln)
+    _release(rln)
+    _release(rbdr)
+    _release(lrect)
+    in_el = _qi(in_mf, IID_IElement)
+    in_env = _make_envelope(xmin, ymin, xmax, ymax)
+    in_geom = _qi(in_env, IID_IGeometry)
+    _vcall(in_el, 4, c_void_p)(in_el, in_geom)
+    _vcall(gc, 5, c_void_p, c_long)(gc, in_el, 0)
+    _release(in_geom)
+    _release(in_env)
+    _release(in_el)
+    _release(in_mf)
+    _release(in_map)
+    return True
+
+
 def _nice_dms_interval(scale):
     if not scale or scale <= 0:
         return 10.0 / 60.0
@@ -1010,9 +1120,9 @@ def _nice_dms_interval(scale):
 def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", region="",
                           sheet_number="", source="Sumber: Analisis Spasial GeoKit",
                           author="Laboratorium SIG / Penyusun", edition="Edisi 1 - Tahun 2026",
-                          note="", logo_path="", has_inset=False, paper="a4",
+                          note="", logo_path="", has_inset=False, has_petunjuk=False, paper="a4",
                           crs_text="", utm_zone="", scale_val=0, span_meters=40000.0,
-                          hide_legend_names=None, add_grid=True, grid_mode="utm"):
+                          hide_legend_names=None, add_grid=True, grid_mode="utm", north_style="big"):
     """
     Constructs a strict PerKaBIG No. 3 Tahun 2016 Landscape layout (A4 29.7x21.0 cm or A3 42.0x29.7 cm):
       - Outer neatline + Map neatline + Main MapFrame with UTM / DMS / Dual RBI grids (vertical L/R)
@@ -1203,12 +1313,21 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                         _vcall(dms_lbl, 14, c_long, c_short)(dms_lbl, 4, 0)   # Right VERTICAL
                         _vcall(gr_grid, 10, c_void_p)(gr_grid, dms_lbl)
                         _release(dms_lbl)
-                        bline = make_line_symbol(0, 112, 192, width=0.22, style="dash")
+                        # In dual mode, use clean BIG blue border ticks only (no cluttered crisscrossing lines!)
+                        if gmode == "dual":
+                            bline = make_line_symbol(0, 112, 192, width=0.0, style="null", null_color=True)
+                        else:
+                            bline = make_line_symbol(0, 112, 192, width=0.22, style="dash")
                         ibline = _qi(bline, IID_ILineSymbol)
                         _vcall(gr_grid, 6, c_void_p)(gr_grid, ibline)
-                        _vcall(gr_grid, 14, c_double)(gr_grid, 2.5)
+                        btick = make_line_symbol(0, 112, 192, width=0.65, style="solid")
+                        ibtick = _qi(btick, IID_ILineSymbol)
+                        _vcall(gr_grid, 8, c_void_p)(gr_grid, ibtick)  # put_TickMarkSymbol (BIG Blue ticks!)
+                        _vcall(gr_grid, 14, c_double)(gr_grid, 4.0)
                         _vcall(gr_grid, 24, c_short)(gr_grid, -1)
                         _vcall(mgrids, 6, c_void_p)(mgrids, gr_grid)
+                        _release(ibtick)
+                        _release(btick)
                         _release(ibline)
                         _release(bline)
                         _release(gr_grid)
@@ -1243,32 +1362,35 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     cur_y = y_hdr_bot
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_header")
 
-    # === SECTION 2: ARAH UTARA (KIRI, 40pt!) + SKALA ANGKA (9pt BOLD) & SKALA GARIS BULAT (KANAN) ===
+    # === SECTION 2: ARAH UTARA (PERKABIG 'U' VECTOR OR CLASSIC COMPASS) + SKALA ANGKA & SKALA GARIS ===
     h_sc = 2.45 if is_a3 else 1.85
     y_sc_bot = cur_y - h_sc
     if mf:
-        # Bold legible North Arrow cleanly centered on left (zero overlap!)
-        uid_na = _make_uid(SURROUND_NORTH_CLSID)
-        na_sf = c_void_p()
-        if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_na, None, byref(na_sf)) == 0 and na_sf.value:
-            na_ms = c_void_p()
-            _vcall(na_sf, 11, POINTER(c_void_p))(na_sf, byref(na_ms))
-            if na_ms.value:
-                ina = _qi(na_ms, IID_INorthArrow)
-                if ina:
-                    _vcall(ina, 16, c_double)(ina, 40.0 * s)  # Size = 40 pt (~1.4 cm) -> crisp & bold inside 1.9 cm box!
-                    _release(ina)
-                _release(na_ms)
-            el = _qi(na_sf, IID_IElement)
-            env = _make_envelope(ix + 0.02 * s, y_sc_bot + 0.16 * s, ix + 1.45 * s, cur_y - 0.16 * s)
-            geom = _qi(env, IID_IGeometry)
-            _vcall(el, 4, c_void_p)(el, geom)
-            _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
-            _release(geom)
-            _release(env)
-            _release(el)
-            _release(na_sf)
-        _release(uid_na)
+        if (north_style or "big").lower() == "classic":
+            uid_na = _make_uid(SURROUND_NORTH_CLSID)
+            na_sf = c_void_p()
+            if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_na, None, byref(na_sf)) == 0 and na_sf.value:
+                na_ms = c_void_p()
+                _vcall(na_sf, 11, POINTER(c_void_p))(na_sf, byref(na_ms))
+                if na_ms.value:
+                    ina = _qi(na_ms, IID_INorthArrow)
+                    if ina:
+                        _vcall(ina, 16, c_double)(ina, 40.0 * s)
+                        _release(ina)
+                    _release(na_ms)
+                el = _qi(na_sf, IID_IElement)
+                env = _make_envelope(ix + 0.02 * s, y_sc_bot + 0.16 * s, ix + 1.45 * s, cur_y - 0.16 * s)
+                geom = _qi(env, IID_IGeometry)
+                _vcall(el, 4, c_void_p)(el, geom)
+                _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
+                _release(geom)
+                _release(env)
+                _release(el)
+                _release(na_sf)
+            _release(uid_na)
+        else:
+            # Authentic PerKaBIG Gambar D.5 Indonesian 'U' vector North Arrow (0% overlap guaranteed!)
+            _add_big_north_arrow(gc, ix + 0.65 * s, y_sc_bot + 0.14 * s, cur_y - 0.14 * s, s=s)
 
         # Right side of Section 2: SKALA 1 : N (centered over scale bar!) + Alternating Scale Bar (round km/m)
         sb_x = ix + 1.55 * s
@@ -1318,60 +1440,43 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     cur_y = y_sc_bot
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_skala")
 
-    # === SECTION 3: DIAGRAM LOKASI / PETA INSET (2nd MapFrame + Red LocatorRectangle) ===
+    # === SECTION 3: PETUNJUK LETAK PETA (KIRI) & DIAGRAM LOKASI (KANAN) — 1 OR 2 INSETS ===
     inset_created = False
-    if has_inset and mf:
+    petunjuk_created = False
+    if (has_inset or has_petunjuk) and mf:
         h_ins = 4.00 if is_a3 else 2.85
         y_ins_bot = cur_y - h_ins
-        _add_text(gc, cx, cur_y - 0.12 * s, "DIAGRAM LOKASI", size=7.2 * s, rgb=big_blue, halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
-        try:
-            in_map = _co(CLSID_Map, IID_IMap)
-            in_nb = _bstr("Diagram Lokasi")
-            _vcall(in_map, 4, c_void_p)(in_map, in_nb)
-            _free_bstr(in_nb)
-            in_mf = _co(CLSID_MapFrame, IID_IMapFrame)
-            _vcall(in_mf, 12, c_void_p)(in_mf, in_map)
-            fp = _qi(in_mf, IID_IFrameProperties)
-            if fp:
-                sbdr = _co(CLSID_SymbolBorder, IID_ISymbolBorder)
-                bln = make_line_symbol(0, 0, 0, width=0.8, style="solid")
-                ibln = _qi(bln, IID_ILineSymbol)
-                _vcall(sbdr, 11, c_void_p)(sbdr, ibln)
-                ibdr = _qi(sbdr, IID_IBorder)
-                _vcall(fp, 4, c_void_p)(fp, ibdr)
-                _release(ibdr)
-                _release(ibln)
-                _release(bln)
-                _release(sbdr)
-                _release(fp)
-            lrect = _co(CLSID_LocatorRectangle, IID_ILocatorRectangle)
-            _vcall(lrect, 3, c_void_p)(lrect, mf)
-            rbdr = _co(CLSID_SymbolBorder, IID_ISymbolBorder)
-            rln = make_line_symbol(220, 38, 38, width=1.6, style="solid")
-            irln = _qi(rln, IID_ILineSymbol)
-            _vcall(rbdr, 11, c_void_p)(rbdr, irln)
-            irbdr = _qi(rbdr, IID_IBorder)
-            _vcall(lrect, 6, c_void_p)(lrect, irbdr)
-            _vcall(in_mf, 22, c_void_p)(in_mf, lrect)
-            _release(irbdr)
-            _release(irln)
-            _release(rln)
-            _release(rbdr)
-            _release(lrect)
-
-            in_el = _qi(in_mf, IID_IElement)
-            in_env = _make_envelope(ix + 0.15 * s, y_ins_bot + 0.14 * s, px + pw_p - pad - 0.15 * s, cur_y - 0.50 * s)
-            in_geom = _qi(in_env, IID_IGeometry)
-            _vcall(in_el, 4, c_void_p)(in_el, in_geom)
-            _vcall(gc, 5, c_void_p, c_long)(gc, in_el, 0)
-            _release(in_geom)
-            _release(in_env)
-            _release(in_el)
-            _release(in_mf)
-            _release(in_map)
-            inset_created = True
-        except Exception:
-            pass
+        if has_petunjuk and has_inset:
+            # Dual side-by-side official PerKaBIG Lampiran D inset frames!
+            gap = 0.22 * s
+            half_w = (pw_p - 2.0 * pad - gap) / 2.0
+            x1_l = ix
+            x1_r = ix + half_w
+            x2_l = x1_r + gap
+            x2_r = px + pw_p - pad
+            _add_text(gc, (x1_l + x1_r) / 2.0, cur_y - 0.10 * s, "PETUNJUK LETAK PETA", size=5.8 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_petunjuk_letak", bold=True)
+            _add_text(gc, (x2_l + x2_r) / 2.0, cur_y - 0.10 * s, "DIAGRAM LOKASI", size=5.8 * s, rgb=big_blue, halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
+            try:
+                petunjuk_created = _create_inset_mapframe(gc, mf, "Petunjuk Letak Peta", x1_l, y_ins_bot + 0.14 * s, x1_r, cur_y - 0.44 * s, border_rgb=big_blue)
+            except Exception:
+                pass
+            try:
+                inset_created = _create_inset_mapframe(gc, mf, "Diagram Lokasi", x2_l, y_ins_bot + 0.14 * s, x2_r, cur_y - 0.44 * s, border_rgb=(0, 0, 0))
+            except Exception:
+                pass
+        else:
+            lbl_t = "PETUNJUK LETAK PETA" if has_petunjuk else "DIAGRAM LOKASI"
+            frm_nm = "Petunjuk Letak Peta" if has_petunjuk else "Diagram Lokasi"
+            bdr_rgb = big_blue if has_petunjuk else (0, 0, 0)
+            _add_text(gc, cx, cur_y - 0.10 * s, lbl_t, size=7.0 * s, rgb=big_blue, halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
+            try:
+                ok = _create_inset_mapframe(gc, mf, frm_nm, ix + 0.15 * s, y_ins_bot + 0.14 * s, px + pw_p - pad - 0.15 * s, cur_y - 0.46 * s, border_rgb=bdr_rgb)
+                if has_petunjuk:
+                    petunjuk_created = ok
+                else:
+                    inset_created = ok
+            except Exception:
+                pass
         cur_y = y_ins_bot
         _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_inset")
 
@@ -1478,7 +1583,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     _release(gc)
     _release(pl)
     refresh_mxdoc(mxdoc)
-    return hidden, inset_created
+    return hidden, inset_created, petunjuk_created
 
 
 def style_inset_layers(mxdoc, df_name="Diagram Lokasi", fill_hex="#F3F4F6", outline_hex="#64748B", outline_width=0.55):

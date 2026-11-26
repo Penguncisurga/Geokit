@@ -279,9 +279,12 @@ pub enum LiveCommand {
         /// Optional PNG logo path for the institution block
         #[arg(long)]
         logo: Option<PathBuf>,
-        /// Optional context polygon shapefile (e.g. Province/Regency boundaries) to build an automatic DIAGRAM LOKASI inset map with red extent box!
+        /// Optional context polygon shapefile (e.g. Province boundaries) to build an automatic DIAGRAM LOKASI inset map with red extent box!
         #[arg(long)]
         inset_layer: Option<PathBuf>,
+        /// Optional local context polygon shapefile (e.g. Regency/District boundaries) to add the left PETUNJUK LETAK PETA inset box (PerKaBIG Lampiran D dual insets!)
+        #[arg(long)]
+        inset_petunjuk: Option<PathBuf>,
         /// Optional layer name to zoom the map frame extent to
         #[arg(long)]
         zoom_layer: Option<String>,
@@ -291,9 +294,12 @@ pub enum LiveCommand {
         /// Add grid/graticule on the MapFrame (default: true for perkabig template)
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         grid: bool,
-        /// Grid mode for perkabig layout: utm (default black UTM), dms (blue WGS84 DMS), or dual (RBI Cetak UTM + DMS!)
+        /// Grid mode for perkabig layout: utm (default black UTM), dms (blue WGS84 DMS), or dual (RBI Cetak UTM + blue DMS ticks!)
         #[arg(long, default_value = "utm")]
         grid_mode: String,
+        /// North arrow style for perkabig layout: big (default Indonesian 'U' Gambar D.5 vector arrow) or classic (compass rose)
+        #[arg(long, default_value = "big")]
+        north_style: String,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
@@ -816,10 +822,12 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
             note,
             logo,
             inset_layer,
+            inset_petunjuk,
             zoom_layer,
             hide_legend,
             grid,
             grid_mode,
+            north_style,
             port,
         } => send_live_request(
             port,
@@ -838,10 +846,12 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
                 "note": note,
                 "logo": logo.as_deref().map(abs_string),
                 "inset_layer": inset_layer.as_deref().map(abs_string),
+                "inset_petunjuk": inset_petunjuk.as_deref().map(abs_string),
                 "zoom_layer": zoom_layer,
                 "hide_legend": hide_legend,
                 "grid": grid,
                 "grid_mode": grid_mode,
+                "north_style": north_style,
             }),
         )?,
         LiveCommand::RunGp { tool, args, port } => send_live_request(

@@ -163,10 +163,11 @@ enum Commands {
         #[command(subcommand)]
         command: FetchCommand,
     },
-    /// Export any .shp or .geojson layer into a single self-contained interactive Leaflet HTML webmap (no ArcGIS needed)
+    /// Export one or more .shp/.geojson layers into a single self-contained multi-layer interactive Leaflet HTML webmap (no ArcGIS needed)
     Webmap {
-        /// Input shapefile (.shp) or GeoJSON (.geojson)
-        input: PathBuf,
+        /// One or more input shapefile (.shp) or GeoJSON (.geojson) layers
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
         /// Output standalone .html file path
         #[arg(short, long, default_value = "geokit_webmap.html")]
         out: PathBuf,
@@ -285,7 +286,7 @@ fn real_main() -> Result<()> {
         Commands::Report { path, out } => commands::report::run(&path, &out),
         Commands::Fetch { command } => commands::fetch::run(command),
         Commands::Webmap {
-            input,
+            inputs,
             out,
             field,
             preset,
@@ -293,7 +294,7 @@ fn real_main() -> Result<()> {
             basemap,
             simplify,
         } => commands::webmap::run(
-            &input,
+            &inputs,
             &out,
             field.as_deref(),
             &preset,

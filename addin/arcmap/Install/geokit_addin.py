@@ -479,11 +479,13 @@ def _handle_command_on_ui_thread(req):
         note = req.get("note")
         logo_path = req.get("logo")
         inset_layer = req.get("inset_layer")
+        inset_petunjuk = req.get("inset_petunjuk")
         paper = (req.get("paper") or "a4").lower()
         zoom_layer = req.get("zoom_layer")
         hide_legend_raw = req.get("hide_legend")
         add_grid = bool(req.get("grid", True))
         grid_mode = (req.get("grid_mode") or "utm").lower()
+        north_style = (req.get("north_style") or "big").lower()
 
         if template == "perkabig" or view == "layout":
             mxd.activeView = "PAGE_LAYOUT"
@@ -521,10 +523,11 @@ def _handle_command_on_ui_thread(req):
                     utm_zone = nm_clean
             hide_names = [n.strip() for n in (hide_legend_raw or "hillshade,Basemap").split(",") if n.strip()]
             has_inset = bool(inset_layer and os.path.exists(inset_layer))
+            has_petunjuk = bool(inset_petunjuk and os.path.exists(inset_petunjuk))
 
             mxdoc = _ao.get_current_mxdoc()
             try:
-                hidden, inset_ok = _ao.build_perkabig_layout(
+                hidden, inset_ok, petunjuk_ok = _ao.build_perkabig_layout(
                     mxdoc,
                     title=title or "PETA TEMATIK WILAYAH",
                     subtitle=subtitle or "",
@@ -536,6 +539,7 @@ def _handle_command_on_ui_thread(req):
                     note=note or "",
                     logo_path=logo_path if (logo_path and os.path.exists(logo_path)) else "",
                     has_inset=has_inset,
+                    has_petunjuk=has_petunjuk,
                     paper=paper,
                     crs_text=crs_str,
                     utm_zone=utm_zone,
@@ -544,6 +548,7 @@ def _handle_command_on_ui_thread(req):
                     hide_legend_names=hide_names,
                     add_grid=add_grid,
                     grid_mode=grid_mode,
+                    north_style=north_style,
                 )
             finally:
                 _ao._release(mxdoc)
@@ -563,18 +568,17 @@ def _handle_command_on_ui_thread(req):
                         for el in arcpy.mapping.ListLayoutElements(mxd, "TEXT_ELEMENT", "skala_angka"):
                             el.text = "SKALA 1 : %s" % ("{:,}".format(final_s).replace(",", "."))
 
-            # Populate, project, style & zoom Diagram Lokasi inset DataFrame when inset_layer is supplied!
-            inset_populated = False
-            if has_inset and inset_ok:
+            # Populate, project, style & zoom Petunjuk Letak Peta & Diagram Lokasi inset DataFrames!
+            def _populate_inset_df(target_df_name, lyr_path, mult_x, mult_y):
                 try:
                     for cand_df in arcpy.mapping.ListDataFrames(mxd):
-                        if cand_df.name == "Diagram Lokasi":
+                        if cand_df.name == target_df_name:
                             if sr and getattr(sr, "name", "Unknown") != "Unknown":
                                 try:
                                     cand_df.spatialReference = sr
                                 except Exception:
                                     pass
-                            in_lyr = arcpy.mapping.Layer(inset_layer)
+                            in_lyr = arcpy.mapping.Layer(lyr_path)
                             arcpy.mapping.AddLayer(cand_df, in_lyr, "TOP")
                             added_in = arcpy.mapping.ListLayers(mxd, "", cand_df)
                             if zoom_ext is not None:
@@ -582,21 +586,24 @@ def _handle_command_on_ui_thread(req):
                                 h = max(zoom_ext.YMax - zoom_ext.YMin, 1000.0)
                                 cx_m = (zoom_ext.XMin + zoom_ext.XMax) / 2.0
                                 cy_m = (zoom_ext.YMin + zoom_ext.YMax) / 2.0
-                                cand_df.extent = arcpy.Extent(cx_m - w * 2.8, cy_m - h * 1.8, cx_m + w * 2.8, cy_m + h * 1.8)
+                                cand_df.extent = arcpy.Extent(cx_m - w * mult_x, cy_m - h * mult_y, cx_m + w * mult_x, cy_m + h * mult_y)
                             elif added_in:
                                 cand_df.extent = added_in[0].getExtent(True)
                             try:
                                 mx_in = _ao.get_current_mxdoc()
                                 try:
-                                    _ao.style_inset_layers(mx_in, "Diagram Lokasi")
+                                    _ao.style_inset_layers(mx_in, target_df_name)
                                 finally:
                                     _ao._release(mx_in)
                             except Exception:
                                 pass
-                            inset_populated = True
-                            break
+                            return True
                 except Exception:
                     pass
+                return False
+
+            petunjuk_populated = _populate_inset_df("Petunjuk Letak Peta", inset_petunjuk, 1.5, 1.2) if (has_petunjuk and petunjuk_ok) else False
+            inset_populated = _populate_inset_df("Diagram Lokasi", inset_layer, 3.0, 2.0) if (has_inset and inset_ok) else False
 
             _force_refresh()
             return {
@@ -608,7 +615,10 @@ def _handle_command_on_ui_thread(req):
                 "crs": crs_str,
                 "hidden_legend_items": hidden,
                 "inset": inset_populated,
+                "inset_petunjuk": petunjuk_populated,
+                "north_style": north_style,
                 "grid": add_grid,
+                "grid_mode": grid_mode,
             }
 
         updated_elements = []

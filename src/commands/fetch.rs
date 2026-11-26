@@ -61,7 +61,10 @@ fn resolve_bbox(aoi: Option<&Path>, bbox_str: Option<&str>) -> Result<(f64, f64,
 fn curl_post(url: &str, body: &str) -> Result<String> {
     let out = Command::new("curl")
         .args([
+            "-4",
             "-fsSL",
+            "-A",
+            "geokit-gis-cli/2.4 (+https://github.com/Penguncisurga/Geokit)",
             "--connect-timeout",
             "10",
             "--max-time",
