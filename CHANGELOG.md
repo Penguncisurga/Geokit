@@ -4,6 +4,15 @@ All notable changes to `geokit` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-11-26
+
+### Improved
+- **Smart `geokit live add` Path Resolution**:
+  - Passing a **folder** now automatically discovers and adds all `.shp`, `.tif`, `.tiff`, `.lyr`, `.img`, `.ecw`, and `.jp2` layers inside it (instead of failing with `CreateObject Layer invalid data source`).
+  - Automatically resolves **missing file extensions** (e.g. `...\ADM_JAWA_TENGAH_KEC` → `...\ADM_JAWA_TENGAH_KEC.shp`) when Windows hides extensions.
+  - Automatically normalizes accidental Windows Explorer copy-paste prefixes (e.g. `Lokal Disk (D:)\...` / `Local Disk (D:)\...` → `D:\...`).
+  - Fixed `.gdb\<feature_class>` virtual paths being rejected by OS file-existence checks, and added a clear usage hint when a `.gdb` folder itself is passed.
+
 ## [1.5.0] - 2026-11-26
 
 ### Added

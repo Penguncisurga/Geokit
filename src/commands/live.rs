@@ -2,10 +2,12 @@ use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use colored::Colorize;
 use serde_json::{json, Value};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use walkdir::WalkDir;
 
 use crate::engine::abs_string;
 
@@ -37,9 +39,9 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Add a shapefile, raster, .lyr, or .gdb feature class live onto the open ArcMap map
+    /// Add a shapefile, raster, .lyr, .gdb feature class, or an entire folder of layers live onto ArcMap
     Add {
-        /// Dataset path to add
+        /// Dataset path or folder containing .shp/.tif/.lyr files (missing .shp extension is auto-resolved)
         path: PathBuf,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
@@ -316,6 +318,151 @@ fn install_addin(version: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+const LIVE_ADD_EXTS: &[&str] = &["shp", "lyr", "tif", "tiff", "img", "ecw", "jp2"];
+
+/// Fixes common Windows Explorer copy-paste prefixes like
+/// `"Lokal Disk (D:)\Users\..."` or `"Local Disk (D:)\Users\..."` -> `"D:\Users\..."`.
+fn normalize_explorer_path(raw: &Path) -> PathBuf {
+    if raw.exists() {
+        return raw.to_path_buf();
+    }
+    let s = raw.to_string_lossy();
+    let trimmed = s.trim();
+    if let Some(open) = trimmed.find('(') {
+        let rest = &trimmed[open + 1..];
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 4
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b')'
+            && (bytes[3] == b'\\' || bytes[3] == b'/')
+        {
+            let before = &trimmed[..open];
+            if !before.contains('\\') && !before.contains('/') {
+                let drive = (bytes[0] as char).to_ascii_uppercase();
+                let tail = &rest[3..];
+                return PathBuf::from(format!("{drive}:{tail}"));
+            }
+        }
+    }
+    PathBuf::from(trimmed)
+}
+
+fn is_gdb_dir(path: &Path) -> bool {
+    path.is_dir()
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("gdb"))
+            .unwrap_or(false)
+}
+
+/// Returns true if `path` refers to a feature class/raster inside an existing `.gdb` folder
+/// (e.g. `D:\data\project.gdb\batas_desa`, which does not exist as a standalone OS file).
+fn is_gdb_member_path(path: &Path) -> bool {
+    for anc in path.ancestors().skip(1) {
+        if is_gdb_dir(anc) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_live_addable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| LIVE_ADD_EXTS.iter().any(|x| ext.eq_ignore_ascii_case(x)))
+        .unwrap_or(false)
+}
+
+/// Resolves user input for `geokit live add`:
+/// - Normalizes Windows Explorer drive label prefixes (`Lokal Disk (D:)\...` -> `D:\...`)
+/// - Supports `.gdb\feature_class` virtual paths
+/// - Auto-completes missing `.shp`/`.tif`/`.lyr` extensions when omitted
+/// - Scans directories recursively for addable GIS layers (`.shp`, `.tif`, `.lyr`, etc.)
+fn resolve_live_add_targets(raw: &Path) -> Result<Vec<PathBuf>> {
+    let path = normalize_explorer_path(raw);
+    if path != raw {
+        eprintln!(
+            "{} Normalized Windows Explorer drive path -> {}",
+            "Note:".cyan().bold(),
+            path.display()
+        );
+    }
+
+    if is_gdb_member_path(&path) {
+        return Ok(vec![path]);
+    }
+
+    if !path.exists() {
+        for ext in LIVE_ADD_EXTS {
+            let mut candidate = OsString::from(path.as_os_str());
+            candidate.push(".");
+            candidate.push(ext);
+            let cand_path = PathBuf::from(candidate);
+            if cand_path.is_file() {
+                eprintln!(
+                    "{} Auto-resolved missing '.{ext}' extension -> {}",
+                    "Note:".cyan().bold(),
+                    cand_path.display()
+                );
+                return Ok(vec![cand_path]);
+            }
+        }
+        bail!(
+            "Path does not exist: {}\n\
+             Tips:\n\
+             - Use a real drive letter (e.g. D:\\... instead of 'Lokal Disk (D:)\\...').\n\
+             - Include the file extension (.shp, .tif, .lyr), or pass a folder containing shapefiles/rasters.",
+            path.display()
+        );
+    }
+
+    if is_gdb_dir(&path) {
+        bail!(
+            "'{}' is a File Geodatabase (.gdb) container, not a single layer.\n\
+             Run `geokit gp info \"{}\"` to list layers inside, then add one with:\n\
+             geokit live add \"{}\\<layer_name>\"",
+            path.display(),
+            path.display(),
+            path.display()
+        );
+    }
+
+    if path.is_dir() {
+        let mut found: Vec<PathBuf> = Vec::new();
+        for entry in WalkDir::new(&path)
+            .into_iter()
+            .filter_entry(|e| !is_gdb_dir(e.path()))
+            .flatten()
+        {
+            if is_live_addable_file(entry.path()) {
+                found.push(entry.into_path());
+            }
+        }
+        found.sort();
+        if found.is_empty() {
+            bail!(
+                "Folder '{}' contains no supported GIS layers (.shp, .tif, .lyr, .img).\n\
+                 Pass a direct dataset file path (e.g. path\\layer.shp) or a .gdb feature class (path\\data.gdb\\layer).",
+                path.display()
+            );
+        }
+        eprintln!(
+            "{} Found {} GIS layer(s) in folder '{}', adding to ArcMap...",
+            "Note:".cyan().bold(),
+            found.len(),
+            path.display()
+        );
+        return Ok(found);
+    }
+
+    Ok(vec![path])
+}
+
 pub fn run(cmd: LiveCommand) -> Result<()> {
     let resp = match cmd {
         LiveCommand::InstallAddin { version } => return install_addin(version.as_deref()),
@@ -327,13 +474,42 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
             send_live_request(port, &json!({ "action": "layer_info", "layer": layer }))?
         }
         LiveCommand::Add { path, port } => {
-            if !path.exists() {
-                bail!("Path does not exist: {}", path.display());
+            let targets = resolve_live_add_targets(&path)?;
+            if targets.len() == 1 {
+                send_live_request(
+                    port,
+                    &json!({ "action": "add_layer", "path": abs_string(&targets[0]) }),
+                )?
+            } else {
+                let mut added = Vec::new();
+                let mut errors = Vec::new();
+                for t in &targets {
+                    match send_live_request(
+                        port,
+                        &json!({ "action": "add_layer", "path": abs_string(t) }),
+                    ) {
+                        Ok(r) => added.push(r),
+                        Err(e) => errors.push(json!({
+                            "path": abs_string(t),
+                            "error": e.to_string(),
+                        })),
+                    }
+                }
+                if added.is_empty() {
+                    bail!(
+                        "Failed to add any layers from '{}': {}",
+                        path.display(),
+                        serde_json::to_string_pretty(&errors)?
+                    );
+                }
+                json!({
+                    "ok": errors.is_empty(),
+                    "added_count": added.len(),
+                    "error_count": errors.len(),
+                    "added": added,
+                    "errors": errors,
+                })
             }
-            send_live_request(
-                port,
-                &json!({ "action": "add_layer", "path": abs_string(&path) }),
-            )?
         }
         LiveCommand::Remove { layer, port } => {
             send_live_request(port, &json!({ "action": "remove_layer", "layer": layer }))?
@@ -414,4 +590,53 @@ pub fn run(cmd: LiveCommand) -> Result<()> {
 
     println!("{}", serde_json::to_string_pretty(&resp)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_normalize_explorer_drive_prefix() {
+        let p = normalize_explorer_path(Path::new(r"Lokal Disk (D:)\Users\acer\PETA\batas.shp"));
+        assert_eq!(p, PathBuf::from(r"D:\Users\acer\PETA\batas.shp"));
+
+        let p2 = normalize_explorer_path(Path::new(r"Local Disk (e:)\Data\dem.tif"));
+        assert_eq!(p2, PathBuf::from(r"E:\Data\dem.tif"));
+    }
+
+    #[test]
+    fn test_resolve_live_add_missing_extension_and_folder_and_gdb() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        // 1. Missing .shp extension auto-resolution
+        let shp = root.join("adm_jateng.shp");
+        fs::write(&shp, b"shp").unwrap();
+        let no_ext = root.join("adm_jateng");
+        let resolved = resolve_live_add_targets(&no_ext).unwrap();
+        assert_eq!(resolved, vec![shp.clone()]);
+
+        // 2. Folder auto-discovery
+        let sub = root.join("peta_dasar");
+        fs::create_dir(&sub).unwrap();
+        let sub_shp = sub.join("jalan.shp");
+        let sub_tif = sub.join("dem.tif");
+        fs::write(&sub_shp, b"shp").unwrap();
+        fs::write(&sub_tif, b"tif").unwrap();
+        let folder_res = resolve_live_add_targets(&sub).unwrap();
+        assert_eq!(folder_res.len(), 2);
+        assert!(folder_res.contains(&sub_shp));
+        assert!(folder_res.contains(&sub_tif));
+
+        // 3. .gdb container rejected with helpful message, while .gdb\layer passes through
+        let gdb = root.join("proyek.gdb");
+        fs::create_dir(&gdb).unwrap();
+        assert!(resolve_live_add_targets(&gdb).is_err());
+        let fc = gdb.join("batas_desa");
+        let fc_res = resolve_live_add_targets(&fc).unwrap();
+        assert_eq!(fc_res, vec![fc]);
+    }
 }
