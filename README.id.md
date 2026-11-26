@@ -155,6 +155,29 @@ Kamu bisa mengubah nama folder `organize`, default EPSG untuk `gp project`, defa
 
 ---
 
+### 6. Built-in MCP Server (`geokit mcp`) & Dukungan ArcMap 10.x (`.mxd`)
+
+`geokit` sudah memiliki **MCP Server** bawaan (`geokit mcp`) via `stdio`, sehingga AI Agent (Antigravity, Claude Desktop, Cursor, VS Code) bisa langsung memakai seluruh fitur `geokit` tanpa perlu membuka GUI ArcGIS!
+
+Tambahkan ke konfigurasi MCP client kamu:
+
+```json
+{
+  "mcpServers": {
+    "geokit": {
+      "command": "geokit",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Untuk **ArcMap 10.x (`.mxd` / Python 2.7)**:
+- File `.mxd` pada `geokit layout export` dan `geokit map broken-links` / `fix-links` otomatis dijalankan lewat Python 2.7 ArcMap (`arcpy.mapping`).
+- Gunakan `--engine arcmap` pada `geokit gp ...` untuk menjalankan geoprocessing lewat ArcMap 10.x.
+
+---
+
 ## Lisensi
 
 Proyek ini dirilis dengan [Lisensi MIT](LICENSE).

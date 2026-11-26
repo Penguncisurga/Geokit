@@ -13,10 +13,12 @@ use tempfile::Builder;
 pub enum EngineBackend {
     Auto,
     Arcgis,
+    Arcmap,
     Gdal,
 }
 
 const ARCPY_RUNNER_SCRIPT: &str = include_str!("../../scripts/arcpy_runner.py");
+const ARCMAP_RUNNER_SCRIPT: &str = include_str!("../../scripts/arcmap_runner.py");
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArcGisEnvironment {
@@ -166,6 +168,68 @@ pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -
     if !status.success() {
         bail!(
             "ArcGIS geoprocessing exited with status code {:?}",
+            status.code()
+        );
+    }
+
+    Ok(())
+}
+
+/// Runs the embedded `arcmap_runner.py` script in an ArcMap 10.x (Python 2.7) session.
+pub fn run_arcmap_job<T: Serialize>(
+    override_arcmap_python: Option<&Path>,
+    payload: &T,
+) -> Result<()> {
+    let py = if let Some(custom) = override_arcmap_python {
+        if custom.exists() {
+            Some(custom.to_path_buf())
+        } else {
+            None
+        }
+    } else if let Ok(env_path) = env::var("GEOKIT_ARCMAP_PYTHON") {
+        let p = PathBuf::from(env_path);
+        p.exists().then_some(p)
+    } else {
+        find_default_arcmap_python()
+    };
+
+    let Some(python_exe) = py else {
+        bail!(
+            "ArcMap 10.x Python (python.exe) was not found.\n\
+             Hint: Install ArcGIS Desktop 10.x or set `GEOKIT_ARCMAP_PYTHON`.\n\
+             Run `geokit doctor` to inspect your environment."
+        );
+    };
+
+    let script_file = Builder::new()
+        .prefix("geokit_arcmap_")
+        .suffix(".py")
+        .tempfile()
+        .context("Failed to create temporary arcmap runner script")?;
+    std::fs::write(script_file.path(), ARCMAP_RUNNER_SCRIPT)
+        .context("Failed to write temporary arcmap runner script")?;
+
+    let payload_file = Builder::new()
+        .prefix("geokit_payload_")
+        .suffix(".json")
+        .tempfile()
+        .context("Failed to create temporary payload file")?;
+    let json_str = serde_json::to_string_pretty(payload)?;
+    std::fs::write(payload_file.path(), json_str)
+        .context("Failed to write temporary payload file")?;
+
+    let status = Command::new(&python_exe)
+        .arg(script_file.path())
+        .arg(payload_file.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .with_context(|| format!("Failed to invoke {}", python_exe.display()))?;
+
+    if !status.success() {
+        bail!(
+            "ArcMap geoprocessing exited with status code {:?}",
             status.code()
         );
     }

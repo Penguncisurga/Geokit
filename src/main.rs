@@ -118,6 +118,8 @@ enum Commands {
         #[command(subcommand)]
         command: HydroCommand,
     },
+    /// Run geokit as a Model Context Protocol (MCP) JSON-RPC 2.0 server over stdio
+    Mcp,
 }
 
 fn main() -> Result<()> {
@@ -145,9 +147,12 @@ fn main() -> Result<()> {
             dry_run,
         } => commands::clean::run(&path, include_xml, dry_run),
         Commands::Gp { command } => commands::gp::run(command, effective_propy, &cfg, cli.engine),
-        Commands::Layout { command } => commands::layout::run(command, effective_propy, &cfg),
-        Commands::Map { command } => commands::map::run(command, effective_propy),
+        Commands::Layout { command } => {
+            commands::layout::run(command, effective_propy, &cfg, cli.engine)
+        }
+        Commands::Map { command } => commands::map::run(command, effective_propy, cli.engine),
         Commands::Raster { command } => commands::raster::run(command, effective_propy, cli.engine),
         Commands::Hydro { command } => commands::hydro::run(command, effective_propy),
+        Commands::Mcp => commands::mcp::run(),
     }
 }

@@ -202,14 +202,38 @@ tabular = "05_Tabular"
 
 ---
 
+### 6. Built-in MCP Server (`geokit mcp`) & ArcMap 10.x Support
+
+`geokit` ships with a built-in **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdio`, allowing AI assistants (Antigravity, Claude Desktop, Cursor, VS Code) to run all `geokit` tools natively without opening the ArcGIS GUI.
+
+Add to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "geokit": {
+      "command": "geokit",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**ArcMap 10.x (`.mxd` / Python 2.7) Support:**
+- Passing an `.mxd` file to `geokit layout export` or `geokit map broken-links` / `fix-links` automatically routes to ArcMap 10.x (`arcpy.mapping`).
+- Pass `--engine arcmap` to run batch `geokit gp` commands using ArcMap 10.x Python 2.7 (`C:\Python27\ArcGIS10.x\python.exe`, or set `GEOKIT_ARCMAP_PYTHON`).
+
+---
+
 ## Roadmap
 
-- [x] `geokit layout list` & `geokit layout export` — Batch export `.aprx` layouts to PDF/PNG/JPG
-- [x] `geokit map broken-links` & `geokit map fix-links` — Detect and repair broken data sources in `.aprx`
+- [x] `geokit layout list` & `geokit layout export` — Batch export `.aprx` & `.mxd` layouts to PDF/PNG/JPG
+- [x] `geokit map broken-links` & `geokit map fix-links` — Detect and repair broken data sources in `.aprx` & `.mxd`
 - [x] `geokit init` & `geokit.toml` — Custom folder templates, default EPSG, and layout defaults per project
-- [x] Optional GDAL / QGIS CLI backend (`--engine auto|arcgis|gdal`) for cross-platform & non-ArcGIS environments
+- [x] Optional GDAL / QGIS CLI backend (`--engine auto|arcgis|arcmap|gdal`) for cross-platform & non-ArcGIS environments
 - [x] Batch overlay geoprocessing (`intersect`, `erase`, `spatial-join`)
 - [x] Raster & Hydrology/DAS toolkit (`raster mosaic/terrain/zonal-stats`, `hydro delineate/basin`)
+- [x] Built-in MCP Server (`geokit mcp`) + ArcMap 10.x (`.mxd` / Python 2.7) backend
 
 ---
 

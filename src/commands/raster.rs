@@ -67,7 +67,7 @@ struct RasterPayload {
 fn should_use_gdal(backend: EngineBackend, override_propy: Option<&Path>) -> bool {
     match backend {
         EngineBackend::Gdal => true,
-        EngineBackend::Arcgis => false,
+        EngineBackend::Arcgis | EngineBackend::Arcmap => false,
         EngineBackend::Auto => {
             detect_arcgis(override_propy).arcgis_pro_propy.is_none() && detect_gdal().is_available()
         }

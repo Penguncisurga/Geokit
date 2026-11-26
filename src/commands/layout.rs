@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
-use crate::engine::{abs_string, run_arcpy_job};
+use crate::engine::{abs_string, run_arcmap_job, run_arcpy_job, EngineBackend};
 
 #[derive(Debug, Subcommand)]
 pub enum LayoutCommand {
@@ -46,7 +46,25 @@ struct LayoutPayload {
     json: Option<bool>,
 }
 
-pub fn run(cmd: LayoutCommand, override_propy: Option<&Path>, cfg: &GeokitConfig) -> Result<()> {
+fn is_mxd_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("mxd"))
+        .unwrap_or(false)
+}
+
+pub fn run(
+    cmd: LayoutCommand,
+    override_propy: Option<&Path>,
+    cfg: &GeokitConfig,
+    backend: EngineBackend,
+) -> Result<()> {
+    let use_arcmap = match &cmd {
+        LayoutCommand::List { input, .. } | LayoutCommand::Export { input, .. } => {
+            backend == EngineBackend::Arcmap || is_mxd_path(input)
+        }
+    };
+
     let payload = match cmd {
         LayoutCommand::List { input, json } => {
             if !input.exists() {
@@ -91,5 +109,9 @@ pub fn run(cmd: LayoutCommand, override_propy: Option<&Path>, cfg: &GeokitConfig
         }
     };
 
-    run_arcpy_job(override_propy, &payload)
+    if use_arcmap {
+        run_arcmap_job(None, &payload)
+    } else {
+        run_arcpy_job(override_propy, &payload)
+    }
 }

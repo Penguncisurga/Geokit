@@ -7,7 +7,7 @@ use crate::config::GeokitConfig;
 use crate::engine::gdal::{
     detect_gdal, gdal_clip, gdal_info, gdal_merge, gdal_pack_gpkg, gdal_project, gdal_unpack,
 };
-use crate::engine::{abs_string, detect_arcgis, run_arcpy_job, EngineBackend};
+use crate::engine::{abs_string, detect_arcgis, run_arcmap_job, run_arcpy_job, EngineBackend};
 
 #[derive(Debug, Subcommand)]
 pub enum GpCommand {
@@ -167,7 +167,7 @@ struct GpPayload {
 fn should_use_gdal(backend: EngineBackend, override_propy: Option<&Path>) -> bool {
     match backend {
         EngineBackend::Gdal => true,
-        EngineBackend::Arcgis => false,
+        EngineBackend::Arcgis | EngineBackend::Arcmap => false,
         EngineBackend::Auto => {
             let arc = detect_arcgis(override_propy);
             arc.arcgis_pro_propy.is_none() && detect_gdal().is_available()
@@ -532,5 +532,9 @@ pub fn run(
         }
     };
 
-    run_arcpy_job(override_propy, &payload)
+    if backend == EngineBackend::Arcmap {
+        run_arcmap_job(None, &payload)
+    } else {
+        run_arcpy_job(override_propy, &payload)
+    }
 }

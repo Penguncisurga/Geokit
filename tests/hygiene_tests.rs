@@ -118,3 +118,56 @@ raster = "IMG_Data"
     assert!(root.join("SHP_Data").join("sungai.dbf").exists());
     assert!(root.join("IMG_Data").join("dem.tif").exists());
 }
+
+#[test]
+fn test_mcp_server_stdio_handshake_and_tools() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = geokit_bin()
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"geokit_doctor","arguments":{{}}}}}}"#
+        )
+        .unwrap();
+    }
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout_str
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 3);
+
+    let init_resp: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(init_resp["result"]["serverInfo"]["name"], "geokit");
+
+    let list_resp: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    let tools = list_resp["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 10);
+
+    let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(call_resp["result"]["isError"], false);
+}

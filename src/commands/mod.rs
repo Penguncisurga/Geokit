@@ -6,6 +6,7 @@ pub mod hydro;
 pub mod init;
 pub mod layout;
 pub mod map;
+pub mod mcp;
 pub mod organize;
 pub mod raster;
 pub mod sanitize;
