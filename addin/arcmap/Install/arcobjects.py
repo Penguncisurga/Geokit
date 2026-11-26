@@ -55,14 +55,19 @@ IID_IAppROT = _guid("{FABC30F9-D273-11D2-9F36-00C04F6BC61A}")
 IID_IMxDocument = _guid("{0522A5F1-487C-11D0-98BD-00805F7CED21}")
 IID_ILayer = _guid("{34C20002-4D3C-11D0-92D8-00805F7C28B0}")
 IID_IGeoFeatureLayer = _guid("{E156D7E5-22AF-11D3-9F99-00C04F6BC78E}")
+IID_IFeatureRenderer = _guid("{40A9E884-5533-11D0-98BE-00805F7CED21}")
 IID_ILayerEffects = _guid("{09998199-1FB8-11D3-AB4E-000000000000}")
 IID_IRasterLayer = _guid("{D02371C7-35F7-11D2-B1F2-00C04F8EDEFF}")
 IID_IRasterRenderer = _guid("{6F5322D1-3790-11D2-8D26-0000F8780535}")
-IID_IActiveView = _guid("{DD94D76B-836D-11D0-87EC-00805F7CED21}")
+IID_IActiveView = _guid("{DD94D76B-836D-11D0-87EC-080009EC732A}")
 IID_ILegend = _guid("{3141F307-38E2-11D1-8809-080009EC732A}")
 
 CLSID_RgbColor = _guid("{7EE9C496-D123-11D0-8383-080009B996CC}")
+IID_IColor = _guid("{20CD40B0-8F3D-11D0-8590-0800091A2A72}")
 IID_IRgbColor = _guid("{20CD40B1-8F3D-11D0-8590-0800091A2A72}")
+IID_ISymbol = _guid("{F3435802-5779-11D0-98BF-00805F7CED21}")
+IID_ILineSymbol = _guid("{E6BDAA7D-4D35-11D0-98BE-00805F7CED21}")
+IID_IColorRamp = _guid("{BEB87091-C0B4-11D0-8379-080009B996CC}")
 
 CLSID_SimpleLineSymbol = _guid("{7914E5F9-C892-11D0-8BB6-080009EE4E41}")
 IID_ISimpleLineSymbol = _guid("{A9360291-5828-11D0-98BF-00805F7CED21}")
@@ -266,10 +271,12 @@ def make_rgb(r, g, b, null_color=False):
 def make_line_symbol(r, g, b, width=1.2, style="solid", null_color=False):
     sym = _co(CLSID_SimpleLineSymbol, IID_ISimpleLineSymbol)
     col = make_rgb(r, g, b, null_color=null_color)
-    _vcall(sym, 4, c_void_p)(sym, col)
+    icol = _qi(col, IID_IColor)
+    _vcall(sym, 4, c_void_p)(sym, icol)
     _vcall(sym, 6, c_double)(sym, float(width))
     style_code = LINE_STYLES.get((style or "solid").lower(), 0)
     _vcall(sym, 8, c_long)(sym, style_code)
+    _release(icol)
     _release(col)
     return sym
 
@@ -277,34 +284,42 @@ def make_line_symbol(r, g, b, width=1.2, style="solid", null_color=False):
 def make_fill_symbol(r, g, b, outline_rgb=None, outline_width=0.0, outline_style="solid", hollow=False):
     sym = _co(CLSID_SimpleFillSymbol, IID_ISimpleFillSymbol)
     col = make_rgb(r, g, b, null_color=hollow)
-    _vcall(sym, 4, c_void_p)(sym, col)
+    icol = _qi(col, IID_IColor)
+    _vcall(sym, 4, c_void_p)(sym, icol)
     if outline_width and float(outline_width) > 0.0:
         or_, og, ob = outline_rgb or (70, 70, 70)
         outline = make_line_symbol(or_, og, ob, width=float(outline_width), style=outline_style)
     else:
         outline = make_line_symbol(0, 0, 0, width=0.0, style="null", null_color=True)
-    _vcall(sym, 6, c_void_p)(sym, outline)
+    iline = _qi(outline, IID_ILineSymbol)
+    _vcall(sym, 6, c_void_p)(sym, iline)
     _vcall(sym, 8, c_long)(sym, 1 if hollow else 0)  # 0=Solid, 1=Null/Hollow
-    _release(col)
+    _release(iline)
     _release(outline)
+    _release(icol)
+    _release(col)
     return sym
 
 
 def make_marker_symbol(r, g, b, size=7.0, style="circle", outline_rgb=(255, 255, 255), outline_width=1.0):
     sym = _co(CLSID_SimpleMarkerSymbol, IID_ISimpleMarkerSymbol)
     col = make_rgb(r, g, b)
+    icol = _qi(col, IID_IColor)
     _vcall(sym, 4, c_double)(sym, float(size))
-    _vcall(sym, 6, c_void_p)(sym, col)
+    _vcall(sym, 6, c_void_p)(sym, icol)
     _vcall(sym, 14, c_long)(sym, MARKER_STYLES.get((style or "circle").lower(), 0))
     if outline_width and float(outline_width) > 0.0:
         or_, og, ob = outline_rgb or (255, 255, 255)
         ocol = make_rgb(or_, og, ob)
+        iocol = _qi(ocol, IID_IColor)
         _vcall(sym, 16, c_short)(sym, -1)
         _vcall(sym, 18, c_double)(sym, float(outline_width))
-        _vcall(sym, 20, c_void_p)(sym, ocol)
+        _vcall(sym, 20, c_void_p)(sym, iocol)
+        _release(iocol)
         _release(ocol)
     else:
         _vcall(sym, 16, c_short)(sym, 0)
+    _release(icol)
     _release(col)
     return sym
 
@@ -317,10 +332,16 @@ def make_multipart_ramp(rgb_stops):
         seg = _co(CLSID_AlgorithmicColorRamp, IID_IAlgorithmicColorRamp)
         c1 = make_rgb(*rgb_stops[i])
         c2 = make_rgb(*rgb_stops[i + 1])
-        _vcall(seg, 11, c_void_p)(seg, c1)  # put_FromColor
-        _vcall(seg, 13, c_void_p)(seg, c2)  # put_ToColor
-        _vcall(seg, 14, c_long)(seg, 1)     # 1 = esriCIELabAlgorithm (smooth perceptual ramp!)
-        _vcall(mp, 12, c_void_p)(mp, seg)   # AddRamp
+        ic1 = _qi(c1, IID_IColor)
+        ic2 = _qi(c2, IID_IColor)
+        _vcall(seg, 11, c_void_p)(seg, ic1)  # put_FromColor
+        _vcall(seg, 13, c_void_p)(seg, ic2)  # put_ToColor
+        _vcall(seg, 14, c_long)(seg, 1)      # 1 = esriCIELabAlgorithm
+        iramp = _qi(seg, IID_IColorRamp)
+        _vcall(mp, 12, c_void_p)(mp, iramp)  # AddRamp
+        _release(iramp)
+        _release(ic1)
+        _release(ic2)
         _release(c1)
         _release(c2)
         _release(seg)
@@ -365,7 +386,8 @@ def find_com_layer(mxdoc, layer_name):
         nm = ctypes.wstring_at(bn) if bn.value else u""
         _free_bstr(bn)
         if nm.lower() == target:
-            _release(partial)
+            if partial is not None:
+                _release(partial[0])
             _release(fmap)
             return lyr, nm
         if target in nm.lower() and partial is None:
@@ -432,19 +454,23 @@ def apply_unique_values(mxdoc, lyr, shape_type, field_name, ordered_values, pres
         else:
             sym = make_fill_symbol(r, g, b, outline_rgb=out_rgb,
                                    outline_width=outline_width, outline_style=outline_style)
+        isym = _qi(sym, IID_ISymbol)
         lbl = labels[idx] if (labels and idx < len(labels)) else val
         vb = _bstr(val)
         hb = _bstr("")
         lb = _bstr(lbl)
-        _vcall(uvr, 29, c_void_p, c_void_p, c_void_p)(uvr, vb, hb, sym)
+        _vcall(uvr, 29, c_void_p, c_void_p, c_void_p)(uvr, vb, hb, isym)
         _vcall(uvr, 24, c_void_p, c_void_p)(uvr, vb, lb)
         _free_bstr(vb)
         _free_bstr(hb)
         _free_bstr(lb)
+        _release(isym)
         _release(sym)
 
-    _vcall(gfl, 33, c_void_p)(gfl, uvr)  # putref_Renderer
+    frend = _qi(uvr, IID_IFeatureRenderer)
+    _vcall(gfl, 33, c_void_p)(gfl, frend)  # putref_Renderer(IFeatureRenderer*)
     set_layer_transparency(lyr, transparency)
+    _release(frend)
     _release(uvr)
     _release(gfl)
     refresh_mxdoc(mxdoc)
@@ -482,15 +508,19 @@ def apply_class_breaks(mxdoc, lyr, shape_type, field_name, min_val, break_highs,
         else:
             sym = make_fill_symbol(r, g, b, outline_rgb=out_rgb,
                                    outline_width=outline_width, outline_style=outline_style)
+        isym = _qi(sym, IID_ISymbol)
         _vcall(cbr, 16, c_long, c_double)(cbr, idx, float(break_highs[idx]))
-        _vcall(cbr, 10, c_long, c_void_p)(cbr, idx, sym)
+        _vcall(cbr, 10, c_long, c_void_p)(cbr, idx, isym)
         lb = _bstr(labels[idx])
         _vcall(cbr, 12, c_long, c_void_p)(cbr, idx, lb)
         _free_bstr(lb)
+        _release(isym)
         _release(sym)
 
-    _vcall(gfl, 33, c_void_p)(gfl, cbr)
+    frend = _qi(cbr, IID_IFeatureRenderer)
+    _vcall(gfl, 33, c_void_p)(gfl, frend)
     set_layer_transparency(lyr, transparency)
+    _release(frend)
     _release(cbr)
     _release(gfl)
     refresh_mxdoc(mxdoc)
@@ -536,10 +566,14 @@ def apply_single_symbol(mxdoc, lyr, shape_type, color_hex=None, preset=None,
         sym = make_fill_symbol(rgb[0], rgb[1], rgb[2], outline_rgb=outline_rgb,
                                outline_width=outline_width, outline_style=outline_style, hollow=hollow)
 
+    isym = _qi(sym, IID_ISymbol)
     sr = _co(CLSID_SimpleRenderer, IID_ISimpleRenderer)
-    _vcall(sr, 4, c_void_p)(sr, sym)  # putref_Symbol
-    _vcall(gfl, 33, c_void_p)(gfl, sr)
+    _vcall(sr, 4, c_void_p)(sr, isym)  # putref_Symbol(ISymbol*)
+    frend = _qi(sr, IID_IFeatureRenderer)
+    _vcall(gfl, 33, c_void_p)(gfl, frend)
     set_layer_transparency(lyr, transparency)
+    _release(frend)
+    _release(isym)
     _release(sym)
     _release(sr)
     _release(gfl)
@@ -559,15 +593,17 @@ def apply_raster_stretch(mxdoc, lyr, preset="terrain", custom_colors=None, trans
 
     stops = sample_palette(preset, 5, custom_colors=custom_colors)
     ramp = make_multipart_ramp(stops)
+    iramp = _qi(ramp, IID_IColorRamp)
     sr = _co(CLSID_RasterStretchColorRampRenderer, IID_IRasterStretchColorRampRenderer)
     rr = _qi(sr, IID_IRasterRenderer)
     _vcall(rr, 4, c_void_p)(rr, raster)  # putref_Raster
-    _vcall(sr, 8, c_void_p)(sr, ramp)    # put_ColorRamp
+    _vcall(sr, 8, c_void_p)(sr, iramp)   # put_ColorRamp(IColorRamp*)
     _vcall(rr, 8)(rr)                    # Update()
-    _vcall(rl, 27, c_void_p)(rl, rr)     # putref_Renderer
+    _vcall(rl, 27, c_void_p)(rl, rr)     # putref_Renderer(IRasterRenderer*)
     set_layer_transparency(lyr, transparency)
     _release(rr)
     _release(sr)
+    _release(iramp)
     _release(ramp)
     _release(raster)
     _release(rl)
