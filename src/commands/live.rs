@@ -147,6 +147,40 @@ fn detect_arcmap_versions() -> Vec<String> {
     found
 }
 
+fn register_addin_folder_xml(ver: &str, dir_str: &str) -> Result<PathBuf> {
+    let appdata = std::env::var("APPDATA")
+        .context("APPDATA environment variable not found (Windows required for ArcMap).")?;
+    let esri_dir = PathBuf::from(appdata)
+        .join("ESRI")
+        .join(format!("Desktop{ver}"));
+    std::fs::create_dir_all(&esri_dir)?;
+    let xml_path = esri_dir.join("AddInFoldersList.xml");
+
+    let entry = format!(r#"<AddinFolder Path="{dir_str}"/>"#);
+    let updated = if xml_path.is_file() {
+        let existing = std::fs::read_to_string(&xml_path)?;
+        if existing.contains(dir_str) {
+            existing
+        } else if existing.contains("<ARCMAP/>") {
+            existing.replace("<ARCMAP/>", &format!("<ARCMAP>{entry}</ARCMAP>"))
+        } else if existing.contains("</ARCMAP>") {
+            existing.replace("</ARCMAP>", &format!("{entry}</ARCMAP>"))
+        } else {
+            format!(
+                "<?xml version=\"1.0\"?>\n<ESRI.ArcGIS.AddInFolders ver=\"1\"><ARCMAP>{entry}</ARCMAP></ESRI.ArcGIS.AddInFolders>\n"
+            )
+        }
+    } else {
+        format!(
+            "<?xml version=\"1.0\"?>\n<ESRI.ArcGIS.AddInFolders ver=\"1\"><ARCMAP>{entry}</ARCMAP></ESRI.ArcGIS.AddInFolders>\n"
+        )
+    };
+
+    std::fs::write(&xml_path, updated)
+        .with_context(|| format!("Failed to update {}", xml_path.display()))?;
+    Ok(xml_path)
+}
+
 fn install_addin(version: Option<&str>) -> Result<()> {
     let user_profile = std::env::var("USERPROFILE")
         .context("USERPROFILE environment variable not found (Windows required for ArcMap).")?;
@@ -178,26 +212,22 @@ fn install_addin(version: Option<&str>) -> Result<()> {
         dst.display()
     );
 
-    // Register folder in ArcMap's official AddInFolders registry key
+    // Register folder in ArcMap's official per-user AddInFoldersList.xml (no admin required)
     let dir_str = addin_dir.display().to_string();
     for ver in &versions {
-        let reg_key = format!(r"HKCU\Software\ESRI\Desktop{ver}\Settings\AddInFolders");
-        let status = std::process::Command::new("reg")
-            .args([
-                "add", &reg_key, "/v", &dir_str, "/t", "REG_SZ", "/d", "", "/f",
-            ])
-            .status()
-            .context("Failed to invoke Windows `reg` command")?;
-        if !status.success() {
-            bail!("Failed to register Add-In folder in {reg_key}");
-        }
+        let xml_path = register_addin_folder_xml(ver, &dir_str)?;
         println!(
-            "{} Registered Add-In folder for ArcMap Desktop{ver} ({reg_key})",
-            "[OK]".green().bold()
+            "{} Registered Add-In folder in {}",
+            "[OK]".green().bold(),
+            xml_path.display()
         );
     }
 
-    println!("\nNext step: Restart ArcMap 10.x once, then test with `geokit live ping`!");
+    println!(
+        "\n{} Make sure ArcMap is CLOSED before running `install-addin` (ArcMap rewrites AddInFoldersList.xml on exit).",
+        "Note:".yellow().bold()
+    );
+    println!("Next step: Open ArcMap 10.x — GeoKit Live Bridge will auto-start! Test with `geokit live ping`.");
     Ok(())
 }
 

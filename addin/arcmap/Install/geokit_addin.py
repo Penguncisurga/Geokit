@@ -93,8 +93,13 @@ def _handle_command_on_ui_thread(req):
         ext = os.path.splitext(path)[1].lower()
         if ext in (".tif", ".tiff", ".img", ".jp2", ".ecw", ".asc"):
             lyr_name = os.path.splitext(os.path.basename(path))[0]
-            res = arcpy.MakeRasterLayer_management(path, lyr_name)
-            lyr = res.getOutput(0)
+            prev_add = arcpy.env.addOutputsToMap
+            arcpy.env.addOutputsToMap = False
+            try:
+                res = arcpy.MakeRasterLayer_management(path, lyr_name)
+                lyr = res.getOutput(0)
+            finally:
+                arcpy.env.addOutputsToMap = prev_add
         else:
             lyr = arcpy.mapping.Layer(path)
         pos = (req.get("position") or "TOP").upper()
