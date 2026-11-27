@@ -19,7 +19,18 @@ arcpy.env.overwriteOutput = False
 VECTOR_EXTS = {".shp", ".gpkg"}
 RASTER_EXTS = {".tif", ".tiff", ".img", ".jp2", ".ecw", ".asc", ".hgt"}
 ALLOWED_INTERP_METHODS = {"idw", "spline", "kriging"}
-ALLOWED_INDEX_TYPES = {"ndvi", "ndwi", "ndbi", "savi", "nbr"}
+ALLOWED_INDEX_TYPES = {
+    "ndvi", "ndwi", "ndbi", "savi", "nbr", "mndwi", "ndre", "ndti", "ndci",
+    "evi", "bsi", "vari", "exg", "nsmi", "lst",
+}
+# Band roles for plain (A - B) / (A + B) normalized-difference indices
+INDEX_ROLE_PAIRS = {
+    "ndvi": ("nir", "red"), "savi": ("nir", "red"), "ndwi": ("green", "nir"),
+    "ndbi": ("swir1", "nir"), "nbr": ("nir", "swir2"), "mndwi": ("green", "swir1"),
+    "ndre": ("nir", "rededge"), "ndti": ("red", "green"), "ndci": ("rededge", "red"),
+}
+# Indices that do not live in [-1, 1] and need data-driven class ranges
+UNBOUNDED_INDEX_TYPES = {"evi", "vari", "exg", "lst"}
 
 
 def _norm_path(p) -> str:
@@ -1871,6 +1882,96 @@ def cmd_raster_interpolate(payload):
     return 0
 
 
+def _spectral_result(idx_type, payload):
+    """Builds the spectral index raster expression from two band files OR a multi-band stack."""
+    from arcpy.sa import Con, Float, Raster
+
+    mb = payload.get("multiband")
+    if not mb:
+        a = Float(Raster(payload["band_a"]))
+        b = Float(Raster(payload["band_b"]))
+        denom = a + b
+        if idx_type == "savi":
+            return Con((denom + 0.5) != 0, ((a - b) / (denom + 0.5)) * 1.5, 0.0)
+        return Con(denom != 0, (a - b) / denom, 0.0)
+
+    band_map = payload.get("band_map") or {}
+    R = {}
+    for role, num in band_map.items():
+        R[role] = Float(Raster(os.path.join(mb, "Band_%d" % int(num))))
+    if idx_type in INDEX_ROLE_PAIRS:
+        ra, rb = INDEX_ROLE_PAIRS[idx_type]
+        a, b = R[ra], R[rb]
+        denom = a + b
+        if idx_type == "savi":
+            return Con((denom + 0.5) != 0, ((a - b) / (denom + 0.5)) * 1.5, 0.0)
+        return Con(denom != 0, (a - b) / denom, 0.0)
+    if idx_type == "evi":  # inputs must be surface reflectance scaled 0-1
+        den = R["nir"] + 6.0 * R["red"] - 7.5 * R["blue"] + 1.0
+        return Con(den != 0, 2.5 * (R["nir"] - R["red"]) / den, 0.0)
+    if idx_type == "bsi":
+        pos = R["swir1"] + R["red"]
+        neg = R["nir"] + R["blue"]
+        return Con((pos + neg) != 0, (pos - neg) / (pos + neg), 0.0)
+    if idx_type == "vari":
+        den = R["green"] + R["red"] - R["blue"]
+        return Con(den != 0, (R["green"] - R["red"]) / den, 0.0)
+    if idx_type == "exg":
+        tot = R["red"] + R["green"] + R["blue"]
+        return Con(tot != 0, (2.0 * R["green"] - R["red"] - R["blue"]) / tot, 0.0)
+    if idx_type == "nsmi":  # relative suspended-matter index (NOT calibrated mg/L)
+        tot = R["red"] + R["green"] + R["blue"]
+        return Con(tot != 0, (R["red"] + R["green"] - R["blue"]) / tot, 0.0)
+    if idx_type == "lst":  # Landsat Collection 2 Level 2 ST band -> degrees Celsius
+        return R["thermal"] * 0.00341802 + 149.0 - 273.15
+    raise ValueError("Unsupported multi-band index: %s" % idx_type)
+
+
+def cmd_raster_composite(payload):
+    mb = payload["input"]
+    out_r = payload["out"]
+    bands = payload.get("composite_bands") or []
+    aoi = payload.get("aoi")
+    epsg = payload.get("epsg")
+    overwrite = _is_overwrite(payload)
+    if len(bands) != 3:
+        print("RGB composite needs exactly 3 bands.", file=sys.stderr)
+        return 1
+    err = _check_safe_output(out_r, [mb, aoi], overwrite)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    parent = os.path.dirname(out_r)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if overwrite and arcpy.Exists(out_r):
+        arcpy.management.Delete(out_r)
+
+    tag = "%d" % os.getpid()
+    stage1 = os.path.join(arcpy.env.scratchFolder, "geokit_comp_%s.tif" % tag)
+    stage2 = os.path.join(arcpy.env.scratchFolder, "geokit_comp_prj_%s.tif" % tag)
+    paths = [os.path.join(mb, "Band_%d" % int(n)) for n in bands]
+    try:
+        arcpy.management.CompositeBands(paths, stage1)
+        cur = stage1
+        if epsg:
+            arcpy.management.ProjectRaster(cur, stage2, arcpy.SpatialReference(int(epsg)), "BILINEAR")
+            cur = stage2
+        if aoi:
+            arcpy.management.Clip(cur, "#", out_r, aoi, "0", "ClippingGeometry", "NO_MAINTAIN_EXTENT")
+        else:
+            arcpy.management.CopyRaster(cur, out_r)
+    finally:
+        for tmp in (stage1, stage2):
+            try:
+                if arcpy.Exists(tmp):
+                    arcpy.management.Delete(tmp)
+            except Exception:
+                pass
+    print(f"OK RGB composite (bands {bands[0]},{bands[1]},{bands[2]}) -> {out_r}")
+    return 0
+
+
 def cmd_raster_index(payload):
     idx_type = (payload.get("index_type") or "ndvi").lower()
     out_r = payload["out"]
@@ -1878,34 +1979,29 @@ def cmd_raster_index(payload):
     overwrite = _is_overwrite(payload)
 
     if idx_type not in ALLOWED_INDEX_TYPES:
-        print(f"Invalid spectral index type '{idx_type}'. Allowed: ndvi, ndwi, ndbi, savi, nbr.", file=sys.stderr)
+        print(f"Invalid spectral index type '{idx_type}'. Allowed: {', '.join(sorted(ALLOWED_INDEX_TYPES))}.", file=sys.stderr)
         return 1
-    err = _check_safe_output(out_r, [payload.get("band_a"), payload.get("band_b")], overwrite)
+    guard_inputs = [payload.get("band_a"), payload.get("band_b"), payload.get("multiband")]
+    err = _check_safe_output(out_r, guard_inputs, overwrite)
     if err:
         print(err, file=sys.stderr)
         return 1
     if poly_out:
-        err_p = _check_safe_output(poly_out, [payload.get("band_a"), payload.get("band_b"), out_r], overwrite)
+        err_p = _check_safe_output(poly_out, guard_inputs + [out_r], overwrite)
         if err_p:
             print(err_p, file=sys.stderr)
             return 1
 
     arcpy.CheckOutExtension("Spatial")
-    from arcpy.sa import Float, Raster, Con, Reclassify, RemapRange
+    from arcpy.sa import Reclassify, RemapRange
 
-    b1 = Float(Raster(payload["band_a"]))
-    b2 = Float(Raster(payload["band_b"]))
     parent = os.path.dirname(out_r)
     if parent:
         os.makedirs(parent, exist_ok=True)
     if overwrite and arcpy.Exists(out_r):
         arcpy.management.Delete(out_r)
 
-    denom = b1 + b2
-    if idx_type == "savi":
-        res = Con((denom + 0.5) != 0, ((b1 - b2) / (denom + 0.5)) * 1.5, 0.0)
-    else:
-        res = Con(denom != 0, (b1 - b2) / denom, 0.0)
+    res = _spectral_result(idx_type, payload)
     res.save(out_r)
     print(f"OK Spectral index ({idx_type.upper()}) -> {out_r}")
 
@@ -1919,11 +2015,17 @@ def cmd_raster_index(payload):
             rmax = float(str(arcpy.management.GetRasterProperties(out_r, "MAXIMUM").getOutput(0)).replace(",", "."))
         except Exception:
             rmin, rmax = -1.0, 1.0
-        step = 2.0 / float(n_cls)
+        if idx_type in UNBOUNDED_INDEX_TYPES:
+            lo_b, hi_b = rmin, rmax
+            if hi_b - lo_b <= 0:
+                hi_b = lo_b + 1.0
+        else:
+            lo_b, hi_b = -1.0, 1.0
+        step = (hi_b - lo_b) / float(n_cls)
         ranges = []
         for i in range(n_cls):
-            lo = (min(-1.0, rmin) - 0.001) if i == 0 else round(-1.0 + i * step, 6)
-            hi = (max(1.0, rmax) + 0.001) if i == n_cls - 1 else round(-1.0 + (i + 1) * step, 6)
+            lo = (min(lo_b, rmin) - 0.001) if i == 0 else round(lo_b + i * step, 6)
+            hi = (max(hi_b, rmax) + 0.001) if i == n_cls - 1 else round(lo_b + (i + 1) * step, 6)
             ranges.append([lo, hi, i + 1])
         cls_tif = os.path.join(arcpy.env.scratchFolder, "geokit_idx_cls.tif")
         if arcpy.Exists(cls_tif):
@@ -3026,6 +3128,7 @@ HANDLERS = {
     "raster_weighted_sum": cmd_raster_weighted_sum,
     "raster_interpolate": cmd_raster_interpolate,
     "raster_index": cmd_raster_index,
+    "raster_composite": cmd_raster_composite,
     "raster_contour": cmd_raster_contour,
     "raster_align": cmd_raster_align,
     "raster_extract_points": cmd_raster_extract_points,
@@ -3045,6 +3148,7 @@ PROVENANCE_ACTIONS = {
     "raster_weighted_sum",
     "raster_interpolate",
     "raster_index",
+    "raster_composite",
     "raster_contour",
     "raster_align",
     "raster_morphometry",

@@ -1258,6 +1258,78 @@ pub fn gdal_raster_align(
     Ok(())
 }
 
+pub fn gdal_raster_composite(
+    gdal: &GdalEnvironment,
+    input: &Path,
+    bands: &[u32],
+    aoi: Option<&Path>,
+    epsg: Option<u32>,
+    out: &Path,
+) -> Result<()> {
+    let Some(translate) = &gdal.gdal_translate else {
+        bail!("gdal_translate not found in GDAL environment.");
+    };
+    if bands.len() != 3 {
+        bail!("RGB composite needs exactly 3 bands (got {}).", bands.len());
+    }
+    let mut guard: Vec<&Path> = vec![input];
+    if let Some(a) = aoi {
+        guard.push(a);
+    }
+    check_safe_gdal_output(out, &guard)?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let needs_warp = aoi.is_some() || epsg.is_some();
+    let tmp_dir = tempfile::tempdir()?;
+    let stage = if needs_warp {
+        tmp_dir.path().join("geokit_composite_stage.tif")
+    } else {
+        out.to_path_buf()
+    };
+
+    let mut t_args: Vec<String> = vec!["-of".into(), "GTiff".into()];
+    for b in bands {
+        t_args.extend(["-b".into(), b.to_string()]);
+    }
+    t_args.extend(geotiff_lzw_args(&stage));
+    t_args.extend([input.display().to_string(), stage.display().to_string()]);
+    run_cmd(gdal, translate, &t_args)?;
+
+    if needs_warp {
+        let Some(warp) = &gdal.gdalwarp else {
+            bail!("gdalwarp not found in GDAL environment.");
+        };
+        let mut w_args: Vec<String> = Vec::new();
+        if crate::engine::overwrite_enabled() {
+            w_args.push("-overwrite".into());
+        }
+        w_args.extend(geotiff_lzw_args(out));
+        if let Some(e) = epsg {
+            w_args.extend(["-t_srs".into(), format!("EPSG:{e}")]);
+        }
+        if let Some(a) = aoi {
+            w_args.extend([
+                "-cutline".into(),
+                a.display().to_string(),
+                "-crop_to_cutline".into(),
+            ]);
+        }
+        w_args.extend([stage.display().to_string(), out.display().to_string()]);
+        run_cmd(gdal, warp, &w_args)?;
+    }
+    println!(
+        "OK RGB composite (bands {},{},{}) -> {}",
+        bands[0],
+        bands[1],
+        bands[2],
+        out.display()
+    );
+    Ok(())
+}
+
 pub fn gdal_raster_georef(
     gdal: &GdalEnvironment,
     input: &Path,

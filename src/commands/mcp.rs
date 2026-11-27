@@ -375,11 +375,11 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_raster",
-            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, point-to-raster interpolation (IDW/Spline/Kriging), satellite spectral index (NDVI/NDWI/NDBI/SAVI/NBR), topographic contour lines (with BIG INDEX_KTR), raster grid alignment (align), raster value extraction to points (extract-points), DEM morphometry (TWI/TPI/Curvature), or scanned-map georeferencing with GCP RMSE report (georef).",
+            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, point-to-raster interpolation (IDW/Spline/Kriging), satellite spectral index (NDVI/NDWI/NDBI/SAVI/NBR/MNDWI/EVI/BSI/NDRE/VARI/ExG/LST/NDTI/NSMI/NDCI, from band files or a multi-band sensor stack), multi-sensor RGB composite (composite: true-color/cir/urban/agriculture/land-water/geology/sar for Landsat 5/7/8/9, Sentinel-1/2, PlanetScope, SPOT), topographic contour lines (with BIG INDEX_KTR), raster grid alignment (align), raster value extraction to points (extract-points), DEM morphometry (TWI/TPI/Curvature), or scanned-map georeferencing with GCP RMSE report (georef).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate", "index", "contour", "align", "extract-points", "morphometry", "georef"] },
+                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate", "index", "composite", "contour", "align", "extract-points", "morphometry", "georef"] },
                     "input": { "type": "string", "description": "Input raster, point layer (for interpolate), DEM (for contour/morphometry), scanned image (for georef), or folder" },
                     "inputs": { "type": "string", "description": "Comma-separated '<raster>:<weight>' pairs (for weighted-sum) OR comma-separated raster paths (for align)" },
                     "out": { "type": "string", "description": "Output file or directory" },
@@ -394,9 +394,14 @@ fn tool_definitions() -> Value {
                     "method": { "type": "string", "enum": ["idw", "spline", "kriging"], "description": "Interpolation method (for interpolate)" },
                     "cell_size": { "type": "number", "description": "Output cell size in map units (for interpolate)" },
                     "mask": { "type": "string", "description": "Optional polygon mask/AOI (for interpolate)" },
-                    "index_type": { "type": "string", "enum": ["ndvi", "ndwi", "ndbi", "savi", "nbr"], "description": "Spectral index formula (for index)" },
-                    "band_a": { "type": "string", "description": "Band A raster path e.g. NIR/Green/SWIR1 (for index)" },
-                    "band_b": { "type": "string", "description": "Band B raster path e.g. Red/NIR/SWIR2 (for index)" },
+                    "index_type": { "type": "string", "enum": ["ndvi", "ndwi", "ndbi", "savi", "nbr", "mndwi", "evi", "bsi", "ndre", "vari", "exg", "lst", "ndti", "nsmi", "tss", "ndci", "chla"], "description": "Spectral index (for index). LST is Landsat C2 L2 ST_B10 -> deg C; tss/nsmi and chla/ndci are RELATIVE water-quality indices, not calibrated concentrations" },
+                    "band_a": { "type": "string", "description": "Band A raster path e.g. NIR/Green/SWIR1 (for two-band index)" },
+                    "band_b": { "type": "string", "description": "Band B raster path e.g. Red/NIR/SWIR2 (for two-band index)" },
+                    "multiband": { "type": "string", "description": "Single multi-band sensor stack (for index with evi/bsi/vari/exg/lst/nsmi or any index without separate band files)" },
+                    "sensor": { "type": "string", "enum": ["landsat5", "landsat7", "landsat8", "landsat9", "sentinel2", "planetscope", "spot", "sentinel1"], "description": "Sensor of the multi-band stack (for index with multiband, and composite)" },
+                    "bands": { "type": "string", "description": "Optional per-role band number overrides e.g. 'red=3,nir=4' (1-based; for index with multiband, and composite)" },
+                    "preset": { "type": "string", "enum": ["true-color", "cir", "urban", "agriculture", "land-water", "geology", "sar"], "description": "RGB composite preset (for composite)" },
+                    "aoi": { "type": "string", "description": "Optional polygon AOI to clip the composite (for composite)" },
                     "interval": { "type": "number", "description": "Contour elevation interval e.g. 12.5 or 25 (for contour)" },
                     "base": { "type": "number", "description": "Base contour elevation (for contour)" },
                     "index_every": { "type": "integer", "description": "Index contour interval count (default 4 per BIG RBI, for contour)" },
@@ -733,6 +738,7 @@ fn validate_mcp_workspace_paths(args: &Value) -> Result<(), String> {
         "raster",
         "gcp",
         "report",
+        "multiband",
     ];
     for k in path_keys {
         if let Some(p) = str_arg(args, k) {
@@ -1140,6 +1146,23 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(bb) = str_arg(args, "band_b") {
                 cli_args.extend(["--band-b".into(), bb.into()]);
+            }
+            if action == "index" {
+                if let Some(mb) = str_arg(args, "multiband") {
+                    cli_args.extend(["--multiband".into(), mb.into()]);
+                }
+            }
+            if let Some(sn) = str_arg(args, "sensor") {
+                cli_args.extend(["--sensor".into(), sn.into()]);
+            }
+            if let Some(bd) = str_arg(args, "bands") {
+                cli_args.extend(["--bands".into(), bd.into()]);
+            }
+            if let Some(pr) = str_arg(args, "preset") {
+                cli_args.extend(["--preset".into(), pr.into()]);
+            }
+            if let Some(aoi) = str_arg(args, "aoi") {
+                cli_args.extend(["--aoi".into(), aoi.into()]);
             }
             if let Some(iv) = args.get("interval").and_then(|v| v.as_f64()) {
                 cli_args.extend(["--interval".into(), iv.to_string()]);

@@ -1366,3 +1366,93 @@ fn test_gdal_raster_georef_with_rmse_report() {
     assert_eq!(rep["count"], 4);
     assert!(rep["total_rmse"].as_f64().unwrap() < 1e-6);
 }
+
+#[test]
+fn test_raster_index_input_validation_and_gdal_composite_band_order() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Multi-band-only index without --multiband must fail early (before any engine is spawned)
+    let evi = geokit_bin()
+        .args([
+            "raster",
+            "index",
+            "--type",
+            "evi",
+            "--band-a",
+            "a.tif",
+            "--band-b",
+            "b.tif",
+            "--out",
+            root.join("evi.tif").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!evi.status.success());
+    assert!(String::from_utf8_lossy(&evi.stderr).contains("--multiband"));
+
+    // Unknown sensor / preset are rejected with helpful messages
+    let ppm = root.join("stack.ppm");
+    let mut bytes = b"P6\n2 2\n255\n".to_vec();
+    bytes.extend_from_slice(&[10, 100, 200, 20, 110, 210, 30, 120, 220, 40, 130, 230]);
+    fs::write(&ppm, bytes).unwrap();
+    let bad_sensor = geokit_bin()
+        .args([
+            "raster",
+            "composite",
+            ppm.to_str().unwrap(),
+            "--sensor",
+            "hubble",
+            "--out",
+            root.join("x.tif").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!bad_sensor.status.success());
+    assert!(String::from_utf8_lossy(&bad_sensor.stderr).contains("Unknown sensor"));
+
+    // Real GDAL composite: remap a 3-band stack so output band 1 == input band 3
+    let doc = geokit_bin().args(["doctor", "--json"]).output().unwrap();
+    let doc_json: serde_json::Value = serde_json::from_slice(&doc.stdout).unwrap();
+    let (Some(translate), Some(gdalinfo)) = (
+        doc_json["gdal"]["gdal_translate"].as_str(),
+        doc_json["gdal"]["gdalinfo"].as_str(),
+    ) else {
+        return;
+    };
+    let _ = translate;
+    let out_tif = root.join("rgb.tif");
+    let res = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "raster",
+            "composite",
+            ppm.to_str().unwrap(),
+            "--sensor",
+            "landsat8",
+            "--preset",
+            "true-color",
+            "--bands",
+            "red=3,green=2,blue=1",
+            "--out",
+            out_tif.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        res.status.success(),
+        "composite stderr: {}",
+        String::from_utf8_lossy(&res.stderr)
+    );
+    let info = std::process::Command::new(gdalinfo)
+        .args(["-json", "-mm", out_tif.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let info_json: serde_json::Value = serde_json::from_slice(&info.stdout).unwrap();
+    let bands = info_json["bands"].as_array().unwrap();
+    assert_eq!(bands.len(), 3);
+    assert_eq!(bands[0]["computedMin"].as_f64().unwrap(), 200.0);
+    assert_eq!(bands[0]["computedMax"].as_f64().unwrap(), 230.0);
+    assert_eq!(bands[2]["computedMin"].as_f64().unwrap(), 10.0);
+}

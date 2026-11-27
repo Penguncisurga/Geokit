@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
 use crate::engine::gdal::{
-    detect_gdal, gdal_mosaic, gdal_raster_align, gdal_raster_georef, gdal_terrain,
+    detect_gdal, gdal_mosaic, gdal_raster_align, gdal_raster_composite, gdal_raster_georef,
+    gdal_terrain,
 };
 use crate::engine::{
     abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
@@ -107,18 +108,27 @@ pub enum RasterCommand {
         #[arg(long)]
         mask: Option<PathBuf>,
     },
-    /// Calculate remote sensing spectral indices (NDVI, NDWI, NDBI, SAVI, NBR) from satellite bands
+    /// Calculate remote sensing indices from satellite bands: NDVI, NDWI, NDBI, SAVI, NBR, MNDWI, EVI, BSI, NDRE, VARI, ExG, LST (°C), NDTI, NSMI/TSS, NDCI/Chl-a
     Index {
-        /// Spectral index type: ndvi, ndwi, ndbi, savi, or nbr
+        /// Index type: ndvi, ndwi, ndbi, savi, nbr, mndwi, evi, bsi, ndre, vari, exg, lst, ndti, nsmi (alias tss), ndci (alias chla)
         #[arg(long = "type", value_name = "INDEX")]
         index_type: String,
-        /// Band A raster path (NIR for NDVI/SAVI/NBR, Green for NDWI, SWIR1 for NDBI)
+        /// Band A raster path (two-band mode): NIR for NDVI/SAVI/NBR/NDRE, Green for NDWI/MNDWI, SWIR1 for NDBI, Red for NDTI, RedEdge for NDCI
         #[arg(long)]
-        band_a: PathBuf,
-        /// Band B raster path (Red for NDVI/SAVI, NIR for NDWI/NDBI, SWIR2 for NBR)
+        band_a: Option<PathBuf>,
+        /// Band B raster path (two-band mode): Red for NDVI/SAVI, NIR for NDWI/NDBI, SWIR2 for NBR, SWIR1 for MNDWI, RedEdge for NDRE, Green for NDTI, Red for NDCI
         #[arg(long)]
-        band_b: PathBuf,
-        /// Output floating-point spectral index GeoTIFF path
+        band_b: Option<PathBuf>,
+        /// Single multi-band raster (stack of sensor bands) — required for EVI, BSI, VARI, ExG, LST, NSMI
+        #[arg(long)]
+        multiband: Option<PathBuf>,
+        /// Sensor of the multi-band stack: landsat5/7, landsat8/9, sentinel2, planetscope/spot, sentinel1
+        #[arg(long)]
+        sensor: Option<String>,
+        /// Override band numbers per role, e.g. "red=3,nir=4" (1-based) when your stack order differs from the sensor default
+        #[arg(long)]
+        bands: Option<String>,
+        /// Output floating-point index GeoTIFF path
         #[arg(short, long)]
         out: PathBuf,
         /// Optional number of discrete classes (e.g. 5) to classify & optionally export polygon
@@ -127,6 +137,29 @@ pub enum RasterCommand {
         /// Optional classified polygon shapefile path
         #[arg(long)]
         polygon_out: Option<PathBuf>,
+    },
+    /// Build an RGB composite (true-color, cir, urban, agriculture, land-water, geology, sar) from a multi-band sensor stack, with optional AOI clip & reprojection
+    Composite {
+        /// Multi-band raster containing the sensor band stack
+        input: PathBuf,
+        /// Sensor: landsat5/7, landsat8/9, sentinel2, planetscope/spot, sentinel1
+        #[arg(long)]
+        sensor: String,
+        /// Preset: true-color (default), cir, urban, agriculture, land-water, geology, or sar
+        #[arg(long, default_value = "true-color")]
+        preset: String,
+        /// Override band numbers per role, e.g. "red=3,green=2,blue=1" (1-based)
+        #[arg(long)]
+        bands: Option<String>,
+        /// Optional polygon AOI to clip the composite
+        #[arg(long)]
+        aoi: Option<PathBuf>,
+        /// Optional target EPSG to reproject the composite (e.g. 32749)
+        #[arg(long)]
+        epsg: Option<u32>,
+        /// Output RGB GeoTIFF path
+        #[arg(short, long)]
+        out: PathBuf,
     },
     /// Generate topographic contour lines from a DEM with BIG RBI index-contour flag (INDEX_KTR)
     Contour {
@@ -257,6 +290,11 @@ struct RasterPayload {
     epsg: Option<u32>,
     order: Option<u8>,
     gcps: Option<Vec<crate::gis::gcp::GcpPoint>>,
+    multiband: Option<String>,
+    sensor: Option<String>,
+    band_map: Option<std::collections::BTreeMap<String, u32>>,
+    composite_bands: Option<Vec<u32>>,
+    aoi: Option<String>,
 }
 
 pub fn run(
@@ -460,28 +498,140 @@ pub fn run(
             index_type,
             band_a,
             band_b,
+            multiband,
+            sensor,
+            bands,
             out,
             classes,
             polygon_out,
         } => {
-            if !band_a.exists() {
-                bail!("Band A raster does not exist: {}", band_a.display());
-            }
-            if !band_b.exists() {
-                bail!("Band B raster does not exist: {}", band_b.display());
+            use crate::gis::sensors;
+            let idx = sensors::normalize_index_name(&index_type);
+            let Some(roles) = sensors::index_roles(&idx) else {
+                bail!(
+                    "Unknown index '{index_type}'. Supported: {}.",
+                    sensors::ALL_INDEX_NAMES
+                );
+            };
+            let mut payload = RasterPayload {
+                action: "raster_index".into(),
+                out: abs_string(&out),
+                index_type: Some(idx.clone()),
+                classes,
+                polygon_out: polygon_out.as_deref().map(abs_string),
+                ..Default::default()
+            };
+
+            if let Some(mb) = multiband {
+                if !mb.exists() {
+                    bail!("Multi-band raster does not exist: {}", mb.display());
+                }
+                let Some(sensor_name) = sensor.as_deref() else {
+                    bail!("`--multiband` requires `--sensor` (landsat5/7, landsat8/9, sentinel2, planetscope/spot, sentinel1).");
+                };
+                let overrides = match bands.as_deref() {
+                    Some(b) => sensors::parse_band_overrides(b)?,
+                    None => Default::default(),
+                };
+                let map = sensors::resolve_roles(sensor_name, roles, &overrides)?;
+                let shown: Vec<String> = map.iter().map(|(r, n)| format!("{r}=Band_{n}")).collect();
+                println!(
+                    "Band mapping ({}, {}): {}",
+                    sensor_name,
+                    idx.to_uppercase(),
+                    shown.join(", ")
+                );
+                payload.input = abs_string(&mb);
+                payload.multiband = Some(abs_string(&mb));
+                payload.sensor = Some(sensor_name.to_string());
+                payload.band_map = Some(map);
+            } else {
+                if !sensors::is_two_band_index(&idx) {
+                    bail!(
+                        "Index '{idx}' needs several bands: pass a single stack with `--multiband <raster> --sensor <sensor>`."
+                    );
+                }
+                let (Some(band_a), Some(band_b)) = (band_a, band_b) else {
+                    bail!("Provide either `--band-a` + `--band-b` (two-band indices) or `--multiband` + `--sensor`.");
+                };
+                if !band_a.exists() {
+                    bail!("Band A raster does not exist: {}", band_a.display());
+                }
+                if !band_b.exists() {
+                    bail!("Band B raster does not exist: {}", band_b.display());
+                }
+                payload.input = abs_string(&band_a);
+                payload.band_a = Some(abs_string(&band_a));
+                payload.band_b = Some(abs_string(&band_b));
             }
             if resolved == ResolvedBackend::Gdal {
                 bail!("`geokit raster index` requires ArcGIS Pro or ArcMap 10.x Spatial Analyst.");
             }
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Composite {
+            input,
+            sensor,
+            preset,
+            bands,
+            aoi,
+            epsg,
+            out,
+        } => {
+            use crate::gis::sensors;
+            if !input.exists() {
+                bail!("Multi-band raster does not exist: {}", input.display());
+            }
+            if let Some(a) = aoi.as_deref() {
+                if !a.exists() {
+                    bail!("AOI polygon does not exist: {}", a.display());
+                }
+            }
+            let Some(preset_roles) = sensors::composite_roles(&preset) else {
+                bail!(
+                    "Unknown composite preset '{preset}'. Supported: {}.",
+                    sensors::ALL_COMPOSITE_PRESETS
+                );
+            };
+            let overrides = match bands.as_deref() {
+                Some(b) => sensors::parse_band_overrides(b)?,
+                None => Default::default(),
+            };
+            let map = sensors::resolve_roles(&sensor, &preset_roles, &overrides)?;
+            let band_nums: Vec<u32> = preset_roles.iter().map(|r| map[*r]).collect();
+            println!(
+                "Composite '{}' ({}): R=Band_{} ({}), G=Band_{} ({}), B=Band_{} ({})",
+                preset,
+                sensor,
+                band_nums[0],
+                preset_roles[0],
+                band_nums[1],
+                preset_roles[1],
+                band_nums[2],
+                preset_roles[2]
+            );
+            if resolved == ResolvedBackend::Gdal {
+                let gdal = detect_gdal();
+                return gdal_raster_composite(
+                    &gdal,
+                    &input,
+                    &band_nums,
+                    aoi.as_deref(),
+                    epsg,
+                    &out,
+                );
+            }
             let payload = RasterPayload {
-                action: "raster_index".into(),
-                input: abs_string(&band_a),
+                action: "raster_composite".into(),
+                input: abs_string(&input),
                 out: abs_string(&out),
-                index_type: Some(index_type.to_ascii_lowercase()),
-                band_a: Some(abs_string(&band_a)),
-                band_b: Some(abs_string(&band_b)),
-                classes,
-                polygon_out: polygon_out.as_deref().map(abs_string),
+                composite_bands: Some(band_nums),
+                aoi: aoi.as_deref().map(abs_string),
+                epsg,
                 ..Default::default()
             };
             if resolved == ResolvedBackend::Arcmap {

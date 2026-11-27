@@ -57,6 +57,7 @@ def check_handlers_parity():
         "raster_mosaic", "raster_terrain", "raster_zonal_stats", "raster_reclass",
         "raster_weighted_sum", "raster_interpolate", "raster_index", "raster_contour",
         "raster_align", "raster_extract_points", "raster_morphometry", "raster_georef",
+        "raster_composite",
         "hydro_delineate", "hydro_basin",
     }
     assert core_required.issubset(pro_h), f"Missing core handlers in Pro: {core_required - pro_h}"
