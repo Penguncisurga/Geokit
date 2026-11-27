@@ -12,6 +12,7 @@ pub struct QaOptions {
     pub expected_epsg: Option<u32>,
     pub check_nulls: Option<String>,
     pub check_overlaps: bool,
+    pub strict: bool,
     pub json: bool,
 }
 
@@ -22,6 +23,7 @@ struct QaPayload {
     expected_epsg: Option<u32>,
     check_nulls: Option<String>,
     check_overlaps: bool,
+    strict: bool,
     json: bool,
 }
 
@@ -45,6 +47,7 @@ pub fn run(
         expected_epsg: target_epsg,
         check_nulls: opts.check_nulls,
         check_overlaps: opts.check_overlaps,
+        strict: opts.strict,
         json: opts.json,
     };
 

@@ -18,12 +18,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Install GDAL for real end-to-end integration tests (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y gdal-bin
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Run tests
+      - name: Run Rust unit, integration, and GDAL round-trip tests
         run: cargo test --locked
-      - name: Validate embedded Python 3 runner syntax
+      - name: Validate Python runners, HANDLERS parity, Golden math/classify & Add-In ZIP
         if: matrix.os == 'ubuntu-latest'
-        run: python3 -m py_compile scripts/arcpy_runner.py
+        run: python3 tests/python_runner_checks.py

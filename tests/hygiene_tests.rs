@@ -728,3 +728,192 @@ fn test_doctor_json_reports_version_and_bridges() {
     assert!(parsed["bridges"]["arcmap_daemon_port"].as_u64().is_some());
     assert!(parsed["bridges"]["arcgis_daemon_port"].as_u64().is_some());
 }
+
+#[test]
+fn test_mcp_tools_schema_contract_integrity() {
+    use std::collections::HashSet;
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = geokit_bin()
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || {
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{{}}}}"#
+        )
+        .unwrap();
+    });
+    let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert!(output.status.success());
+
+    let line = String::from_utf8_lossy(&output.stdout);
+    let resp: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+    let tools = resp["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 19);
+
+    let mut seen_names = HashSet::new();
+    for tool in tools {
+        let name = tool["name"].as_str().expect("tool name");
+        assert!(
+            seen_names.insert(name.to_string()),
+            "duplicate MCP tool: {name}"
+        );
+        assert!(
+            !tool["description"].as_str().unwrap_or("").is_empty(),
+            "empty description on {name}"
+        );
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["type"], "object", "invalid schema type on {name}");
+        let props = schema["properties"].as_object().expect("properties object");
+        if let Some(req) = schema.get("required").and_then(|v| v.as_array()) {
+            for r in req {
+                let rk = r.as_str().unwrap();
+                assert!(
+                    props.contains_key(rk),
+                    "MCP tool {name} requires '{rk}' which is missing from properties"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_golden_gdal_project_safe_mode_and_roundtrip() {
+    // Only run end-to-end GDAL round-trip when GDAL/ogr2ogr is available (e.g. CI Ubuntu & local QGIS)
+    let doc = geokit_bin().args(["doctor", "--json"]).output().unwrap();
+    assert!(doc.status.success());
+    let doc_json: serde_json::Value = serde_json::from_slice(&doc.stdout).unwrap();
+    if doc_json["gdal"]["ogr2ogr"].is_null() {
+        return;
+    }
+
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let src_gj = root.join("golden_square.geojson");
+    let sample = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": { "KELAS": "Sedang", "AREA_HA": 100.0 },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[110.20, -7.00], [110.21, -7.00], [110.21, -6.99], [110.20, -6.99], [110.20, -7.00]]]
+          }
+        }
+      ]
+    }"#;
+    fs::write(&src_gj, sample).unwrap();
+
+    // 1. Reproject WGS84 -> UTM 49S (EPSG:32749) into Shapefile via GDAL
+    let utm_shp = root.join("golden_utm49s.shp");
+    let proj_ok = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "project",
+            src_gj.to_str().unwrap(),
+            "--epsg",
+            "32749",
+            "--out",
+            utm_shp.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        proj_ok.status.success(),
+        "GDAL project failed: {}",
+        String::from_utf8_lossy(&proj_ok.stderr)
+    );
+    assert!(utm_shp.is_file());
+    assert!(root.join("golden_utm49s.prj").is_file());
+
+    // 2. Safe Mode: re-running WITHOUT --overwrite MUST fail cleanly
+    let proj_dup = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "project",
+            src_gj.to_str().unwrap(),
+            "--epsg",
+            "32749",
+            "--out",
+            utm_shp.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !proj_dup.status.success(),
+        "GDAL Safe Mode must refuse overwriting existing shapefile without --overwrite"
+    );
+
+    // 3. Re-running WITH --overwrite succeeds
+    let proj_ow = geokit_bin()
+        .args([
+            "--overwrite",
+            "--engine",
+            "gdal",
+            "gp",
+            "project",
+            src_gj.to_str().unwrap(),
+            "--epsg",
+            "32749",
+            "--out",
+            utm_shp.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        proj_ow.status.success(),
+        "GDAL --overwrite failed: {}",
+        String::from_utf8_lossy(&proj_ow.stderr)
+    );
+
+    // 4. Round-trip SHP -> GeoJSON via GDAL and verify native gp summary preserves attributes
+    let rt_gj = root.join("roundtrip.geojson");
+    let conv_ok = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "convert",
+            utm_shp.to_str().unwrap(),
+            "--to",
+            "geojson",
+            "--out",
+            rt_gj.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        conv_ok.status.success(),
+        "GDAL convert failed: {}",
+        String::from_utf8_lossy(&conv_ok.stderr)
+    );
+    let sum = geokit_bin()
+        .args([
+            "gp",
+            "summary",
+            rt_gj.to_str().unwrap(),
+            "--group-by",
+            "KELAS",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(sum.status.success());
+    let sum_json: serde_json::Value = serde_json::from_slice(&sum.stdout).unwrap();
+    assert_eq!(sum_json["total_features"], 1);
+    assert_eq!(sum_json["total_area"], 100.0);
+}

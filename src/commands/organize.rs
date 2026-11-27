@@ -3,7 +3,9 @@ use colored::Colorize;
 use std::path::Path;
 
 use crate::config::FolderConfig;
-use crate::gis::bundle::{collect_raster_bundle, collect_shapefile_bundle, move_path};
+use crate::gis::bundle::{
+    collect_raster_bundle, collect_shapefile_bundle, move_bundle_atomic, move_path,
+};
 use crate::gis::scanner::{is_gdb_dir, scan_directory};
 use crate::gis::{validate_safe_workspace_dir, GisCategory};
 
@@ -115,11 +117,11 @@ pub fn run(
         );
 
         if !dry_run {
-            for f in &bundle {
-                if let Some(fname) = f.file_name() {
-                    move_path(f, &dest_dir.join(fname))?;
-                }
-            }
+            let moves: Vec<(std::path::PathBuf, std::path::PathBuf)> = bundle
+                .iter()
+                .filter_map(|f| f.file_name().map(|fname| (f.clone(), dest_dir.join(fname))))
+                .collect();
+            move_bundle_atomic(&moves)?;
         }
         moved_datasets += 1;
     }

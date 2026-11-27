@@ -135,6 +135,22 @@ pub fn move_path(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
+/// Moves an entire shapefile/raster sidecar bundle transactionally: if any file move fails
+/// mid-bundle, all previously moved files in the bundle are rolled back to their original paths.
+pub fn move_bundle_atomic(moves: &[(PathBuf, PathBuf)]) -> Result<()> {
+    let mut completed: Vec<(&Path, &Path)> = Vec::with_capacity(moves.len());
+    for (src, dst) in moves {
+        if let Err(err) = move_path(src, dst) {
+            for (orig_src, orig_dst) in completed.into_iter().rev() {
+                let _ = move_path(orig_dst, orig_src);
+            }
+            return Err(err);
+        }
+        completed.push((src.as_path(), dst.as_path()));
+    }
+    Ok(())
+}
+
 /// Computes the renamed filename for a sidecar belonging to `old_stem` -> `new_stem`.
 pub fn rename_sidecar_filename(file_name: &str, old_stem: &str, new_stem: &str) -> Option<String> {
     if file_name.len() < old_stem.len() {
@@ -183,5 +199,26 @@ mod tests {
             rename_sidecar_filename("Batas Desa.DBF", "Batas Desa", "batas_desa"),
             Some("batas_desa.DBF".to_string())
         );
+    }
+
+    #[test]
+    fn test_move_bundle_atomic_rolls_back_on_error() {
+        let dir = tempdir().unwrap();
+        let src_a = dir.path().join("a.shp");
+        let dst_a = dir.path().join("out").join("a.shp");
+        let missing_b = dir.path().join("missing.dbf");
+        let dst_b = dir.path().join("out").join("missing.dbf");
+
+        fs::write(&src_a, b"shp-bytes").unwrap();
+        let res = move_bundle_atomic(&[(src_a.clone(), dst_a.clone()), (missing_b, dst_b)]);
+        assert!(
+            res.is_err(),
+            "bundle move must fail when second file is missing"
+        );
+        assert!(
+            src_a.exists(),
+            "first moved file must be rolled back to original path"
+        );
+        assert!(!dst_a.exists(), "rolled-back destination must not remain");
     }
 }

@@ -9,8 +9,28 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: Pre-Release Tests & Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install GDAL for integration tests
+        run: sudo apt-get update && sudo apt-get install -y gdal-bin
+      - name: Format & Clippy check
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Run full test suite
+        run: cargo test --locked
+      - name: Run Python runner & Golden checks
+        run: python3 tests/python_runner_checks.py
+
   build:
     name: Build (${{ matrix.asset }})
+    needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

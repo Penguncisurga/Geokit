@@ -153,6 +153,9 @@ enum Commands {
         /// Check for overlapping polygons within each polygon layer
         #[arg(long)]
         check_overlaps: bool,
+        /// Return non-zero exit code when any QA issue or mixed CRS is detected (for CI/pipelines)
+        #[arg(long)]
+        strict: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -287,6 +290,7 @@ fn real_main() -> Result<()> {
             expected_epsg,
             check_nulls,
             check_overlaps,
+            strict,
             json,
         } => commands::qa::run(
             &input,
@@ -294,6 +298,7 @@ fn real_main() -> Result<()> {
                 expected_epsg,
                 check_nulls,
                 check_overlaps,
+                strict,
                 json,
             },
             effective_propy,

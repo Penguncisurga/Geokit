@@ -740,9 +740,14 @@ def cmd_hydro_delineate(payload):
     print("[4/5] Extracting Stream Network (threshold >= %d cells)..." % threshold)
     streams_shp = os.path.join(out_dir, "streams.shp")
     stream_ras = sa.Con(facc >= threshold, 1)
+    streams_ok = False
     try:
         sa.StreamToFeature(stream_ras, fdir, streams_shp, "SIMPLIFY")
-        print("      -> %s" % streams_shp)
+        if arcpy.Exists(streams_shp) and int(arcpy.GetCount_management(streams_shp).getOutput(0)) > 0:
+            streams_ok = True
+            print("      -> %s" % streams_shp)
+        else:
+            print("      [WARN] Stream feature class is empty at threshold %d (try a lower --threshold)." % threshold)
     except Exception as exc:
         print("      [WARN] No streams extracted at threshold %d (%s)" % (threshold, exc))
 
@@ -757,7 +762,10 @@ def cmd_hydro_delineate(payload):
     else:
         print("[5/5] No --pour-point provided; skipping single-outlet watershed polygon.")
 
-    print("OK Hydrology delineation complete -> %s" % out_dir)
+    if streams_ok:
+        print("OK Hydrology delineation complete -> %s" % out_dir)
+    else:
+        print("PARTIAL Hydrology outputs written to %s, but stream network was NOT extracted (lower --threshold)." % out_dir)
     return 0
 
 
@@ -941,14 +949,24 @@ def cmd_qa_check(payload):
 
             if check_overlaps and getattr(desc, "shapeType", "") == "Polygon":
                 try:
-                    ov_fc = os.path.join(arcpy.env.scratchGDB, "geokit_qa_ov")
-                    if arcpy.Exists(ov_fc):
-                        arcpy.Delete_management(ov_fc)
-                    arcpy.Intersect_analysis([ds_path], ov_fc)
-                    ov_count = int(arcpy.GetCount_management(ov_fc).getOutput(0))
+                    polys = []
+                    with arcpy.da.SearchCursor(ds_path, ["OID@", "SHAPE@"]) as cur:
+                        for oid, geom in cur:
+                            if geom is not None and geom.area > 0:
+                                ext = geom.extent
+                                polys.append((oid, ext.XMin, ext.YMin, ext.XMax, ext.YMax, geom))
+                    ov_count = 0
+                    n_p = len(polys)
+                    for i in range(n_p):
+                        _, ax1, ay1, ax2, ay2, ga = polys[i]
+                        for j in range(i + 1, n_p):
+                            _, bx1, by1, bx2, by2, gb = polys[j]
+                            if ax2 <= bx1 or bx2 <= ax1 or ay2 <= by1 or by2 <= ay1:
+                                continue
+                            if ga.overlaps(gb) or ga.contains(gb) or gb.contains(ga) or ga.equals(gb):
+                                ov_count += 1
                     if ov_count > 0:
                         issues.append("%d overlapping polygon pair(s)" % ov_count)
-                    arcpy.Delete_management(ov_fc)
                 except Exception as exc:
                     issues.append("Overlap check skipped: %s" % exc)
 
@@ -963,17 +981,25 @@ def cmd_qa_check(payload):
             "issues": issues,
         })
 
+    mixed_crs = len(crs_set) > 1
+    strict = bool(payload.get("strict", False))
+    exit_code = 1 if (strict and (total_issues > 0 or mixed_crs)) else 0
+
     if payload.get("json"):
         print(json.dumps({
+            "scope": "technical_dataset_qa",
             "datasets_checked": len(report),
             "unique_crs_count": len(crs_set),
+            "mixed_crs_warning": mixed_crs,
+            "crs_list": sorted(crs_set),
             "total_issues": total_issues,
+            "strict_failed": exit_code != 0,
             "results": report,
         }, indent=2))
-        return 0
+        return exit_code
 
-    print("Spatial QA Report (%d dataset(s) checked):" % len(report))
-    if len(crs_set) > 1:
+    print("Spatial Technical QA Report (%d dataset(s) checked — CRS/geometry/NULL/overlaps):" % len(report))
+    if mixed_crs:
         print("  [WARN] Multiple CRS detected across workspace: %s" % ", ".join(sorted(crs_set)))
     for item in report:
         tag = "[PASS]" if item["status"] == "PASS" else "[WARN]"
@@ -982,7 +1008,7 @@ def cmd_qa_check(payload):
         for iss in item["issues"]:
             print("         - %s" % iss)
     print("Summary: %d checked, %d issue(s) found." % (len(report), total_issues))
-    return 0
+    return exit_code
 
 
 def _cast_value(raw_str, field_type):

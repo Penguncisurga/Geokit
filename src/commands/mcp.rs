@@ -1241,6 +1241,9 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             if bool_arg(args, "check_overlaps") {
                 cli_args.push("--check-overlaps".into());
             }
+            if bool_arg(args, "strict") {
+                cli_args.push("--strict".into());
+            }
         }
         "geokit_report" => {
             let (Some(path), Some(out)) = (str_arg(args, "path"), str_arg(args, "out")) else {
