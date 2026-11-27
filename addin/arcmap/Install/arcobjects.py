@@ -61,6 +61,9 @@ IID_IRasterLayer = _guid("{D02371C7-35F7-11D2-B1F2-00C04F8EDEFF}")
 IID_IRasterRenderer = _guid("{6F5322D1-3790-11D2-8D26-0000F8780535}")
 IID_IActiveView = _guid("{DD94D76B-836D-11D0-87EC-080009EC732A}")
 IID_ILegend = _guid("{3141F307-38E2-11D1-8809-080009EC732A}")
+IID_ILegend3 = _guid("{15ABE7F7-49E8-4012-BE72-D14E5A755ACE}")
+IID_ILegendFormat = _guid("{52AA5BC1-CB21-11D0-87F9-080009EC732A}")
+IID_ILegendClassFormat = _guid("{52AA5BC2-CB21-11D0-87F9-080009EC732A}")
 
 CLSID_RgbColor = _guid("{7EE9C496-D123-11D0-8383-080009B996CC}")
 IID_IColor = _guid("{20CD40B0-8F3D-11D0-8590-0800091A2A72}")
@@ -1687,7 +1690,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     note_txt = note or "CATATAN: Batas wilayah administrasi pada peta ini bukan referensi resmi penegasan batas."
     _add_text(gc, ix, y_note_sep - 0.12 * s, _wrap_text(note_txt, max_chars=48), size=5.4 * s, rgb=(40, 45, 50), halign=0, valign=0, name="lbl_catatan")
 
-    # === SECTION 6 (CLEANLY BOUNDED BETWEEN SECTION 5 AND SECTION 7): KETERANGAN ===
+    # === SECTION 6 (FIXED-FRAME, TOP-ANCHORED, AUTO-FIT & AUTO-COLUMNS): KETERANGAN ===
     hidden = []
     if mf:
         uid_leg = _make_uid(SURROUND_LEGEND_CLSID)
@@ -1695,14 +1698,34 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
         if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_leg, None, byref(leg_sf)) == 0 and leg_sf.value:
             ms = c_void_p()
             _vcall(leg_sf, 11, POINTER(c_void_p))(leg_sf, byref(ms))
-            visible_rows = 0
-            hide_set = set(n.strip().lower() for n in (hide_legend_names or []) if n.strip())
             if ms.value:
                 leg = _qi(ms, IID_ILegend)
                 if leg:
                     tb = _bstr("KETERANGAN")
                     _vcall(leg, 16, c_void_p)(leg, tb)
                     _free_bstr(tb)
+                    # Disable AutoAdd so layers added later cannot explode the legend box
+                    _vcall(leg, 18, c_short)(leg, 0)  # AutoAdd = False
+
+                    # Apply compact PerKaBIG typography & patch sizing via ILegendFormat
+                    lfmt = c_void_p()
+                    if _vcall(leg, 13, POINTER(c_void_p))(leg, byref(lfmt)) == 0 and lfmt.value:
+                        try:
+                            t_sym = make_text_symbol(size=8.6 * s, rgb=(0, 0, 0), halign=0, valign=0, bold=True)
+                            _vcall(lfmt, 6, c_void_p)(lfmt, t_sym)         # put_TitleSymbol
+                            _release(t_sym)
+                            _vcall(lfmt, 10, c_double)(lfmt, 3.5 * s)      # put_TitleGap
+                            _vcall(lfmt, 12, c_double)(lfmt, 4.0 * s)      # put_VerticalItemGap
+                            _vcall(lfmt, 16, c_double)(lfmt, 2.5 * s)      # put_LayerNameGap
+                            _vcall(lfmt, 24, c_double)(lfmt, 2.5 * s)      # put_VerticalPatchGap
+                            _vcall(lfmt, 28, c_double)(lfmt, 15.0 * s)     # put_DefaultPatchWidth
+                            _vcall(lfmt, 30, c_double)(lfmt, 8.5 * s)      # put_DefaultPatchHeight
+                            _vcall(leg, 14, c_void_p)(leg, lfmt)           # putref_Format
+                        except Exception:
+                            pass
+                        _release(lfmt)
+
+                    # Style every legend item cleanly (compact 7.5pt layer name, 7.0pt class label)
                     icnt = c_long(0)
                     _vcall(leg, 25, POINTER(c_long))(leg, byref(icnt))
                     for li in range(icnt.value):
@@ -1710,14 +1733,24 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                         _vcall(leg, 26, c_long, POINTER(c_void_p))(leg, li, byref(item))
                         if item.value:
                             _vcall(item, 20, c_short)(item, 0)  # ShowHeading = False
+                            try:
+                                ln_sym = make_text_symbol(size=7.4 * s, rgb=(0, 0, 0), halign=0, valign=1, bold=True)
+                                _vcall(item, 16, c_void_p)(item, ln_sym)  # put_LayerNameSymbol
+                                _release(ln_sym)
+                                lcf = c_void_p()
+                                if _vcall(item, 23, POINTER(c_void_p))(item, byref(lcf)) == 0 and lcf.value:
+                                    lbl_sym = make_text_symbol(size=7.0 * s, rgb=(20, 20, 20), halign=0, valign=1, bold=False)
+                                    _vcall(lcf, 4, c_void_p)(lcf, lbl_sym)        # put_LabelSymbol
+                                    _vcall(lcf, 8, c_double)(lcf, 15.0 * s)       # put_PatchWidth
+                                    _vcall(lcf, 10, c_double)(lcf, 8.5 * s)       # put_PatchHeight
+                                    _vcall(item, 24, c_void_p)(item, lcf)         # put_LegendClassFormat
+                                    _release(lbl_sym)
+                                    _release(lcf)
+                            except Exception:
+                                pass
                             item_lyr = c_void_p()
                             _vcall(item, 5, POINTER(c_void_p))(item, byref(item_lyr))
                             if item_lyr.value:
-                                bnm = c_void_p()
-                                _vcall(item_lyr, 3, POINTER(c_void_p))(item_lyr, byref(bnm))
-                                lnm = ctypes.wstring_at(bnm).lower() if bnm.value else u""
-                                _free_bstr(bnm)
-                                is_hidden = any(t in lnm for t in hide_set)
                                 gfl = _qi(item_lyr, IID_IGeoFeatureLayer)
                                 if gfl:
                                     rend = c_void_p()
@@ -1726,28 +1759,29 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                                         is_cb = _qi(rend, IID_IClassBreaksRenderer)
                                         if is_uv or is_cb:
                                             _vcall(item, 14, c_short)(item, -1)
-                                            if not is_hidden:
-                                                visible_rows += 6
-                                        elif not is_hidden:
-                                            visible_rows += 1
                                         _release(is_uv)
                                         _release(is_cb)
                                         _release(rend)
                                     _release(gfl)
-                                elif not is_hidden:
-                                    visible_rows += 1
                                 _release(item_lyr)
                             _release(item)
                     _release(leg)
+
+                # Lock legend strictly inside Section 6 via ILegend3 (FixedFrame + AutoColumns + AutoFit!)
+                leg3 = _qi(ms, IID_ILegend3)
+                if leg3:
+                    try:
+                        _vcall(leg3, 36, c_short)(leg3, -1)          # put_FixedFrame = True (top-anchored, NEVER overflows!)
+                        _vcall(leg3, 38, c_short)(leg3, -1)          # put_AutoColumns = True (auto multi-column for 10-23 classes)
+                        _vcall(leg3, 40, c_short)(leg3, -1)          # put_AutoFit = True (shrinks font cleanly if needed)
+                        _vcall(leg3, 42, c_double)(leg3, 5.0 * s)    # put_MinFontSize = 5pt * s
+                    except Exception:
+                        pass
+                    _release(leg3)
                 _release(ms)
-            # ArcMap ILegend expands UPWARD from ymin (~0.92 cm per row + ~1.15 cm title).
-            # Keep leg_ymin safely low enough so the top of KETERANGAN NEVER crosses Section 5!
-            avail_h = max(1.0 * s, (cur_y - 0.20 * s) - (y_foot_top + 0.18 * s))
-            est_h = min(avail_h, max(2.2 * s, (1.15 + visible_rows * 0.92) * s))
-            leg_ymax = cur_y - 0.20 * s
-            leg_ymin = max(y_foot_top + 0.18 * s, leg_ymax - est_h)
+
             el = _qi(leg_sf, IID_IElement)
-            env = _make_envelope(ix, leg_ymin, px + pw_p - pad, leg_ymax)
+            env = _make_envelope(ix, y_foot_top + 0.14 * s, px + pw_p - pad, cur_y - 0.14 * s)
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
