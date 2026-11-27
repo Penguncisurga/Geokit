@@ -9,8 +9,31 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tempfile::Builder;
+
+static OVERWRITE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_overwrite(enabled: bool) {
+    OVERWRITE_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn overwrite_enabled() -> bool {
+    OVERWRITE_ENABLED.load(Ordering::Relaxed)
+        || env::var("GEOKIT_OVERWRITE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+}
+
+fn enrich_payload<T: Serialize>(payload: &T) -> Result<Value> {
+    let mut val = serde_json::to_value(payload)?;
+    if let Some(obj) = val.as_object_mut() {
+        obj.entry("overwrite")
+            .or_insert_with(|| Value::Bool(overwrite_enabled()));
+    }
+    Ok(val)
+}
 
 pub const DEFAULT_ARCMAP_DAEMON_PORT: u16 = 9878;
 pub const DEFAULT_ARCPY_DAEMON_PORT: u16 = 9879;
@@ -105,7 +128,7 @@ fn try_run_via_daemon<T: Serialize>(port: u16, label: &str, payload: &T) -> Opti
     if daemon_disabled() {
         return None;
     }
-    let val = match serde_json::to_value(payload) {
+    let val = match enrich_payload(payload) {
         Ok(v) => v,
         Err(_) => return None,
     };
@@ -457,7 +480,7 @@ pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -
         .suffix(".json")
         .tempfile()
         .context("Failed to create temporary payload file")?;
-    let json_str = serde_json::to_string_pretty(payload)?;
+    let json_str = serde_json::to_string_pretty(&enrich_payload(payload)?)?;
     std::fs::write(payload_file.path(), json_str)
         .context("Failed to write temporary payload file")?;
 
@@ -542,7 +565,7 @@ pub fn run_arcmap_job<T: Serialize>(
         .suffix(".json")
         .tempfile()
         .context("Failed to create temporary payload file")?;
-    let json_str = serde_json::to_string_pretty(payload)?;
+    let json_str = serde_json::to_string_pretty(&enrich_payload(payload)?)?;
     std::fs::write(payload_file.path(), json_str)
         .context("Failed to write temporary payload file")?;
 

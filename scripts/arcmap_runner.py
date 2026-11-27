@@ -16,10 +16,133 @@ except ImportError as exc:
     sys.stderr.write("[geokit] Failed to import ArcMap arcpy: %s\n" % exc)
     sys.exit(2)
 
-arcpy.env.overwriteOutput = True
+arcpy.env.overwriteOutput = False
 
 VECTOR_EXTS = set([".shp"])
 RASTER_EXTS = set([".tif", ".tiff", ".img", ".jp2", ".ecw", ".asc", ".hgt"])
+ALLOWED_INTERP_METHODS = set(["idw", "spline", "kriging"])
+ALLOWED_INDEX_TYPES = set(["ndvi", "ndwi", "ndbi", "savi", "nbr"])
+
+
+def _norm_path(p):
+    if not p:
+        return ""
+    try:
+        return os.path.normcase(os.path.abspath(str(p)))
+    except Exception:
+        return str(p).lower()
+
+
+def _is_overwrite(payload):
+    return bool(payload.get("overwrite")) or os.environ.get("GEOKIT_OVERWRITE") in ("1", "true", "TRUE")
+
+
+def _check_safe_output(out_path, input_paths, overwrite):
+    """Validates that output never collides with any input and respects Safe Mode (no overwrite by default)."""
+    if not out_path:
+        return None
+    norm_out = _norm_path(out_path)
+    for inp in input_paths:
+        if inp and _norm_path(inp) == norm_out:
+            return "Refusing to overwrite input/reference dataset: %s" % out_path
+    if not overwrite and (os.path.exists(out_path) or arcpy.Exists(out_path)):
+        return "Output already exists: %s. Pass --overwrite to replace it." % out_path
+    return None
+
+
+def _compile_safe_math(expr):
+    import ast
+    tree = ast.parse(expr, mode="eval")
+    allowed_nodes = (
+        ast.Expression, ast.Num, ast.Str, ast.Name, ast.Load,
+        ast.UnaryOp, ast.UAdd, ast.USub, ast.Not,
+        ast.BinOp, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+        ast.BoolOp, ast.And, ast.Or,
+        ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+        ast.IfExp, ast.Call,
+    )
+    if hasattr(ast, "Constant"):
+        allowed_nodes = allowed_nodes + (ast.Constant,)
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed_nodes):
+            raise ValueError("Disallowed expression syntax: %s" % type(node).__name__)
+        if isinstance(node, ast.Name) and node.id.startswith("_"):
+            raise ValueError("Disallowed identifier in expression: %s" % node.id)
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.keywords or getattr(node, "starargs", None) or getattr(node, "kwargs", None):
+                raise ValueError("Only direct calls to safe math functions are allowed.")
+    return tree
+
+
+def _eval_safe_math_node(node, env, funcs):
+    import ast
+    import operator
+    if isinstance(node, ast.Expression):
+        return _eval_safe_math_node(node.body, env, funcs)
+    if hasattr(ast, "Constant") and isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Num):
+        return node.n
+    if isinstance(node, ast.Str):
+        return node.s
+    if isinstance(node, ast.Name):
+        if node.id in env:
+            return env[node.id]
+        raise ValueError("Unknown field or variable '%s' in expression." % node.id)
+    if isinstance(node, ast.UnaryOp):
+        v = _eval_safe_math_node(node.operand, env, funcs)
+        if isinstance(node.op, ast.UAdd):
+            return +v
+        if isinstance(node.op, ast.USub):
+            return -v
+        if isinstance(node.op, ast.Not):
+            return not v
+    if isinstance(node, ast.BinOp):
+        l = _eval_safe_math_node(node.left, env, funcs)
+        r = _eval_safe_math_node(node.right, env, funcs)
+        ops = {
+            ast.Add: operator.add, ast.Sub: operator.sub,
+            ast.Mult: operator.mul, ast.Div: operator.truediv,
+            ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+            ast.Pow: operator.pow,
+        }
+        return ops[type(node.op)](l, r)
+    if isinstance(node, ast.BoolOp):
+        if isinstance(node.op, ast.And):
+            res = True
+            for v in node.values:
+                res = _eval_safe_math_node(v, env, funcs)
+                if not res:
+                    return res
+            return res
+        res = False
+        for v in node.values:
+            res = _eval_safe_math_node(v, env, funcs)
+            if res:
+                return res
+        return res
+    if isinstance(node, ast.Compare):
+        left = _eval_safe_math_node(node.left, env, funcs)
+        cmps = {
+            ast.Eq: operator.eq, ast.NotEq: operator.ne,
+            ast.Lt: operator.lt, ast.LtE: operator.le,
+            ast.Gt: operator.gt, ast.GtE: operator.ge,
+        }
+        for op, comp in zip(node.ops, node.comparators):
+            right = _eval_safe_math_node(comp, env, funcs)
+            if not cmps[type(op)](left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.IfExp):
+        return _eval_safe_math_node(node.body, env, funcs) if _eval_safe_math_node(node.test, env, funcs) else _eval_safe_math_node(node.orelse, env, funcs)
+    if isinstance(node, ast.Call):
+        fn = funcs.get(node.func.id)
+        if fn is None:
+            raise ValueError("Disallowed function '%s' in expression." % node.func.id)
+        args = [_eval_safe_math_node(a, env, funcs) for a in node.args]
+        return fn(*args)
+    raise ValueError("Unsupported expression node: %s" % type(node).__name__)
 
 
 def sanitize_gdb_name(name):
@@ -698,16 +821,27 @@ def cmd_gp_tool_usage(payload):
 
 
 def cmd_gp_run(payload):
-    tool = payload.get("tool") or ""
+    tool = (payload.get("tool") or "").strip()
     args = payload.get("args") or []
+    if not tool or tool.startswith("_") or not tool[0].isalpha() or not all(c.isalnum() or c == "_" for c in tool):
+        sys.stderr.write("Invalid ArcPy tool name '%s'.\n" % tool)
+        return 1
     auto_checkout_extension(tool)
     fn = getattr(arcpy, tool, None)
     if fn is None:
         fn = getattr(arcpy.gp, tool, None)
-    if fn is None:
+    if fn is None or not callable(fn) or isinstance(fn, type):
         sys.stderr.write("Unknown ArcPy tool '%s'. Run `geokit gp tools <keyword>` to search.\n" % tool)
         return 1
-    res = fn(*args)
+    # Normalize relative filesystem paths so ArcMap 10.x tools (e.g. CopyRaster) never reject them
+    norm_args = []
+    for a in args:
+        s = str(a)
+        if ("\\" in s or "/" in s) and not os.path.isabs(s) and not s.startswith(("http://", "https://")):
+            norm_args.append(os.path.abspath(s))
+        else:
+            norm_args.append(a)
+    res = fn(*norm_args)
     out_val = res.getOutput(0) if res else ""
     print("OK %s completed%s" % (tool, (" -> " + out_val) if out_val else ""))
     return 0
@@ -1121,19 +1255,24 @@ def cmd_calc_field(payload):
     safe_funcs = {
         "abs": abs, "min": min, "max": max, "round": round,
         "int": int, "float": float, "str": str, "len": len,
-        "sqrt": math.sqrt, "log": math.log, "pow": math.pow, "math": math,
+        "sqrt": math.sqrt, "log": math.log, "pow": math.pow,
     }
+    try:
+        expr_tree = _compile_safe_math(expr)
+    except Exception as exc:
+        sys.stderr.write("Invalid/unsafe calc-field expression '%s': %s\n" % (expr, exc))
+        return 1
 
     updated = 0
     with arcpy.da.UpdateCursor(ds_path, all_fields) as cur:
         for row in cur:
-            env = dict(safe_funcs)
+            env = {}
             for idx, fname in enumerate(all_fields):
                 v = row[idx]
                 env[fname] = v
                 env.setdefault(fname.upper(), v)
                 env.setdefault(fname.lower(), v)
-            val = eval(expr, {"__builtins__": {}}, env)
+            val = _eval_safe_math_node(expr_tree, env, safe_funcs)
             row[out_idx] = _cast_value(val, field_type) if val is not None else None
             cur.updateRow(row)
             updated += 1
@@ -1249,19 +1388,30 @@ def _parse_remap_ranges(rules_str):
 
 
 def cmd_raster_reclass(payload):
-    arcpy.CheckOutExtension("Spatial")
-    from arcpy.sa import Reclassify, RemapRange, MajorityFilter
-
     in_r = payload["input"]
     rules = payload["rules"]
     out_r = payload["out"]
     smooth = bool(payload.get("smooth", False))
+    overwrite = _is_overwrite(payload)
+
+    # Validate rules and output safety BEFORE touching any existing output file!
+    ranges = _parse_remap_ranges(rules)
+    if not rules or not str(rules).strip():
+        sys.stderr.write("Reclassify rules cannot be empty.\n")
+        return 1
+    err = _check_safe_output(out_r, [in_r], overwrite)
+    if err:
+        sys.stderr.write(err + "\n")
+        return 1
+
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Reclassify, RemapRange, MajorityFilter
+
     parent = os.path.dirname(out_r)
     if parent and not os.path.exists(parent):
         os.makedirs(parent)
-    if arcpy.Exists(out_r):
+    if overwrite and arcpy.Exists(out_r):
         arcpy.Delete_management(out_r)
-    ranges = _parse_remap_ranges(rules)
     if ranges:
         rc = Reclassify(in_r, "Value", RemapRange(ranges), "NODATA")
         if smooth:
@@ -1279,18 +1429,47 @@ def cmd_raster_reclass(payload):
 
 
 def cmd_raster_weighted_sum(payload):
-    arcpy.CheckOutExtension("Spatial")
-    from arcpy.sa import Raster, Reclassify, RemapRange, MajorityFilter
+    import math
 
     pairs = payload.get("weighted_inputs") or []
     out_r = payload["out"]
     n_classes = payload.get("classes")
     poly_out = payload.get("polygon_out")
     smooth = bool(payload.get("smooth", False))
+    overwrite = _is_overwrite(payload)
+
+    if not pairs:
+        sys.stderr.write("weighted-sum requires at least one raster:weight pair.\n")
+        return 1
+    in_paths = []
+    w_sum = 0.0
+    for r_path, weight in pairs:
+        wf = float(weight)
+        if math.isnan(wf) or math.isinf(wf) or wf < 0.0:
+            sys.stderr.write("Invalid weight '%s' for %s (must be finite and >= 0).\n" % (weight, r_path))
+            return 1
+        w_sum += wf
+        in_paths.append(r_path)
+    if abs(w_sum - 1.0) > 0.01:
+        sys.stderr.write("Note: Sum of weights is %.4f (expected 1.0 for normalized weighted overlay).\n" % w_sum)
+
+    err = _check_safe_output(out_r, in_paths, overwrite)
+    if err:
+        sys.stderr.write(err + "\n")
+        return 1
+    if poly_out:
+        err_p = _check_safe_output(poly_out, in_paths + [out_r], overwrite)
+        if err_p:
+            sys.stderr.write(err_p + "\n")
+            return 1
+
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Raster, Reclassify, RemapRange, MajorityFilter
+
     parent = os.path.dirname(out_r)
     if parent and not os.path.exists(parent):
         os.makedirs(parent)
-    if arcpy.Exists(out_r):
+    if overwrite and arcpy.Exists(out_r):
         arcpy.Delete_management(out_r)
 
     total = None
@@ -1334,7 +1513,7 @@ def cmd_raster_weighted_sum(payload):
             raw_poly = os.path.join(arcpy.env.scratchGDB, "geokit_wsum_raw_poly")
             if arcpy.Exists(raw_poly):
                 arcpy.Delete_management(raw_poly)
-            if arcpy.Exists(poly_out):
+            if overwrite and arcpy.Exists(poly_out):
                 arcpy.Delete_management(poly_out)
             arcpy.RasterToPolygon_conversion(cls_tif, raw_poly, "SIMPLIFY", "Value")
             arcpy.Dissolve_management(raw_poly, poly_out, ["gridcode"])
@@ -1346,29 +1525,42 @@ def cmd_raster_weighted_sum(payload):
                 lbls = dict((i + 1, "Kelas %d" % (i + 1)) for i in range(n_cls))
             arcpy.AddField_management(poly_out, "KELAS", "TEXT", field_length=32)
             arcpy.AddField_management(poly_out, "AREA_HA", "DOUBLE")
-            with arcpy.da.UpdateCursor(poly_out, ["gridcode", "KELAS", "AREA_HA", "SHAPE@AREA"]) as cur:
+            with arcpy.da.UpdateCursor(poly_out, ["gridcode", "KELAS"]) as cur:
                 for row in cur:
                     row[1] = lbls.get(int(row[0]), "Kelas %s" % row[0])
-                    row[2] = round(float(row[3] or 0.0) / 10000.0, 2)
                     cur.updateRow(row)
+            try:
+                arcpy.CalculateField_management(poly_out, "AREA_HA", "!shape.geodesicArea@hectares!", "PYTHON_9.3")
+            except Exception:
+                arcpy.CalculateField_management(poly_out, "AREA_HA", "!shape.area@hectares!", "PYTHON_9.3")
             print("OK Classified polygon (%d classes) -> %s" % (n_cls, poly_out))
     return 0
 
 
 def cmd_raster_interpolate(payload):
-    arcpy.CheckOutExtension("Spatial")
-    from arcpy.sa import Idw, Spline, Kriging, KrigingModelOrdinary, ExtractByMask
-
     in_pts = payload["input"]
     field = payload["field"]
     out_r = payload["out"]
     method = (payload.get("method") or "idw").lower()
     cell_size = payload.get("cell_size")
     mask = payload.get("mask")
+    overwrite = _is_overwrite(payload)
+
+    if method not in ALLOWED_INTERP_METHODS:
+        sys.stderr.write("Invalid interpolation method '%s'. Allowed: idw, spline, kriging.\n" % method)
+        return 1
+    err = _check_safe_output(out_r, [in_pts, mask], overwrite)
+    if err:
+        sys.stderr.write(err + "\n")
+        return 1
+
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import Idw, Spline, Kriging, KrigingModelOrdinary, ExtractByMask
+
     parent = os.path.dirname(out_r)
     if parent and not os.path.exists(parent):
         os.makedirs(parent)
-    if arcpy.Exists(out_r):
+    if overwrite and arcpy.Exists(out_r):
         arcpy.Delete_management(out_r)
 
     prev_mask = arcpy.env.mask
@@ -1394,17 +1586,33 @@ def cmd_raster_interpolate(payload):
 
 
 def cmd_raster_index(payload):
+    idx_type = (payload.get("index_type") or "ndvi").lower()
+    out_r = payload["out"]
+    poly_out = payload.get("polygon_out")
+    overwrite = _is_overwrite(payload)
+
+    if idx_type not in ALLOWED_INDEX_TYPES:
+        sys.stderr.write("Invalid spectral index type '%s'. Allowed: ndvi, ndwi, ndbi, savi, nbr.\n" % idx_type)
+        return 1
+    err = _check_safe_output(out_r, [payload.get("band_a"), payload.get("band_b")], overwrite)
+    if err:
+        sys.stderr.write(err + "\n")
+        return 1
+    if poly_out:
+        err_p = _check_safe_output(poly_out, [payload.get("band_a"), payload.get("band_b"), out_r], overwrite)
+        if err_p:
+            sys.stderr.write(err_p + "\n")
+            return 1
+
     arcpy.CheckOutExtension("Spatial")
     from arcpy.sa import Float, Raster, Con, Reclassify, RemapRange
 
-    idx_type = (payload.get("index_type") or "ndvi").lower()
     b1 = Float(Raster(payload["band_a"]))
     b2 = Float(Raster(payload["band_b"]))
-    out_r = payload["out"]
     parent = os.path.dirname(out_r)
     if parent and not os.path.exists(parent):
         os.makedirs(parent)
-    if arcpy.Exists(out_r):
+    if overwrite and arcpy.Exists(out_r):
         arcpy.Delete_management(out_r)
 
     denom = b1 + b2
@@ -1558,7 +1766,15 @@ def _run_payload_captured(payload):
     sys.stdout, sys.stderr = buf_out, buf_err
     code = 0
     try:
-        arcpy.env.overwriteOutput = True
+        arcpy.env.overwriteOutput = _is_overwrite(payload)
+        out_p = payload.get("out")
+        if out_p and action not in ("layout_export", "raster_reclass", "raster_weighted_sum", "raster_interpolate", "raster_index"):
+            in_list = [payload.get("input"), payload.get("aoi"), payload.get("mask"), payload.get("dem"), payload.get("zones")]
+            if isinstance(payload.get("inputs"), list):
+                in_list.extend(payload.get("inputs"))
+            chk_err = _check_safe_output(out_p, in_list, arcpy.env.overwriteOutput)
+            if chk_err and not os.path.isdir(out_p):
+                return 1, u"", _safe_u(chk_err + "\n")
         code = int(handler(payload) or 0)
     except SystemExit as se:
         code = int(se.code) if isinstance(se.code, int) else 1
@@ -1569,7 +1785,7 @@ def _run_payload_captured(payload):
         sys.stdout, sys.stderr = old_out, old_err
         try:
             arcpy.env.workspace = None
-            arcpy.env.overwriteOutput = True
+            arcpy.env.overwriteOutput = False
         except Exception:
             pass
     return code, _safe_u(buf_out.getvalue()), _safe_u(buf_err.getvalue())
@@ -1601,14 +1817,25 @@ def _serve_daemon(port, idle_minutes=30):
             last_req = time.time()
             try:
                 conn.settimeout(30.0)
+                max_bytes = 10 * 1024 * 1024
                 chunks = []
+                total_len = 0
+                too_large = False
                 while True:
                     data = conn.recv(65536)
                     if not data:
                         break
+                    total_len += len(data)
+                    if total_len > max_bytes:
+                        too_large = True
+                        break
                     chunks.append(data)
                     if "\n" in data:
                         break
+                if too_large:
+                    err_resp = {"ok": False, "code": 1, "stdout": "", "stderr": "Request payload exceeds 10 MB limit\n"}
+                    conn.sendall((json.dumps(err_resp) + "\n").encode("utf-8"))
+                    continue
                 raw = "".join(chunks).strip()
                 if not raw:
                     continue
@@ -1698,6 +1925,16 @@ def main():
     if not handler:
         sys.stderr.write("Unsupported ArcMap action: %s\n" % action)
         sys.exit(2)
+    arcpy.env.overwriteOutput = _is_overwrite(payload)
+    out_p = payload.get("out")
+    if out_p and action not in ("layout_export", "raster_reclass", "raster_weighted_sum", "raster_interpolate", "raster_index"):
+        in_list = [payload.get("input"), payload.get("aoi"), payload.get("mask"), payload.get("dem"), payload.get("zones")]
+        if isinstance(payload.get("inputs"), list):
+            in_list.extend(payload.get("inputs"))
+        chk_err = _check_safe_output(out_p, in_list, arcpy.env.overwriteOutput)
+        if chk_err and not os.path.isdir(out_p):
+            sys.stderr.write(chk_err + "\n")
+            sys.exit(1)
     code = handler(payload)
     sys.exit(code)
 

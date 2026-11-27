@@ -58,11 +58,53 @@ pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u8, south: bool) -> (f64,
     (lon.to_degrees(), lat.to_degrees())
 }
 
-/// Detects UTM zone and hemisphere `(zone, is_south)` from a shapefile's `.prj` WKT text.
-pub fn detect_utm_from_prj(shp_path: &Path) -> Option<(u8, bool)> {
+/// Exact WGS84 Inverse Web Mercator (EPSG:3857 meters -> Lon/Lat degrees).
+pub fn web_mercator_to_wgs84(x: f64, y: f64) -> (f64, f64) {
+    const R: f64 = 6378137.0;
+    let lon = (x / R).to_degrees();
+    let lat = (2.0 * (y / R).exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees();
+    (lon, lat)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrjCrs {
+    Geographic,
+    Utm(u8, bool),
+    WebMercator,
+    UnsupportedProjected(String),
+}
+
+/// Detects CRS type from a shapefile's `.prj` WKT text so unsupported projected CRS
+/// are rejected rather than silently treated as WGS84 lon/lat degrees.
+pub fn detect_crs_from_prj(shp_path: &Path) -> PrjCrs {
     let prj = shp_path.with_extension("prj");
-    let text = fs::read_to_string(&prj).ok()?;
+    let Ok(text) = fs::read_to_string(&prj) else {
+        return PrjCrs::Geographic;
+    };
     let upper = text.to_ascii_uppercase();
+    if let Some((zone, south)) = parse_utm_wkt(&upper) {
+        return PrjCrs::Utm(zone, south);
+    }
+    if upper.contains("MERCATOR_AUXILIARY_SPHERE")
+        || upper.contains("PSEUDO_MERCATOR")
+        || upper.contains("WEB_MERCATOR")
+        || upper.contains("EPSG\",3857")
+        || upper.contains("EPSG\",\"3857")
+    {
+        return PrjCrs::WebMercator;
+    }
+    if upper.trim_start().starts_with("PROJCS[") {
+        let name = text
+            .split('"')
+            .nth(1)
+            .unwrap_or("Unknown Projected CRS")
+            .to_string();
+        return PrjCrs::UnsupportedProjected(name);
+    }
+    PrjCrs::Geographic
+}
+
+fn parse_utm_wkt(upper: &str) -> Option<(u8, bool)> {
     if let Some(pos) = upper.find("UTM_ZONE_") {
         let rest = &upper[pos + 9..];
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -73,15 +115,27 @@ pub fn detect_utm_from_prj(shp_path: &Path) -> Option<(u8, bool)> {
         }
     }
     if upper.contains("TRANSVERSE_MERCATOR") {
-        // Fallback: parse central_meridian + false_northing
-        let cm = extract_wkt_param(&upper, "CENTRAL_MERIDIAN");
-        let fn_val = extract_wkt_param(&upper, "FALSE_NORTHING").unwrap_or(0.0);
-        if let Some(cm_deg) = cm {
-            let zone = (((cm_deg + 183.0) / 6.0).round() as i32).clamp(1, 60) as u8;
-            return Some((zone, fn_val > 5_000_000.0));
+        // Distinguish standard UTM (scale_factor ~0.9996, false_easting 500000) from TM-3° / custom TM
+        let sf = extract_wkt_param(upper, "SCALE_FACTOR").unwrap_or(0.9996);
+        let fe = extract_wkt_param(upper, "FALSE_EASTING").unwrap_or(500_000.0);
+        if (sf - 0.9996).abs() < 0.0002 && (fe - 500_000.0).abs() < 1.0 {
+            let cm = extract_wkt_param(upper, "CENTRAL_MERIDIAN");
+            let fn_val = extract_wkt_param(upper, "FALSE_NORTHING").unwrap_or(0.0);
+            if let Some(cm_deg) = cm {
+                let zone = (((cm_deg + 183.0) / 6.0).round() as i32).clamp(1, 60) as u8;
+                return Some((zone, fn_val > 5_000_000.0));
+            }
         }
     }
     None
+}
+
+/// Detects UTM zone and hemisphere `(zone, is_south)` from a shapefile's `.prj` WKT text.
+pub fn detect_utm_from_prj(shp_path: &Path) -> Option<(u8, bool)> {
+    match detect_crs_from_prj(shp_path) {
+        PrjCrs::Utm(z, s) => Some((z, s)),
+        _ => None,
+    }
 }
 
 fn extract_wkt_param(upper: &str, name: &str) -> Option<f64> {
@@ -116,13 +170,14 @@ fn read_u32_le(buf: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(buf[off..off + 4].try_into().unwrap_or([0; 4]))
 }
 
-fn transform_xy(x: f64, y: f64, utm: Option<(u8, bool)>) -> (f64, f64) {
-    if let Some((zone, south)) = utm {
-        if x.abs() > 180.0 || y.abs() > 90.0 {
-            return utm_to_wgs84(x, y, zone, south);
+fn transform_xy(x: f64, y: f64, crs: &PrjCrs) -> (f64, f64) {
+    match crs {
+        PrjCrs::Utm(zone, south) if x.abs() > 180.0 || y.abs() > 90.0 => {
+            utm_to_wgs84(x, y, *zone, *south)
         }
+        PrjCrs::WebMercator if x.abs() > 180.0 || y.abs() > 90.0 => web_mercator_to_wgs84(x, y),
+        _ => (x, y),
     }
-    (x, y)
 }
 
 /// Reads the WGS84 bounding box `(min_lon, min_lat, max_lon, max_lat)` of a `.shp` or `.geojson`.
@@ -141,18 +196,25 @@ pub fn read_wgs84_bbox(path: &Path) -> Result<(f64, f64, f64, f64)> {
         let ymin = read_f64_le(&data, 44);
         let xmax = read_f64_le(&data, 52);
         let ymax = read_f64_le(&data, 60);
-        let utm = detect_utm_from_prj(path);
-        let (lon1, lat1) = transform_xy(xmin, ymin, utm);
-        let (lon2, lat2) = transform_xy(xmax, ymax, utm);
-        let (lon3, lat3) = transform_xy(xmin, ymax, utm);
-        let (lon4, lat4) = transform_xy(xmax, ymin, utm);
+        let crs = detect_crs_from_prj(path);
+        if let PrjCrs::UnsupportedProjected(name) = &crs {
+            bail!(
+                "Unsupported projected CRS '{}' in {}. Reproject to WGS84 (EPSG:4326) or UTM with `geokit gp project` first.",
+                name,
+                path.display()
+            );
+        }
+        let (lon1, lat1) = transform_xy(xmin, ymin, &crs);
+        let (lon2, lat2) = transform_xy(xmax, ymax, &crs);
+        let (lon3, lat3) = transform_xy(xmin, ymax, &crs);
+        let (lon4, lat4) = transform_xy(xmax, ymin, &crs);
         let min_lon = lon1.min(lon2).min(lon3).min(lon4);
         let max_lon = lon1.max(lon2).max(lon3).max(lon4);
         let min_lat = lat1.min(lat2).min(lat3).min(lat4);
         let max_lat = lat1.max(lat2).max(lat3).max(lat4);
         if min_lon < -180.1 || max_lon > 180.1 || min_lat < -90.1 || max_lat > 90.1 {
             bail!(
-                "Could not determine WGS84 extent for {} (missing .prj UTM definition?). Pass --bbox explicitly.",
+                "Could not determine WGS84 extent for {} (missing .prj CRS definition?). Pass --bbox explicitly or define/reproject CRS first.",
                 path.display()
             );
         }
@@ -213,31 +275,50 @@ fn collect_coord_array(
     max_y: &mut f64,
 ) {
     if let Value::Array(arr) = v {
-        if arr.len() >= 2 && arr[0].is_f64() && arr[1].is_f64() {
-            let x = arr[0].as_f64().unwrap();
-            let y = arr[1].as_f64().unwrap();
-            *min_x = min_x.min(x);
-            *min_y = min_y.min(y);
-            *max_x = max_x.max(x);
-            *max_y = max_y.max(y);
-        } else {
-            for item in arr {
-                collect_coord_array(item, min_x, min_y, max_x, max_y);
+        if arr.len() >= 2 {
+            if let (Some(x), Some(y)) = (arr[0].as_f64(), arr[1].as_f64()) {
+                if x.is_finite() && y.is_finite() {
+                    *min_x = min_x.min(x);
+                    *min_y = min_y.min(y);
+                    *max_x = max_x.max(x);
+                    *max_y = max_y.max(y);
+                    return;
+                }
             }
+        }
+        for item in arr {
+            collect_coord_array(item, min_x, min_y, max_x, max_y);
         }
     }
 }
 
-/// Reads all attribute records from a `.dbf` file as a Vec of JSON property maps.
-pub fn read_dbf_records(dbf_path: &Path) -> Result<Vec<Map<String, Value>>> {
+/// Reads all physical records from a `.dbf` file preserving 1-to-1 record indices
+/// (`None` for records marked deleted with `*`), with strict header/capacity bounds checking.
+pub fn read_dbf_records_indexed(dbf_path: &Path) -> Result<Vec<Option<Map<String, Value>>>> {
     let data =
         fs::read(dbf_path).with_context(|| format!("Failed to read {}", dbf_path.display()))?;
     if data.len() < 32 {
-        bail!("Invalid DBF header: {}", dbf_path.display());
+        bail!(
+            "Invalid DBF header (file too small): {}",
+            dbf_path.display()
+        );
     }
-    let num_records = read_u32_le(&data, 4) as usize;
+    let declared_records = read_u32_le(&data, 4) as usize;
     let header_len = read_u16_le(&data, 8) as usize;
     let record_len = read_u16_le(&data, 10) as usize;
+
+    if header_len < 32 || header_len > data.len() {
+        bail!(
+            "Invalid DBF header length ({header_len}) in {}",
+            dbf_path.display()
+        );
+    }
+    if record_len == 0 {
+        return Ok(Vec::new());
+    }
+    // Clamp allocation to physical records that can actually fit in the file (prevents OOM on corrupt headers)
+    let max_possible = (data.len() - header_len) / record_len;
+    let num_records = declared_records.min(max_possible);
 
     let mut fields: Vec<(String, u8, usize)> = Vec::new();
     let mut off = 32;
@@ -265,6 +346,11 @@ pub fn read_dbf_records(dbf_path: &Path) -> Result<Vec<Map<String, Value>>> {
             break;
         }
         let deleted = data[rec_off] == b'*';
+        if deleted {
+            out.push(None);
+            rec_off += record_len;
+            continue;
+        }
         let mut map = Map::new();
         let mut f_off = rec_off + 1;
         for (name, ftype, flen) in &fields {
@@ -292,12 +378,18 @@ pub fn read_dbf_records(dbf_path: &Path) -> Result<Vec<Map<String, Value>>> {
             map.insert(name.clone(), val);
             f_off += *flen;
         }
-        if !deleted {
-            out.push(map);
-        }
+        out.push(Some(map));
         rec_off += record_len;
     }
     Ok(out)
+}
+
+/// Reads all active (non-deleted) attribute records from a `.dbf` file as a Vec of JSON property maps.
+pub fn read_dbf_records(dbf_path: &Path) -> Result<Vec<Map<String, Value>>> {
+    Ok(read_dbf_records_indexed(dbf_path)?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 fn round6(v: f64) -> f64 {
@@ -350,10 +442,18 @@ pub fn read_geojson_wgs84(path: &Path, simplify_tol_deg: f64) -> Result<Value> {
     if shp.len() < 100 {
         bail!("Invalid shapefile: {}", path.display());
     }
-    let utm = detect_utm_from_prj(path);
+    let crs = detect_crs_from_prj(path);
+    if let PrjCrs::UnsupportedProjected(name) = &crs {
+        bail!(
+            "Unsupported projected CRS '{}' in {}. Reproject to WGS84 (EPSG:4326) or UTM with `geokit gp project` first.",
+            name,
+            path.display()
+        );
+    }
     let dbf_path = path.with_extension("dbf");
-    let records = if dbf_path.is_file() {
-        read_dbf_records(&dbf_path).unwrap_or_default()
+    let has_dbf = dbf_path.is_file();
+    let records = if has_dbf {
+        read_dbf_records_indexed(&dbf_path)?
     } else {
         Vec::new()
     };
@@ -370,14 +470,25 @@ pub fn read_geojson_wgs84(path: &Path, simplify_tol_deg: f64) -> Result<Value> {
             break;
         }
         let shape_type = read_i32_le(&shp, pos);
-        let props = records.get(rec_idx).cloned().unwrap_or_else(Map::new);
+        let dbf_slot = records.get(rec_idx);
         rec_idx += 1;
+
+        // If the DBF record at this physical index is marked deleted (`*`), skip geometry too
+        // so subsequent attributes NEVER shift onto the wrong geometry!
+        if matches!(dbf_slot, Some(None)) {
+            pos += content_len;
+            continue;
+        }
+        let props = dbf_slot
+            .and_then(|opt| opt.as_ref())
+            .cloned()
+            .unwrap_or_else(Map::new);
 
         let geometry = match shape_type {
             1 | 11 | 21 if content_len >= 20 => {
                 let x = read_f64_le(&shp, pos + 4);
                 let y = read_f64_le(&shp, pos + 12);
-                let (lon, lat) = transform_xy(x, y, utm);
+                let (lon, lat) = transform_xy(x, y, &crs);
                 Some(json!({ "type": "Point", "coordinates": [round6(lon), round6(lat)] }))
             }
             3 | 13 | 23 | 5 | 15 | 25 if content_len >= 44 => {
@@ -399,7 +510,7 @@ pub fn read_geojson_wgs84(path: &Path, simplify_tol_deg: f64) -> Result<Value> {
                         for pi in w[0]..w[1] {
                             let o = pts_off + pi * 16;
                             let (lon, lat) =
-                                transform_xy(read_f64_le(&shp, o), read_f64_le(&shp, o + 8), utm);
+                                transform_xy(read_f64_le(&shp, o), read_f64_le(&shp, o + 8), &crs);
                             ring.push((lon, lat));
                         }
                         if !ring.is_empty() {
@@ -465,11 +576,150 @@ fn signed_ring_area(ring: &[[f64; 2]]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    fn build_point_shp(points: &[(f64, f64)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for (idx, &(x, y)) in points.iter().enumerate() {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+            // Record header: 1-based record number (BE i32) + content length in 16-bit words (10 words = 20 bytes)
+            body.extend_from_slice(&((idx as i32) + 1).to_be_bytes());
+            body.extend_from_slice(&10_i32.to_be_bytes());
+            // Point content: shape type 1 (LE i32) + X (LE f64) + Y (LE f64)
+            body.extend_from_slice(&1_i32.to_le_bytes());
+            body.extend_from_slice(&x.to_le_bytes());
+            body.extend_from_slice(&y.to_le_bytes());
+        }
+        let total_len_words = ((100 + body.len()) / 2) as i32;
+        let mut hdr = vec![0u8; 100];
+        hdr[0..4].copy_from_slice(&9994_i32.to_be_bytes());
+        hdr[24..28].copy_from_slice(&total_len_words.to_be_bytes());
+        hdr[28..32].copy_from_slice(&1000_i32.to_le_bytes());
+        hdr[32..36].copy_from_slice(&1_i32.to_le_bytes());
+        hdr[36..44].copy_from_slice(&min_x.to_le_bytes());
+        hdr[44..52].copy_from_slice(&min_y.to_le_bytes());
+        hdr[52..60].copy_from_slice(&max_x.to_le_bytes());
+        hdr[60..68].copy_from_slice(&max_y.to_le_bytes());
+        hdr.extend_from_slice(&body);
+        hdr
+    }
+
+    fn build_single_field_dbf(rows: &[(bool, &str)]) -> Vec<u8> {
+        let field_len: u8 = 10;
+        let header_len: u16 = 32 + 32 + 1;
+        let record_len: u16 = 1 + field_len as u16;
+        let mut buf = vec![0u8; header_len as usize];
+        buf[0] = 0x03;
+        buf[4..8].copy_from_slice(&(rows.len() as u32).to_le_bytes());
+        buf[8..10].copy_from_slice(&header_len.to_le_bytes());
+        buf[10..12].copy_from_slice(&record_len.to_le_bytes());
+        // Field descriptor "NAME" (C, len 10)
+        buf[32..36].copy_from_slice(b"NAME");
+        buf[43] = b'C';
+        buf[48] = field_len;
+        buf[64] = 0x0D; // header terminator
+
+        for &(deleted, val) in rows {
+            buf.push(if deleted { b'*' } else { b' ' });
+            let mut cell = [b' '; 10];
+            let bytes = val.as_bytes();
+            let n = bytes.len().min(10);
+            cell[..n].copy_from_slice(&bytes[..n]);
+            buf.extend_from_slice(&cell);
+        }
+        buf.push(0x1A); // EOF marker
+        buf
+    }
 
     #[test]
     fn test_utm_49s_kendal_to_wgs84() {
         let (lon, lat) = utm_to_wgs84(412_000.0, 9_232_000.0, 49, true);
         assert!((lon - 110.203).abs() < 0.02, "lon={lon}");
         assert!((lat - (-6.948)).abs() < 0.02, "lat={lat}");
+    }
+
+    #[test]
+    fn test_geojson_integer_coords_bbox() {
+        let dir = tempdir().unwrap();
+        let gj = dir.path().join("int_aoi.geojson");
+        fs::write(
+            &gj,
+            r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[110,-7],[111,-7],[111,-6],[110,-6],[110,-7]]]}}]}"#,
+        )
+        .unwrap();
+        let bbox = read_wgs84_bbox(&gj).expect("integer GeoJSON coords must parse");
+        assert_eq!(bbox, (110.0, -7.0, 111.0, -6.0));
+    }
+
+    #[test]
+    fn test_dbf_deleted_record_stays_synced_with_shp() {
+        let dir = tempdir().unwrap();
+        let shp_path = dir.path().join("pts.shp");
+        let dbf_path = dir.path().join("pts.dbf");
+        fs::write(
+            &shp_path,
+            build_point_shp(&[(110.0, -7.0), (111.0, -8.0), (112.0, -9.0)]),
+        )
+        .unwrap();
+        fs::write(
+            &dbf_path,
+            build_single_field_dbf(&[(false, "Alpha"), (true, "Deleted"), (false, "Gamma")]),
+        )
+        .unwrap();
+
+        let fc = read_geojson_wgs84(&shp_path, 0.0).unwrap();
+        let feats = fc["features"].as_array().unwrap();
+        assert_eq!(feats.len(), 2, "deleted DBF record must skip its geometry");
+        assert_eq!(feats[0]["properties"]["NAME"], "Alpha");
+        assert_eq!(feats[0]["geometry"]["coordinates"], json!([110.0, -7.0]));
+        assert_eq!(feats[1]["properties"]["NAME"], "Gamma");
+        assert_eq!(feats[1]["geometry"]["coordinates"], json!([112.0, -9.0]));
+    }
+
+    #[test]
+    fn test_dbf_corrupt_huge_num_records_does_not_oom() {
+        let dir = tempdir().unwrap();
+        let dbf_path = dir.path().join("corrupt.dbf");
+        let mut buf = build_single_field_dbf(&[]);
+        // Overwrite num_records with 0x7FFF_FFFF (~2.1 billion) on a tiny file
+        buf[4..8].copy_from_slice(&0x7FFF_FFFF_u32.to_le_bytes());
+        fs::write(&dbf_path, &buf).unwrap();
+
+        let recs = read_dbf_records_indexed(&dbf_path).expect("clamped safely without OOM");
+        assert!(recs.is_empty());
+    }
+
+    #[test]
+    fn test_web_mercator_and_unsupported_projected_crs() {
+        let (lon, lat) = web_mercator_to_wgs84(12_245_143.987, -781_140.0);
+        assert!((lon - 110.0).abs() < 0.01, "lon={lon}");
+        assert!((lat - (-7.0)).abs() < 0.05, "lat={lat}");
+
+        let dir = tempdir().unwrap();
+        let shp_path = dir.path().join("tm3.shp");
+        let prj_path = dir.path().join("tm3.prj");
+        fs::write(&shp_path, build_point_shp(&[(200_000.0, 1_500_000.0)])).unwrap();
+        fs::write(
+            &prj_path,
+            r#"PROJCS["DGN_1995_Indonesia_TM-3_Zone_49.1",GEOGCS["GCS_DGN_1995",DATUM["D_DGN_1995",SPHEROID["WGS_1984",6378137.0,298.257223563]]],PROJECTION["Transverse_Mercator"]]"#,
+        )
+        .unwrap();
+
+        let err_bbox = read_wgs84_bbox(&shp_path).unwrap_err().to_string();
+        assert!(
+            err_bbox.contains("Unsupported projected CRS"),
+            "err={err_bbox}"
+        );
+        let err_gj = read_geojson_wgs84(&shp_path, 0.0).unwrap_err().to_string();
+        assert!(err_gj.contains("Unsupported projected CRS"), "err={err_gj}");
     }
 }

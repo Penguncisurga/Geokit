@@ -428,8 +428,10 @@ def _handle_request(req):
         return {"ok": True, "tool": tool, "usage": arcpy.Usage(tool)}
 
     if action == "run_gp":
-        tool = req.get("tool", "")
+        tool = (req.get("tool") or "").strip()
         args = req.get("args") or []
+        if not tool or tool.startswith("_") or not tool[0].isalpha() or not all(c.isalnum() or c == "_" for c in tool):
+            return {"ok": False, "error": f"Invalid ArcPy tool name: {tool}"}
         for ext in ("Spatial", "3D", "Network"):
             try:
                 if arcpy.CheckExtension(ext) == "Available":
@@ -437,22 +439,32 @@ def _handle_request(req):
             except Exception:
                 pass
         fn = getattr(arcpy, tool, None) or getattr(arcpy.gp, tool, None)
-        if fn is None:
+        if fn is None or not callable(fn) or isinstance(fn, type):
             return {"ok": False, "error": f"Unknown ArcPy tool: {tool}"}
-        res = fn(*args)
+        prev_ow = arcpy.env.overwriteOutput
+        arcpy.env.overwriteOutput = bool(req.get("overwrite", False))
+        try:
+            res = fn(*args)
+        finally:
+            arcpy.env.overwriteOutput = prev_ow
         return {"ok": True, "tool": tool, "output": str(res)}
 
     return {"ok": False, "error": f"Unsupported action in ArcGIS Pro Live Bridge: {action}"}
 
 
 def _client_worker(conn):
+    max_bytes = 10 * 1024 * 1024
     try:
+        conn.settimeout(30.0)
         buf = b""
         while True:
             chunk = conn.recv(65536)
             if not chunk:
                 break
             buf += chunk
+            if len(buf) > max_bytes:
+                conn.sendall((json.dumps({"ok": False, "error": "Request exceeds 10 MB limit"}) + "\n").encode("utf-8"))
+                return
             if b"\n" in buf:
                 break
         line = buf.decode("utf-8", errors="replace").strip()

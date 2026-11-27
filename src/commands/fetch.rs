@@ -254,8 +254,25 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
                 "https://overpass.kumi.systems/api/interpreter",
             ];
 
-            for raw_lyr in layers.split(',').filter(|s| !s.trim().is_empty()) {
-                let (name, filter, as_poly) = osm_layer_filter(raw_lyr)?;
+            let overwrite = crate::engine::overwrite_enabled();
+            let parsed_layers: Vec<(&'static str, &'static str, bool)> = layers
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .map(osm_layer_filter)
+                .collect::<Result<Vec<_>>>()?;
+            if !overwrite {
+                for (name, _, _) in &parsed_layers {
+                    let dst = out.join(format!("osm_{name}.geojson"));
+                    if dst.exists() {
+                        bail!(
+                            "Output already exists: '{}'. Pass --overwrite to replace it.",
+                            dst.display()
+                        );
+                    }
+                }
+            }
+
+            for (name, filter, as_poly) in parsed_layers {
                 let query = format!(
                     "[out:json][timeout:25];({filter}({min_lat:.6},{min_lon:.6},{max_lat:.6},{max_lon:.6}););out body geom;"
                 );
@@ -358,10 +375,16 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
                 });
                 let exe = std::env::current_exe().context("Cannot locate geokit binary")?;
 
-                // Clean any previous temp/output TIFFs so mosaic only sees the downloaded .hgt tiles
+                // Guard final output unless --overwrite was explicitly requested
                 let merged_tmp = out.join("_merged_srtm.tif");
                 let clipped_out = out.join("dem_aoi_clipped.tif");
                 let proj_tmp = target_epsg.map(|code| out.join(format!("_srtm_epsg{code}.tif")));
+                if clipped_out.exists() && !crate::engine::overwrite_enabled() {
+                    bail!(
+                        "Output already exists: '{}'. Pass --overwrite to replace it.",
+                        clipped_out.display()
+                    );
+                }
                 for stale in [Some(&merged_tmp), proj_tmp.as_ref(), Some(&clipped_out)]
                     .into_iter()
                     .flatten()
@@ -378,6 +401,7 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
                     );
                     let st = Command::new(&exe)
                         .args([
+                            "--overwrite",
                             "raster",
                             "mosaic",
                             &out.to_string_lossy(),
@@ -404,6 +428,7 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
                         );
                         let st = Command::new(&exe)
                             .args([
+                                "--overwrite",
                                 "gp",
                                 "project",
                                 &working_dem.to_string_lossy(),
@@ -429,6 +454,7 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
                 );
                 let st = Command::new(&exe)
                     .args([
+                        "--overwrite",
                         "gp",
                         "clip",
                         &projected_dem.to_string_lossy(),

@@ -835,28 +835,32 @@ def _handle_command_on_ui_thread(req):
         return {"ok": True, "tool": tool, "usage": usage}
 
     if action == "run_gp":
-        tool = req.get("tool", "")
+        tool = (req.get("tool") or "").strip()
         args = req.get("args", [])
         kwargs = req.get("kwargs", {}) or {}
         add_output = bool(req.get("add_to_map", True))
         if not tool:
             return {"ok": False, "error": "Missing 'tool' name (e.g. Buffer_analysis)"}
+        if tool.startswith("_") or not all(c.isalnum() or c == "_" for c in tool) or not tool[0].isalpha():
+            return {"ok": False, "error": "Invalid ArcPy tool name '%s'." % tool}
         _auto_checkout_extension(tool)
         fn = getattr(arcpy, tool, None)
         if fn is None:
             fn = getattr(arcpy.gp, tool, None)
-        if fn is None:
+        if fn is None or not callable(fn) or isinstance(fn, type):
             return {
                 "ok": False,
-                "error": "Unknown arcpy tool '%s'. Use action 'list_tools' to search exact tool names." % tool,
+                "error": "Unknown ArcPy tool '%s'. Use action 'list_tools' to search exact tool names." % tool,
             }
-        arcpy.env.overwriteOutput = True
+        prev_ow = arcpy.env.overwriteOutput
         prev_add = arcpy.env.addOutputsToMap
+        arcpy.env.overwriteOutput = bool(req.get("overwrite", False))
         arcpy.env.addOutputsToMap = add_output
         try:
             res = fn(*args, **kwargs)
             out_val = res.getOutput(0) if res else ""
         finally:
+            arcpy.env.overwriteOutput = prev_ow
             arcpy.env.addOutputsToMap = prev_add
         _force_refresh()
         return {"ok": True, "tool": tool, "output": out_val}
@@ -880,13 +884,19 @@ def _drain_queue_callback(hwnd, msg, id_event, dw_time):
 
 
 def _serve_client(conn):
+    max_bytes = 10 * 1024 * 1024  # 10 MB safety cap
     try:
+        conn.settimeout(30.0)
         data = b""
         while b"\n" not in data:
             chunk = conn.recv(65536)
             if not chunk:
                 break
             data += chunk
+            if len(data) > max_bytes:
+                err = (json.dumps({"ok": False, "error": "Request exceeds 10 MB limit"}) + "\n").encode("utf-8")
+                conn.sendall(err)
+                return
         if not data:
             return
         req = json.loads(data.decode("utf-8").strip())

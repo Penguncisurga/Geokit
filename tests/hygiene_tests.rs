@@ -449,3 +449,121 @@ fn test_daemon_status_json_offline() {
     assert_eq!(parsed["arcgis"]["port"], 19879);
     assert_eq!(parsed["arcgis"]["running"], false);
 }
+
+#[test]
+fn test_webmap_and_gp_summary_escape_xss_payloads() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let geojson_path = root.join("xss.geojson");
+    let sample = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "KELAS": "</script><img src=x onerror=alert(1)>",
+            "NOTE": "<b>evil</b>",
+            "AREA_HA": 42.5
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[110,-7],[111,-7],[111,-6],[110,-6],[110,-7]]]
+          }
+        }
+      ]
+    }"#;
+    fs::write(&geojson_path, sample).unwrap();
+
+    // 1. WebMap HTML escaping & script-tag breakout guard
+    let wm_out = root.join("xss_map.html");
+    let wm_res = geokit_bin()
+        .args([
+            "webmap",
+            geojson_path.to_str().unwrap(),
+            "--field",
+            "KELAS",
+            "--title",
+            "Test </script><script>alert(2)</script>",
+            "--out",
+            wm_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        wm_res.status.success(),
+        "webmap stderr: {}",
+        String::from_utf8_lossy(&wm_res.stderr)
+    );
+    let wm_html = fs::read_to_string(&wm_out).unwrap();
+    assert!(
+        !wm_html.contains("</script><script>alert(2)"),
+        "raw title script breakout must be escaped"
+    );
+    assert!(
+        !wm_html.contains("</script><img src=x"),
+        "raw JSON </script> breakout must be escaped"
+    );
+    assert!(wm_html.contains("<\\/script>"));
+    assert!(wm_html.contains("function escHtml("));
+
+    // 2. gp summary HTML escaping
+    let sum_out = root.join("xss_summary.html");
+    let sum_res = geokit_bin()
+        .args([
+            "gp",
+            "summary",
+            geojson_path.to_str().unwrap(),
+            "--group-by",
+            "KELAS",
+            "--out",
+            sum_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sum_res.status.success(),
+        "gp summary stderr: {}",
+        String::from_utf8_lossy(&sum_res.stderr)
+    );
+    let sum_html = fs::read_to_string(&sum_out).unwrap();
+    assert!(
+        !sum_html.contains("<img src=x onerror=alert(1)>"),
+        "raw HTML payload must be escaped in gp summary HTML"
+    );
+    assert!(sum_html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+}
+
+#[test]
+fn test_fetch_osm_safe_mode_refuses_overwrite_without_flag() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let existing = root.join("osm_road.geojson");
+    fs::write(&existing, r#"{"sentinel":"keep-me"}"#).unwrap();
+
+    let res = geokit_bin()
+        .args([
+            "fetch",
+            "osm",
+            "--bbox",
+            "110.1,-7.05,110.2,-6.95",
+            "--layers",
+            "road",
+            "--out",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !res.status.success(),
+        "Safe Mode must refuse to overwrite existing osm_road.geojson without --overwrite"
+    );
+    let stderr = String::from_utf8_lossy(&res.stderr);
+    assert!(
+        stderr.contains("Output already exists"),
+        "unexpected stderr: {stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&existing).unwrap(),
+        r#"{"sentinel":"keep-me"}"#
+    );
+}

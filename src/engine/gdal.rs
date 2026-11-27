@@ -188,6 +188,38 @@ pub fn gdal_info(gdal: &GdalEnvironment, input: &Path) -> Result<()> {
     Ok(())
 }
 
+fn normalize_path_key(p: &Path) -> String {
+    let resolved = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = resolved.to_string_lossy().to_string();
+    #[cfg(windows)]
+    {
+        s.trim_start_matches(r"\\?\").to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        s
+    }
+}
+
+fn check_safe_gdal_output(dst: &Path, inputs: &[&Path]) -> Result<()> {
+    let dst_key = normalize_path_key(dst);
+    for inp in inputs {
+        if normalize_path_key(inp) == dst_key {
+            bail!(
+                "Refusing to overwrite input dataset '{}'. Choose a different --out path.",
+                dst.display()
+            );
+        }
+    }
+    if !crate::engine::overwrite_enabled() && dst.exists() {
+        bail!(
+            "Output already exists: '{}'. Pass --overwrite to replace it.",
+            dst.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn gdal_project(gdal: &GdalEnvironment, input: &Path, epsg: u32, out: &Path) -> Result<()> {
     let Some(ogr2ogr) = &gdal.ogr2ogr else {
         bail!("ogr2ogr not found in GDAL environment.");
@@ -205,6 +237,7 @@ pub fn gdal_project(gdal: &GdalEnvironment, input: &Path, epsg: u32, out: &Path)
     }
 
     let srs = format!("EPSG:{epsg}");
+    let overwrite = crate::engine::overwrite_enabled();
     let mut failures = 0usize;
 
     for (idx, (src, is_raster)) in items.iter().enumerate() {
@@ -213,33 +246,38 @@ pub fn gdal_project(gdal: &GdalEnvironment, input: &Path, epsg: u32, out: &Path)
         } else {
             out.to_path_buf()
         };
-        let res = if *is_raster {
-            match &gdal.gdalwarp {
-                Some(warp) => run_cmd(
-                    gdal,
-                    warp,
-                    &[
-                        "-overwrite".into(),
-                        "-t_srs".into(),
-                        srs.clone(),
-                        src.display().to_string(),
-                        dst.display().to_string(),
-                    ],
-                ),
-                None => bail!("gdalwarp not found for raster reprojection."),
-            }
-        } else {
-            run_cmd(
-                gdal,
-                ogr2ogr,
-                &[
+        let res = check_safe_gdal_output(&dst, &[src.as_path()]).and_then(|()| {
+            if *is_raster {
+                match &gdal.gdalwarp {
+                    Some(warp) => {
+                        let mut args = Vec::new();
+                        if overwrite {
+                            args.push("-overwrite".into());
+                        }
+                        args.extend([
+                            "-t_srs".into(),
+                            srs.clone(),
+                            src.display().to_string(),
+                            dst.display().to_string(),
+                        ]);
+                        run_cmd(gdal, warp, &args)
+                    }
+                    None => bail!("gdalwarp not found for raster reprojection."),
+                }
+            } else {
+                let mut args = Vec::new();
+                if overwrite {
+                    args.push("-overwrite".into());
+                }
+                args.extend([
                     "-t_srs".into(),
                     srs.clone(),
                     dst.display().to_string(),
                     src.display().to_string(),
-                ],
-            )
-        };
+                ]);
+                run_cmd(gdal, ogr2ogr, &args)
+            }
+        });
         match res {
             Ok(()) => println!(
                 "[{}/{}] OK   {} -> {}",
@@ -282,6 +320,7 @@ pub fn gdal_clip(gdal: &GdalEnvironment, input: &Path, aoi: &Path, out: &Path) -
         fs::create_dir_all(parent)?;
     }
 
+    let overwrite = crate::engine::overwrite_enabled();
     let mut failures = 0usize;
     for (idx, (src, is_raster)) in items.iter().enumerate() {
         let dst = if is_batch {
@@ -289,34 +328,39 @@ pub fn gdal_clip(gdal: &GdalEnvironment, input: &Path, aoi: &Path, out: &Path) -
         } else {
             out.to_path_buf()
         };
-        let res = if *is_raster {
-            match &gdal.gdalwarp {
-                Some(warp) => run_cmd(
-                    gdal,
-                    warp,
-                    &[
-                        "-overwrite".into(),
-                        "-cutline".into(),
-                        aoi.display().to_string(),
-                        "-crop_to_cutline".into(),
-                        src.display().to_string(),
-                        dst.display().to_string(),
-                    ],
-                ),
-                None => bail!("gdalwarp not found for raster clipping."),
-            }
-        } else {
-            run_cmd(
-                gdal,
-                ogr2ogr,
-                &[
+        let res = check_safe_gdal_output(&dst, &[src.as_path(), aoi]).and_then(|()| {
+            if *is_raster {
+                match &gdal.gdalwarp {
+                    Some(warp) => {
+                        let mut args = Vec::new();
+                        if overwrite {
+                            args.push("-overwrite".into());
+                        }
+                        args.extend([
+                            "-cutline".into(),
+                            aoi.display().to_string(),
+                            "-crop_to_cutline".into(),
+                            src.display().to_string(),
+                            dst.display().to_string(),
+                        ]);
+                        run_cmd(gdal, warp, &args)
+                    }
+                    None => bail!("gdalwarp not found for raster clipping."),
+                }
+            } else {
+                let mut args = Vec::new();
+                if overwrite {
+                    args.push("-overwrite".into());
+                }
+                args.extend([
                     "-clipsrc".into(),
                     aoi.display().to_string(),
                     dst.display().to_string(),
                     src.display().to_string(),
-                ],
-            )
-        };
+                ]);
+                run_cmd(gdal, ogr2ogr, &args)
+            }
+        });
         match res {
             Ok(()) => println!(
                 "[{}/{}] OK   {} -> {}",
@@ -351,12 +395,17 @@ pub fn gdal_merge(gdal: &GdalEnvironment, input: &Path, out: &Path) -> Result<()
     if items.len() < 2 {
         bail!("Need at least 2 vector datasets to merge.");
     }
+    let in_refs: Vec<&Path> = items.iter().map(|(p, _)| p.as_path()).collect();
+    check_safe_gdal_output(out, &in_refs)?;
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
     }
+    let overwrite = crate::engine::overwrite_enabled();
     for (idx, (src, _)) in items.iter().enumerate() {
         let mut args = Vec::new();
-        if idx > 0 {
+        if idx == 0 && overwrite {
+            args.push("-overwrite".into());
+        } else if idx > 0 {
             args.push("-update".into());
             args.push("-append".into());
         }
@@ -387,12 +436,17 @@ pub fn gdal_pack_gpkg(gdal: &GdalEnvironment, input: &Path, out: &Path) -> Resul
     } else {
         out.with_extension("gpkg")
     };
+    let in_refs: Vec<&Path> = items.iter().map(|(p, _)| p.as_path()).collect();
+    check_safe_gdal_output(&out_gpkg, &in_refs)?;
     if let Some(parent) = out_gpkg.parent() {
         fs::create_dir_all(parent)?;
     }
+    let overwrite = crate::engine::overwrite_enabled();
     for (idx, (src, _)) in items.iter().enumerate() {
         let mut args = vec!["-f".into(), "GPKG".into()];
-        if idx > 0 {
+        if idx == 0 && overwrite {
+            args.push("-overwrite".into());
+        } else if idx > 0 {
             args.push("-update".into());
         }
         args.push(out_gpkg.display().to_string());
@@ -414,16 +468,13 @@ pub fn gdal_unpack(gdal: &GdalEnvironment, input: &Path, out_dir: &Path) -> Resu
         bail!("ogr2ogr not found in GDAL environment.");
     };
     fs::create_dir_all(out_dir)?;
-    run_cmd(
-        gdal,
-        ogr2ogr,
-        &[
-            "-f".into(),
-            "ESRI Shapefile".into(),
-            out_dir.display().to_string(),
-            input.display().to_string(),
-        ],
-    )?;
+    let mut args = vec!["-f".into(), "ESRI Shapefile".into()];
+    if crate::engine::overwrite_enabled() {
+        args.push("-overwrite".into());
+    }
+    args.push(out_dir.display().to_string());
+    args.push(input.display().to_string());
+    run_cmd(gdal, ogr2ogr, &args)?;
     println!("OK Unpacked {} -> {}", input.display(), out_dir.display());
     Ok(())
 }
@@ -440,10 +491,15 @@ pub fn gdal_mosaic(gdal: &GdalEnvironment, input_dir: &Path, out: &Path) -> Resu
     if rasters.is_empty() {
         bail!("No raster files found in {}", input_dir.display());
     }
+    let in_refs: Vec<&Path> = rasters.iter().map(|p| p.as_path()).collect();
+    check_safe_gdal_output(out, &in_refs)?;
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut args = vec!["-overwrite".to_string()];
+    let mut args = Vec::new();
+    if crate::engine::overwrite_enabled() {
+        args.push("-overwrite".to_string());
+    }
     for r in &rasters {
         args.push(r.display().to_string());
     }
@@ -473,6 +529,7 @@ pub fn gdal_terrain(
 
     if slope {
         let dst = out_dir.join(format!("{stem}_slope.tif"));
+        check_safe_gdal_output(&dst, &[dem])?;
         run_cmd(
             gdal,
             gdaldem,
@@ -486,6 +543,7 @@ pub fn gdal_terrain(
     }
     if aspect {
         let dst = out_dir.join(format!("{stem}_aspect.tif"));
+        check_safe_gdal_output(&dst, &[dem])?;
         run_cmd(
             gdal,
             gdaldem,
@@ -499,6 +557,7 @@ pub fn gdal_terrain(
     }
     if hillshade {
         let dst = out_dir.join(format!("{stem}_hillshade.tif"));
+        check_safe_gdal_output(&dst, &[dem])?;
         run_cmd(
             gdal,
             gdaldem,
@@ -524,6 +583,7 @@ pub fn gdal_xy2shp(
     let Some(ogr2ogr) = &gdal.ogr2ogr else {
         bail!("ogr2ogr not found in GDAL environment.");
     };
+    check_safe_gdal_output(out, &[input_csv])?;
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
@@ -543,24 +603,23 @@ pub fn gdal_xy2shp(
         _ => "ESRI Shapefile",
     };
 
-    run_cmd(
-        gdal,
-        ogr2ogr,
-        &[
-            "-f".into(),
-            driver.into(),
-            "-a_srs".into(),
-            format!("EPSG:{epsg}"),
-            "-oo".into(),
-            format!("X_POSSIBLE_NAMES={x_field}"),
-            "-oo".into(),
-            format!("Y_POSSIBLE_NAMES={y_field}"),
-            "-oo".into(),
-            "AUTODETECT_TYPE=YES".into(),
-            out.display().to_string(),
-            input_csv.display().to_string(),
-        ],
-    )?;
+    let mut args = vec!["-f".into(), driver.into()];
+    if crate::engine::overwrite_enabled() {
+        args.push("-overwrite".into());
+    }
+    args.extend([
+        "-a_srs".into(),
+        format!("EPSG:{epsg}"),
+        "-oo".into(),
+        format!("X_POSSIBLE_NAMES={x_field}"),
+        "-oo".into(),
+        format!("Y_POSSIBLE_NAMES={y_field}"),
+        "-oo".into(),
+        "AUTODETECT_TYPE=YES".into(),
+        out.display().to_string(),
+        input_csv.display().to_string(),
+    ]);
+    run_cmd(gdal, ogr2ogr, &args)?;
     println!(
         "OK Created point dataset from CSV ({x_field}, {y_field}, EPSG:{epsg}) -> {}",
         out.display()
@@ -595,6 +654,7 @@ pub fn gdal_convert(gdal: &GdalEnvironment, input: &Path, to_fmt: &str, out: &Pa
         }
     }
 
+    let overwrite = crate::engine::overwrite_enabled();
     let mut failures = 0usize;
     for (idx, (src, _)) in items.iter().enumerate() {
         let dst = if is_batch {
@@ -603,16 +663,15 @@ pub fn gdal_convert(gdal: &GdalEnvironment, input: &Path, to_fmt: &str, out: &Pa
         } else {
             out.to_path_buf()
         };
-        let res = run_cmd(
-            gdal,
-            ogr2ogr,
-            &[
-                "-f".into(),
-                driver.into(),
-                dst.display().to_string(),
-                src.display().to_string(),
-            ],
-        );
+        let res = check_safe_gdal_output(&dst, &[src.as_path()]).and_then(|()| {
+            let mut args = vec!["-f".into(), driver.into()];
+            if overwrite {
+                args.push("-overwrite".into());
+            }
+            args.push(dst.display().to_string());
+            args.push(src.display().to_string());
+            run_cmd(gdal, ogr2ogr, &args)
+        });
         match res {
             Ok(()) => println!(
                 "[{}/{}] OK   {} -> {}",

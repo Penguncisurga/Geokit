@@ -6,6 +6,23 @@ use std::path::{Path, PathBuf};
 
 use crate::gis::shp::read_geojson_wgs84;
 
+fn json_for_script(val: &Value) -> Result<String> {
+    let raw = serde_json::to_string(val)?;
+    Ok(raw
+        .replace("</", "<\\/")
+        .replace("<!--", "<\\!--")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 pub fn run(
     inputs: &[PathBuf],
     out: &Path,
@@ -61,15 +78,12 @@ pub fn run(
             .unwrap_or("GeoKit Interactive Map")
             .replace('_', " ")
     });
-    let layers_json = serde_json::to_string(&layers_payload)?;
-    let field_json = serde_json::to_string(&field.unwrap_or(""))?;
-    let preset_json = serde_json::to_string(&preset.to_ascii_lowercase())?;
-    let basemap_json = serde_json::to_string(&basemap.to_ascii_lowercase())?;
+    let layers_json = json_for_script(&Value::Array(layers_payload.clone()))?;
+    let field_json = json_for_script(&json!(field.unwrap_or("")))?;
+    let preset_json = json_for_script(&json!(preset.to_ascii_lowercase()))?;
+    let basemap_json = json_for_script(&json!(basemap.to_ascii_lowercase()))?;
     let layer_count = layers_payload.len();
-    let title_esc = map_title
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
+    let title_esc = escape_html(&map_title);
 
     let html = format!(
         r##"<!doctype html>
@@ -167,6 +181,15 @@ document.getElementById("bm-sel").addEventListener("change", (e) => {{
   activeBm.addTo(map);
 }});
 
+function escHtml(v) {{
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}}
+
 function pickColor(idx, total) {{
   const stops = PALETTES[PRESET] || PALETTES["hazard-pastel"];
   if (PRESET === "category") return stops[idx % stops.length];
@@ -240,8 +263,8 @@ LAYERS.forEach((meta, lidx) => {{
     }},
     onEachFeature: (feat, lyr) => {{
       const p = feat.properties || {{}};
-      const rows = Object.entries(p).map(([k,v]) => `<tr><td>${{k}}</td><td>${{v ?? ""}}</td></tr>`).join("");
-      if (rows) lyr.bindPopup(`<div style="font-weight:700;margin-bottom:4px;color:#0f172a">${{meta.name}}</div><table class="popup-tbl">${{rows}}</table>`);
+      const rows = Object.entries(p).map(([k,v]) => `<tr><td>${{escHtml(k)}}</td><td>${{escHtml(v)}}</td></tr>`).join("");
+      if (rows) lyr.bindPopup(`<div style="font-weight:700;margin-bottom:4px;color:#0f172a">${{escHtml(meta.name)}}</div><table class="popup-tbl">${{rows}}</table>`);
     }}
   }}).addTo(map);
 
@@ -255,7 +278,7 @@ LAYERS.forEach((meta, lidx) => {{
 
   const row = document.createElement("label");
   row.className = "lyr-item";
-  row.innerHTML = `<input type="checkbox" checked /> <span class="lyr-dot" style="background:${{swatchColor}}"></span> <span>${{meta.name}} (${{meta.count}})</span>`;
+  row.innerHTML = `<input type="checkbox" checked /> <span class="lyr-dot" style="background:${{swatchColor}}"></span> <span>${{escHtml(meta.name)}} (${{meta.count}})</span>`;
   row.querySelector("input").addEventListener("change", (ev) => {{
     if (ev.target.checked) leafletLyr.addTo(map);
     else map.removeLayer(leafletLyr);
@@ -267,13 +290,13 @@ LAYERS.forEach((meta, lidx) => {{
     const leg = document.getElementById("legend");
     const totalArea = Array.from(classStats.values()).reduce((s, v) => s + v.area, 0);
     const totalCnt = fc.features.length;
-    let html = `<h3>Keterangan — ${{meta.name}}</h3>`;
+    let html = `<h3>Keterangan — ${{escHtml(meta.name)}}</h3>`;
     for (const cls of orderedClasses) {{
       const st = classStats.get(cls);
       const col = colorMap.get(cls);
       const pct = totalArea > 0 ? (st.area / totalArea) * 100 : (st.count / totalCnt) * 100;
       const metric = totalArea > 0 ? `${{st.area.toLocaleString('id-ID', {{maximumFractionDigits:1}})}} ha (${{pct.toFixed(1)}}%)` : `${{st.count}} (${{pct.toFixed(1)}}%)`;
-      html += `<div class="leg-row"><span class="leg-swatch" style="background:${{col}}"></span><div class="leg-bar-wrap"><div class="leg-label"><span>${{cls}}</span><span>${{metric}}</span></div><div class="leg-bar"><div class="leg-bar-fill" style="width:${{Math.max(4, pct)}}%;background:${{col}}"></div></div></div></div>`;
+      html += `<div class="leg-row"><span class="leg-swatch" style="background:${{col}}"></span><div class="leg-bar-wrap"><div class="leg-label"><span>${{escHtml(cls)}}</span><span>${{metric}}</span></div><div class="leg-bar"><div class="leg-bar-fill" style="width:${{Math.max(4, pct)}}%;background:${{col}}"></div></div></div></div>`;
     }}
     leg.innerHTML = html;
     leg.style.display = "block";

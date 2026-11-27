@@ -912,6 +912,15 @@ fn run_native_summary(
             ));
             s
         } else if oext == "html" {
+            let esc = |s: &str| {
+                s.replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+                    .replace('"', "&quot;")
+                    .replace('\'', "&#39;")
+            };
+            let grp_esc = esc(&grp_key);
+            let area_esc = esc(area_col_name);
             let mut trs = String::new();
             for (k, (cnt, area)) in &groups {
                 let pct = if has_area {
@@ -921,11 +930,14 @@ fn run_native_summary(
                 };
                 trs.push_str(&format!(
                     "<tr><td>{}</td><td style='text-align:right'>{}</td><td style='text-align:right'>{:.2}</td><td style='text-align:right'>{:.2}%</td></tr>\n",
-                    k, cnt, area, pct
+                    esc(k),
+                    cnt,
+                    area,
+                    pct
                 ));
             }
             format!(
-                "<!doctype html><html><head><meta charset='utf-8'><title>Rekap {grp_key}</title><style>body{{font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:2rem auto;color:#1e293b}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #cbd5e1;padding:8px 12px}}th{{background:#0f172a;color:#fff}}tfoot td{{font-weight:700;background:#f1f5f9}}</style></head><body><h2>Rekapitulasi Kelas ({grp_key})</h2><table><thead><tr><th>{grp_key}</th><th>Fitur</th><th>{area_col_name}</th><th>Persentase</th></tr></thead><tbody>{trs}</tbody><tfoot><tr><td>TOTAL</td><td style='text-align:right'>{total_count}</td><td style='text-align:right'>{total_area:.2}</td><td style='text-align:right'>100.00%</td></tr></tfoot></table></body></html>"
+                "<!doctype html><html><head><meta charset='utf-8'><title>Rekap {grp_esc}</title><style>body{{font-family:Segoe UI,Arial,sans-serif;max-width:760px;margin:2rem auto;color:#1e293b}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #cbd5e1;padding:8px 12px}}th{{background:#0f172a;color:#fff}}tfoot td{{font-weight:700;background:#f1f5f9}}</style></head><body><h2>Rekapitulasi Kelas ({grp_esc})</h2><table><thead><tr><th>{grp_esc}</th><th>Fitur</th><th>{area_esc}</th><th>Persentase</th></tr></thead><tbody>{trs}</tbody><tfoot><tr><td>TOTAL</td><td style='text-align:right'>{total_count}</td><td style='text-align:right'>{total_area:.2}</td><td style='text-align:right'>100.00%</td></tr></tfoot></table></body></html>"
             )
         } else {
             let mut s = format!("| {grp_key} | Fitur | {area_col_name} | Persentase (%) |\n| :--- | ---: | ---: | ---: |\n");
