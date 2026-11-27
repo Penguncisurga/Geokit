@@ -154,8 +154,8 @@ pub enum LiveCommand {
         /// Output image or PDF path
         #[arg(short, long)]
         out: PathBuf,
-        /// Resolution in DPI (default: 200)
-        #[arg(long, default_value_t = 200)]
+        /// Resolution in DPI (default: 300 — print-ready cartographic standard)
+        #[arg(long, default_value_t = 300)]
         dpi: u32,
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,

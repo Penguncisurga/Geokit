@@ -608,11 +608,17 @@ def _handle_command_on_ui_thread(req):
             petunjuk_populated = _populate_inset_df("Petunjuk Letak Peta", inset_petunjuk, 1.5, 1.2) if (has_petunjuk and petunjuk_ok) else False
             inset_populated = _populate_inset_df("Diagram Lokasi", inset_layer, 3.0, 2.0) if (has_inset and inset_ok) else False
 
+            paper_labels = {
+                "a4": "A4 Landscape (29.7 x 21.0 cm)",
+                "a3": "A3 Landscape (42.0 x 29.7 cm)",
+                "a1": "A1 Landscape (84.1 x 59.4 cm)",
+                "a0": "A0 Landscape (118.9 x 84.1 cm)",
+            }
             _force_refresh()
             return {
                 "ok": True,
                 "template": "perkabig",
-                "paper": "A3 Landscape (42.0 x 29.7 cm)" if paper == "a3" else "A4 Landscape (29.7 x 21.0 cm)",
+                "paper": paper_labels.get((paper or "a4").lower(), "A4 Landscape (29.7 x 21.0 cm)"),
                 "active_view": mxd.activeView,
                 "scale": int(round(df.scale)),
                 "crs": crs_str,
@@ -801,7 +807,7 @@ def _handle_command_on_ui_thread(req):
         if parent and not os.path.exists(parent):
             os.makedirs(parent)
         fmt = (req.get("format") or os.path.splitext(out_path)[1].lstrip(".") or "png").lower()
-        dpi = int(req.get("dpi") or 200)
+        dpi = int(req.get("dpi") or 300)
         if fmt == "pdf":
             arcpy.mapping.ExportToPDF(mxd, out_path, resolution=dpi)
         elif fmt in ("jpg", "jpeg"):

@@ -486,7 +486,7 @@ fn tool_definitions() -> Value {
                     "lyr": { "type": "string", "description": "Path to .lyr symbology file (for symbology)" },
                     "where": { "type": "string", "description": "SQL WHERE clause (for select or definition-query)" },
                     "out": { "type": "string", "description": "Output file path (for export or save)" },
-                    "dpi": { "type": "integer", "description": "Export DPI (for export)" },
+                    "dpi": { "type": "integer", "description": "Export DPI (default: 300 print-ready, for export)" },
                     "pattern": { "type": "string", "description": "Keyword/wildcard filter e.g. 'clip' or '*_sa' (for tools)" },
                     "tool": { "type": "string", "description": "Exact ArcPy tool name e.g. Buffer_analysis or Slope_sa (for tool-usage or run-gp)" },
                     "args": { "type": "array", "items": { "type": "string" }, "description": "Positional tool arguments in order (for run-gp)" }

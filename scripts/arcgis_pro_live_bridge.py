@@ -444,7 +444,7 @@ def _handle_request(req):
 
     if action == "export_view":
         out_path = req.get("out", "")
-        dpi = int(req.get("dpi") or 200)
+        dpi = int(req.get("dpi") or 300)
         parent = os.path.dirname(out_path)
         if parent:
             os.makedirs(parent, exist_ok=True)

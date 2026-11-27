@@ -64,6 +64,7 @@ IID_ILegend = _guid("{3141F307-38E2-11D1-8809-080009EC732A}")
 IID_ILegend3 = _guid("{15ABE7F7-49E8-4012-BE72-D14E5A755ACE}")
 IID_ILegendFormat = _guid("{52AA5BC1-CB21-11D0-87F9-080009EC732A}")
 IID_ILegendClassFormat = _guid("{52AA5BC2-CB21-11D0-87F9-080009EC732A}")
+IID_ITransform2D = _guid("{3BE78AD0-886E-11D1-BC78-0000F875BCCE}")
 
 CLSID_RgbColor = _guid("{7EE9C496-D123-11D0-8383-080009B996CC}")
 IID_IColor = _guid("{20CD40B0-8F3D-11D0-8590-0800091A2A72}")
@@ -1256,6 +1257,47 @@ PAPER_SPECS = {
 }
 
 
+def _query_element_bounds(pl, el):
+    """Queries the exact rendered page-unit bounding box (xmin, ymin, xmax, ymax) of an IElement."""
+    av = _qi(pl, IID_IActiveView)
+    if not av:
+        return None
+    sd = c_void_p()
+    try:
+        if _vcall(av, 7, POINTER(c_void_p))(av, byref(sd)) != 0 or not sd.value:
+            return None
+        benv = _co(CLSID_Envelope, IID_IEnvelope)
+        try:
+            if _vcall(el, 5, c_void_p, c_void_p)(el, sd, benv) != 0:
+                return None
+            x1, y1, x2, y2 = c_double(0.0), c_double(0.0), c_double(0.0), c_double(0.0)
+            _vcall(benv, 58, POINTER(c_double), POINTER(c_double), POINTER(c_double), POINTER(c_double))(
+                benv, byref(x1), byref(y1), byref(x2), byref(y2)
+            )
+            return (x1.value, y1.value, x2.value, y2.value)
+        finally:
+            _release(benv)
+    finally:
+        if sd.value:
+            _release(sd)
+        _release(av)
+
+
+def _move_element(gc, el, dx, dy):
+    """Translates an IElement by (dx, dy) page units via verified ITransform2D.Move."""
+    if abs(dx) < 1e-4 and abs(dy) < 1e-4:
+        return False
+    tr = _qi(el, IID_ITransform2D)
+    if not tr:
+        return False
+    try:
+        _vcall(tr, 3, c_double, c_double)(tr, float(dx), float(dy))
+        _vcall(gc, 14, c_void_p)(gc, el)  # UpdateElement
+        return True
+    finally:
+        _release(tr)
+
+
 def _select_scalebar_division(scale_val, slot_cm):
     """Selects a clean round metric division (m or km) whose 2-division bar fits ~55% of slot_cm."""
     if not scale_val or scale_val <= 0:
@@ -1598,6 +1640,16 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
+            # Fine-tune exact horizontal centering of the rendered ScaleBar under SKALA 1 : N
+            try:
+                sb_b = _query_element_bounds(pl, el)
+                if sb_b and (sb_b[2] > sb_b[0]):
+                    actual_cx = (sb_b[0] + sb_b[2]) / 2.0
+                    dx = sb_cx - actual_cx
+                    if sb_b[0] + dx >= sb_x - 0.05 * s and sb_b[2] + dx <= sb_right + 0.05 * s:
+                        _move_element(gc, el, dx, 0.0)
+            except Exception:
+                pass
             _release(geom)
             _release(env)
             _release(el)
@@ -1698,6 +1750,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
         if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_leg, None, byref(leg_sf)) == 0 and leg_sf.value:
             ms = c_void_p()
             _vcall(leg_sf, 11, POINTER(c_void_p))(leg_sf, byref(ms))
+            leg3 = None
             if ms.value:
                 leg = _qi(ms, IID_ILegend)
                 if leg:
@@ -1767,31 +1820,64 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                             _release(item)
                     _release(leg)
 
-                # Lock legend strictly inside Section 6 via ILegend3 (FixedFrame + AutoColumns + AutoFit!)
+                # Start with FixedFrame=False so QueryBounds measures the TRUE content height first
                 leg3 = _qi(ms, IID_ILegend3)
                 if leg3:
                     try:
-                        _vcall(leg3, 36, c_short)(leg3, -1)          # put_FixedFrame = True (top-anchored, NEVER overflows!)
-                        _vcall(leg3, 38, c_short)(leg3, -1)          # put_AutoColumns = True (auto multi-column for 10-23 classes)
-                        _vcall(leg3, 40, c_short)(leg3, -1)          # put_AutoFit = True (shrinks font cleanly if needed)
-                        _vcall(leg3, 42, c_double)(leg3, 5.0 * s)    # put_MinFontSize = 5pt * s
+                        _vcall(leg3, 36, c_short)(leg3, 0)           # put_FixedFrame = False during measurement
                     except Exception:
                         pass
-                    _release(leg3)
                 _release(ms)
 
             el = _qi(leg_sf, IID_IElement)
-            env = _make_envelope(ix, y_foot_top + 0.14 * s, px + pw_p - pad, cur_y - 0.14 * s)
+            leg_top_limit = cur_y - 0.18 * s
+            leg_bot_limit = y_foot_top + 0.16 * s
+            avail_h = max(1.0 * s, leg_top_limit - leg_bot_limit)
+            env = _make_envelope(ix, leg_bot_limit, px + pw_p - pad, leg_top_limit)
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
             _release(geom)
             _release(env)
+            if hide_legend_names:
+                hidden = hide_legend_layers(mxdoc, hide_legend_names)
+            # Measure TRUE rendered legend height AFTER hiding layers, then either:
+            #   Case A (fits comfortably): top-anchor strictly at leg_top_limit so KETERANGAN sits right under Section 5!
+            #   Case B (overflows Section 6, e.g. 15-23 KLHK classes): lock FixedFrame + AutoColumns + AutoFit inside Section 6!
+            try:
+                _vcall(gc, 14, c_void_p)(gc, el)  # UpdateElement
+                lb = _query_element_bounds(pl, el)
+                if lb and (lb[3] > lb[1]):
+                    actual_h = lb[3] - lb[1]
+                    if actual_h <= avail_h:
+                        dy = leg_top_limit - lb[3]
+                        _move_element(gc, el, 0.0, dy)
+                    else:
+                        if leg3:
+                            _vcall(leg3, 36, c_short)(leg3, -1)        # FixedFrame = True
+                            _vcall(leg3, 38, c_short)(leg3, -1)        # AutoColumns = True
+                            _vcall(leg3, 40, c_short)(leg3, -1)        # AutoFit = True
+                            _vcall(leg3, 42, c_double)(leg3, 5.0 * s)  # MinFontSize
+                        env2 = _make_envelope(ix, leg_bot_limit, px + pw_p - pad, leg_top_limit)
+                        geom2 = _qi(env2, IID_IGeometry)
+                        _vcall(el, 4, c_void_p)(el, geom2)
+                        _vcall(gc, 14, c_void_p)(gc, el)
+                        _release(geom2)
+                        _release(env2)
+            except Exception:
+                if leg3:
+                    try:
+                        _vcall(leg3, 36, c_short)(leg3, -1)
+                        _vcall(leg3, 38, c_short)(leg3, -1)
+                        _vcall(leg3, 40, c_short)(leg3, -1)
+                    except Exception:
+                        pass
+            if leg3:
+                _release(leg3)
             _release(el)
             _release(leg_sf)
         _release(uid_leg)
-
-    if hide_legend_names:
+    elif hide_legend_names:
         hidden = hide_legend_layers(mxdoc, hide_legend_names)
 
     # Zoom layout to full page so user sees the entire PerKaBIG sheet cleanly
