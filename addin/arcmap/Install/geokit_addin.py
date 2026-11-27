@@ -351,6 +351,9 @@ def _handle_command_on_ui_thread(req):
                     step = (vmax - vmin) / float(n_cls) if vmax > vmin else 1.0
                     highs = [vmin + step * (i + 1) for i in range(n_cls)]
                     highs[-1] = vmax
+                elif break_method in ("jenks", "natural", "natural-breaks"):
+                    highs = _ao.compute_jenks_breaks(nums, n_cls)
+                    highs[-1] = vmax
                 else:
                     highs = []
                     for i in range(1, n_cls + 1):

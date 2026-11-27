@@ -78,7 +78,42 @@ PALETTES = {
         [227, 119, 194, 100],
         [23, 190, 207, 100],
     ],
+    "klhk": [
+        [0, 68, 27, 100], [27, 120, 55, 100], [0, 104, 55, 100], [49, 163, 84, 100],
+        [0, 90, 50, 100], [65, 171, 93, 100], [116, 196, 118, 100], [194, 230, 153, 100],
+        [161, 217, 155, 100], [230, 245, 152, 100], [184, 225, 134, 100], [254, 224, 139, 100],
+        [253, 174, 97, 100], [204, 255, 102, 100], [107, 174, 214, 100], [227, 26, 28, 100],
+        [245, 222, 179, 100], [140, 81, 10, 100], [99, 99, 99, 100], [251, 154, 153, 100],
+        [127, 205, 187, 100], [33, 113, 181, 100], [247, 247, 247, 100],
+    ],
 }
+
+KLHK_CLASS_COLORS = [
+    (("hutan lahan kering primer", "hutan primer"), [0, 68, 27, 100]),
+    (("hutan lahan kering sekunder", "hutan sekunder"), [27, 120, 55, 100]),
+    (("mangrove primer",), [0, 104, 55, 100]),
+    (("mangrove sekunder", "mangrove", "bakau"), [49, 163, 84, 100]),
+    (("hutan rawa primer",), [0, 90, 50, 100]),
+    (("hutan rawa sekunder", "hutan rawa"), [65, 171, 93, 100]),
+    (("hutan tanaman", "hutan industri", "hti"), [116, 196, 118, 100]),
+    (("hutan", "forest"), [27, 120, 55, 100]),
+    (("belukar rawa", "semak rawa"), [161, 217, 155, 100]),
+    (("semak", "belukar", "shrub"), [194, 230, 153, 100]),
+    (("savana", "sabana", "padang rumput", "rumput"), [230, 245, 152, 100]),
+    (("perkebunan", "kebun", "plantation"), [184, 225, 134, 100]),
+    (("lahan kering campur", "pertanian campur"), [253, 174, 97, 100]),
+    (("pertanian lahan kering", "ladang", "tegalan"), [254, 224, 139, 100]),
+    (("sawah", "padi", "rice"), [204, 255, 102, 100]),
+    (("tambak", "empang", "kolam"), [107, 174, 214, 100]),
+    (("permukiman", "pemukiman", "terbangun", "urban", "built"), [227, 26, 28, 100]),
+    (("terbuka", "kosong", "gundul", "bare"), [245, 222, 179, 100]),
+    (("tambang", "pertambangan", "mining"), [140, 81, 10, 100]),
+    (("bandara", "pelabuhan"), [99, 99, 99, 100]),
+    (("transmigrasi",), [251, 154, 153, 100]),
+    (("rawa", "swamp", "wetland"), [127, 205, 187, 100]),
+    (("tubuh air", "badan air", "perairan", "danau", "waduk", "sungai", "water"), [33, 113, 181, 100]),
+    (("awan", "cloud"), [247, 247, 247, 100]),
+]
 
 HAZARD_RANK = {
     "sangat rendah": 1,
@@ -104,11 +139,25 @@ def _parse_hex(h):
     return [int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 100]
 
 
-def _sample_palette(preset, n, custom_colors=None):
+def _match_klhk_rgba(label, idx):
+    low = str(label or "").strip().lower()
+    for keys, rgba in KLHK_CLASS_COLORS:
+        if any(k in low for k in keys):
+            return list(rgba)
+    base = PALETTES["klhk"]
+    return list(base[idx % len(base)])
+
+
+def _sample_palette(preset, n, custom_colors=None, labels=None):
     if custom_colors:
         stops = [_parse_hex(c) for c in custom_colors.split(",") if c.strip()]
     else:
         key = (preset or "hazard-pastel").lower()
+        if key in ("klhk", "lulc-klhk", "tutupan-lahan"):
+            if labels:
+                return [_match_klhk_rgba(lbl, i) for i, lbl in enumerate(labels)]
+            base = PALETTES["klhk"]
+            return [base[i % len(base)] for i in range(max(1, n))]
         if key == "category":
             base = PALETTES["category"]
             return [base[i % len(base)] for i in range(max(1, n))]
@@ -319,6 +368,13 @@ def _handle_request(req):
             if mode == "graduated":
                 sym.updateRenderer("GraduatedColorsRenderer")
                 sym.renderer.classificationField = field
+                bm = (req.get("break_method") or "quantile").lower()
+                if bm in ("jenks", "natural", "natural-breaks"):
+                    sym.renderer.classificationMethod = "NaturalBreaks"
+                elif bm == "equal":
+                    sym.renderer.classificationMethod = "EqualInterval"
+                else:
+                    sym.renderer.classificationMethod = "Quantile"
                 sym.renderer.breakCount = int(req.get("classes_count") or 5)
                 cols = _sample_palette(preset, len(sym.renderer.classBreaks), custom_colors)
                 for i, brk in enumerate(sym.renderer.classBreaks):
@@ -331,7 +387,7 @@ def _handle_request(req):
                 for grp in sym.renderer.groups:
                     items.extend(grp.items)
                 items.sort(key=lambda it: (HAZARD_RANK.get(str(it.label).lower(), 999), str(it.label)))
-                cols = _sample_palette(preset, len(items), custom_colors)
+                cols = _sample_palette(preset, len(items), custom_colors, labels=[it.label for it in items])
                 for i, it in enumerate(items):
                     it.symbol.color = {"RGB": cols[i]}
                     it.symbol.outlineWidth = float(req.get("outline_width") or 0.0)

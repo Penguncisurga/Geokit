@@ -185,7 +185,7 @@ enum Commands {
         /// Attribute field to colorize & summarize in legend (e.g. KELAS, TUTUPAN)
         #[arg(long)]
         field: Option<String>,
-        /// Color palette preset: hazard-pastel, hazard, viridis, blue, or category
+        /// Color palette preset: hazard-pastel, hazard, viridis, blue, category, or klhk (23-class Indonesian Land Cover)
         #[arg(long, default_value = "hazard-pastel")]
         preset: String,
         /// Map title displayed in the header card

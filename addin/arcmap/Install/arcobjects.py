@@ -242,7 +242,130 @@ PALETTES = {
         (152, 223, 138), (255, 152, 150), (197, 176, 213), (196, 156, 148),
         (247, 182, 210), (199, 199, 199), (219, 219, 141), (158, 218, 229),
     ],
+    # Official 23-class Indonesian Land Cover palette (KLHK / SNI 7645)
+    "klhk": [
+        (0, 68, 27),      # 1. Hutan Lahan Kering Primer
+        (27, 120, 55),    # 2. Hutan Lahan Kering Sekunder
+        (0, 104, 55),     # 3. Hutan Mangrove Primer
+        (49, 163, 84),    # 4. Hutan Mangrove Sekunder
+        (0, 90, 50),      # 5. Hutan Rawa Primer
+        (65, 171, 93),    # 6. Hutan Rawa Sekunder
+        (116, 196, 118),  # 7. Hutan Tanaman
+        (194, 230, 153),  # 8. Semak Belukar
+        (161, 217, 155),  # 9. Belukar Rawa
+        (230, 245, 152),  # 10. Savana / Padang Rumput
+        (184, 225, 134),  # 11. Perkebunan
+        (254, 224, 139),  # 12. Pertanian Lahan Kering
+        (253, 174, 97),   # 13. Pertanian Lahan Kering Campur
+        (204, 255, 102),  # 14. Sawah
+        (107, 174, 214),  # 15. Tambak
+        (227, 26, 28),    # 16. Permukiman / Pemukiman
+        (245, 222, 179),  # 17. Tanah Terbuka / Lahan Terbuka
+        (140, 81, 10),    # 18. Pertambangan
+        (99, 99, 99),     # 19. Bandara / Pelabuhan
+        (251, 154, 153),  # 20. Transmigrasi
+        (127, 205, 187),  # 21. Rawa
+        (33, 113, 181),   # 22. Tubuh Air / Badan Air
+        (247, 247, 247),  # 23. Awan
+    ],
 }
+
+KLHK_CLASS_COLORS = [
+    (("hutan lahan kering primer", "hutan primer"), (0, 68, 27)),
+    (("hutan lahan kering sekunder", "hutan sekunder"), (27, 120, 55)),
+    (("mangrove primer",), (0, 104, 55)),
+    (("mangrove sekunder", "mangrove", "bakau"), (49, 163, 84)),
+    (("hutan rawa primer",), (0, 90, 50)),
+    (("hutan rawa sekunder", "hutan rawa"), (65, 171, 93)),
+    (("hutan tanaman", "hutan industri", "hti"), (116, 196, 118)),
+    (("hutan", "forest"), (27, 120, 55)),
+    (("belukar rawa", "semak rawa"), (161, 217, 155)),
+    (("semak", "belukar", "shrub"), (194, 230, 153)),
+    (("savana", "sabana", "padang rumput", "rumput", "grass"), (230, 245, 152)),
+    (("perkebunan", "kebun", "plantation"), (184, 225, 134)),
+    (("lahan kering campur", "pertanian campur", "tegalan campur"), (253, 174, 97)),
+    (("pertanian lahan kering", "ladang", "tegalan"), (254, 224, 139)),
+    (("sawah", "padi", "rice"), (204, 255, 102)),
+    (("tambak", "empang", "kolam", "pond"), (107, 174, 214)),
+    (("permukiman", "pemukiman", "terbangun", "urban", "built", "perkotaan"), (227, 26, 28)),
+    (("terbuka", "kosong", "gundul", "bare"), (245, 222, 179)),
+    (("tambang", "pertambangan", "mining"), (140, 81, 10)),
+    (("bandara", "pelabuhan", "airport", "port"), (99, 99, 99)),
+    (("transmigrasi",), (251, 154, 153)),
+    (("rawa", "swamp", "wetland"), (127, 205, 187)),
+    (("tubuh air", "badan air", "perairan", "danau", "waduk", "sungai", "water"), (33, 113, 181)),
+    (("awan", "cloud"), (247, 247, 247)),
+]
+
+
+def match_klhk_color(label, fallback_idx=0):
+    low = (unicode(label) if not isinstance(label, basestring) else label).strip().lower()
+    for keys, rgb in KLHK_CLASS_COLORS:
+        for k in keys:
+            if k in low:
+                return rgb
+    base = PALETTES["klhk"]
+    return base[fallback_idx % len(base)]
+
+
+def compute_jenks_breaks(sorted_vals, n_classes):
+    """Pure-Python Fisher-Jenks Natural Breaks (returns n_classes upper break thresholds)."""
+    vals = [float(v) for v in sorted_vals]
+    if not vals:
+        return []
+    if len(vals) <= n_classes:
+        return list(vals)
+    # Stratified downsample to <= 400 values for fast O(k * n^2) DP on massive feature classes
+    if len(vals) > 400:
+        step = float(len(vals) - 1) / 399.0
+        vals = [vals[int(round(i * step))] for i in range(400)]
+
+    n = len(vals)
+    k = max(2, min(int(n_classes), n))
+    mat1 = [[0] * (k + 1) for _ in range(n + 1)]
+    mat2 = [[0.0] * (k + 1) for _ in range(n + 1)]
+
+    for i in range(1, k + 1):
+        mat1[1][i] = 1
+        mat2[1][i] = 0.0
+        for j in range(2, n + 1):
+            mat2[j][i] = float("inf")
+
+    for l in range(2, n + 1):
+        s1 = 0.0
+        s2 = 0.0
+        w = 0.0
+        for m in range(1, l + 1):
+            i3 = l - m + 1
+            val = vals[i3 - 1]
+            s2 += val * val
+            s1 += val
+            w += 1.0
+            v = s2 - (s1 * s1) / w
+            if v < 0.0:
+                v = 0.0
+            i4 = i3 - 1
+            if i4 != 0:
+                for j in range(2, k + 1):
+                    cand = v + mat2[i4][j - 1]
+                    if mat2[l][j] >= cand:
+                        mat1[l][j] = i3
+                        mat2[l][j] = cand
+        mat1[l][1] = 1
+        mat2[l][1] = v
+
+    breaks = [0.0] * k
+    breaks[k - 1] = float(sorted_vals[-1])
+    idx = n
+    for j in range(k, 1, -1):
+        brk_idx = int(mat1[idx][j]) - 2
+        if brk_idx < 0:
+            brk_idx = 0
+        breaks[j - 2] = vals[brk_idx]
+        idx = int(mat1[idx][j]) - 1
+        if idx < 1:
+            idx = 1
+    return breaks
 
 LINE_STYLES = {
     "solid": 0,
@@ -310,11 +433,16 @@ def parse_hex_color(hex_str):
     return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
 
 
-def sample_palette(preset, count, custom_colors=None):
+def sample_palette(preset, count, custom_colors=None, class_labels=None):
     if custom_colors:
         stops = [parse_hex_color(c) for c in custom_colors.split(",") if c.strip()]
     else:
         key = (preset or "hazard").lower()
+        if key in ("klhk", "lulc-klhk", "tutupan-lahan"):
+            if class_labels:
+                return [match_klhk_color(lbl, i) for i, lbl in enumerate(class_labels)]
+            base = PALETTES["klhk"]
+            return [base[i % len(base)] for i in range(max(1, count))]
         if key == "category":
             base = PALETTES["category"]
             return [base[i % len(base)] for i in range(max(1, count))]
@@ -551,7 +679,7 @@ def apply_unique_values(mxdoc, lyr, shape_type, field_name, ordered_values, pres
     if not gfl:
         raise RuntimeError("Target layer does not support feature rendering.")
 
-    colors = sample_palette(preset, len(ordered_values), custom_colors=custom_colors)
+    colors = sample_palette(preset, len(ordered_values), custom_colors=custom_colors, class_labels=ordered_values)
     out_rgb = parse_hex_color(outline_color) if outline_color else None
 
     uvr = _co(CLSID_UniqueValueRenderer, IID_IUniqueValueRenderer)
@@ -1117,6 +1245,41 @@ def _nice_dms_interval(scale):
     return 30.0 / 60.0
 
 
+PAPER_SPECS = {
+    "a4": (29.7, 21.0, 1.000),
+    "a3": (42.0, 29.7, 1.414),
+    "a1": (84.1, 59.4, 2.828),
+    "a0": (118.9, 84.1, 4.000),
+}
+
+
+def _select_scalebar_division(scale_val, slot_cm):
+    """Selects a clean round metric division (m or km) whose 2-division bar fits ~55% of slot_cm."""
+    if not scale_val or scale_val <= 0:
+        return False, 5.0, min(slot_cm * 0.65, 3.0)
+    use_m = scale_val <= 35000
+    if use_m:
+        cands = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0, 1000.0]
+        unit_cm = 100.0
+    else:
+        cands = [0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0]
+        unit_cm = 100000.0
+    target_cm = slot_cm * 0.54
+    best = None
+    for d in cands:
+        bar_cm = (2.0 * d * unit_cm) / float(scale_val)
+        if bar_cm > slot_cm * 0.78:
+            continue
+        score = abs(bar_cm - target_cm)
+        if best is None or score < best[0]:
+            best = (score, d, bar_cm)
+    if best is None:
+        d = cands[0]
+        bar_cm = min(slot_cm * 0.72, (2.0 * d * unit_cm) / float(scale_val))
+        return use_m, d, bar_cm
+    return use_m, best[1], best[2]
+
+
 def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", region="",
                           sheet_number="", source="Sumber: Analisis Spasial GeoKit",
                           author="Laboratorium SIG / Penyusun", edition="Edisi 1 - Tahun 2026",
@@ -1124,31 +1287,23 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                           crs_text="", utm_zone="", scale_val=0, span_meters=40000.0,
                           hide_legend_names=None, add_grid=True, grid_mode="utm", north_style="big"):
     """
-    Constructs a strict PerKaBIG No. 3 Tahun 2016 Landscape layout (A4 29.7x21.0 cm or A3 42.0x29.7 cm):
-      - Outer neatline + Map neatline + Main MapFrame with UTM / DMS / Dual RBI grids (vertical L/R)
-      - 7-section Right Info Panel with crisp proportional typography:
-        1. Title + Sheet Number/Subtitle (BIG Blue #0070C0) + Region Name (Bold)
-        2. North Arrow (left, 40pt) + SKALA 1 : N + Metric Alternating Scale Bar (round km/m)
-        3. Optional DIAGRAM LOKASI (2nd MapFrame + Red LocatorRectangle)
-        4. Sistem Referensi Koordinat (Proyeksi, Sistem Grid, Datum SRGI 2013 / WGS 1984)
-        5. Pembuat/Instansi (+ optional Logo) + Edisi & Hak Cipta
-        6. KETERANGAN (clean legend with multi-class headings, hidden hillshade/field names)
-        7. SUMBER DATA DAN RIWAYAT PETA + CATATAN
+    Constructs a strict PerKaBIG No. 3 Tahun 2016 Landscape layout (A4, A3, A1, or A0):
+      - Outer neatline + Map neatline + Main MapFrame with crisp UTM / DMS / Dual RBI grids
+      - 7-section Right Info Panel with uniform black typography, centered North+Scale,
+        explicit divider lines for Edisi and Catatan, and top-anchored KETERANGAN legend.
     """
     pl = c_void_p()
     _vcall(mxdoc, 4, POINTER(c_void_p))(mxdoc, byref(pl))  # get_PageLayout
     if not pl.value:
         raise RuntimeError("Could not retrieve PageLayout from MxDocument.")
 
-    is_a3 = (paper or "a4").lower() == "a3"
-    s = 1.414 if is_a3 else 1.0
-    pw = 42.0 if is_a3 else 29.7
-    ph = 29.7 if is_a3 else 21.0
+    paper_key = (paper or "a4").lower()
+    pw, ph, s = PAPER_SPECS.get(paper_key, PAPER_SPECS["a4"])
     gmode = (grid_mode or "utm").lower()
     if not add_grid:
         gmode = "none"
 
-    # 1. Configure A4 or A3 Landscape in Centimeters (8 = esriCentimeters)
+    # 1. Configure A4 / A3 / A1 / A0 Landscape in Centimeters (8 = esriCentimeters)
     page = c_void_p()
     _vcall(pl, 3, POINTER(c_void_p))(pl, byref(page))  # get_Page
     if page.value:
@@ -1192,13 +1347,18 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     # Clear old MapSurrounds on FocusMap so no stale duplicate legends/scalebars remain
     _vcall(fmap, 35)(fmap)  # ClearMapSurrounds()
 
-    # Exact PerKaBIG proportions (extra margin when dual grid enabled so UTM + DMS never clip!)
-    extra = 0.25 if gmode == "dual" else 0.0
-    ox, oy, ow, oh = (0.8, 0.8, 40.4, 28.1) if is_a3 else (0.5, 0.5, 28.7, 20.0)
-    nx, ny, nw, nh = (1.05, 1.05, 28.1, 27.6) if is_a3 else (0.7, 0.7, 20.0, 19.6)
-    mx, my, mw, mh = (2.1 + extra, 2.1 + extra, 26.0 - 2 * extra, 25.5 - 2 * extra) if is_a3 else (1.6 + extra, 1.6 + extra, 18.2 - 2 * extra, 17.8 - 2 * extra)
-    px, py, pw_p, ph_p = (29.55, 1.05, 11.4, 27.6) if is_a3 else (21.0, 0.7, 8.0, 19.6)
-    pad = 0.35 if is_a3 else 0.25
+    # Exact PerKaBIG proportions scaled smoothly across A4 / A3 / A1 / A0
+    m_out = 0.50 * s
+    m_in = 0.72 * s
+    gap_p = 0.30 * s
+    ox, oy, ow, oh = m_out, m_out, pw - 2.0 * m_out, ph - 2.0 * m_out
+    pw_p = 8.00 * s
+    px, py, ph_p = pw - m_in - pw_p, m_in, ph - 2.0 * m_in
+    nx, ny, nw, nh = m_in, m_in, px - gap_p - m_in, ph - 2.0 * m_in
+    # Generous coordinate border margin so larger UTM/DMS coordinate labels never clip
+    m_grid = (1.35 if gmode == "dual" else 1.08) * s
+    mx, my, mw, mh = nx + m_grid, ny + m_grid, nw - 2.0 * m_grid, nh - 2.0 * m_grid
+    pad = 0.25 * s
     ix = px + pad
     cx = px + pw_p / 2.0
 
@@ -1245,12 +1405,12 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                         if _vcall(igl, 7, POINTER(c_void_p))(igl, byref(gfnt)) == 0 and gfnt.value:
                             gifnt = _qi(gfnt, IID_IFont)
                             if gifnt:
-                                g_pt = 8.0 if is_a3 else (6.5 if gmode == "dual" else 7.0)
+                                g_pt = (8.0 if gmode == "dual" else 8.6) * s
                                 _vcall(gifnt, 6, ctypes.c_longlong)(gifnt, int(g_pt * 10000))
                                 _release(gifnt)
                             _vcall(igl, 8, c_void_p)(igl, gfnt)
                             _release(gfnt)
-                        _vcall(igl, 12, c_double)(igl, 2.5)           # LabelOffset = 2.5 pt
+                        _vcall(igl, 12, c_double)(igl, 3.0 * s)       # LabelOffset
                         _vcall(igl, 14, c_long, c_short)(igl, 1, -1)  # Top = Horizontal
                         _vcall(igl, 14, c_long, c_short)(igl, 2, -1)  # Bottom = Horizontal
                         _vcall(igl, 14, c_long, c_short)(igl, 3, 0)   # Left = VERTICAL
@@ -1262,10 +1422,10 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                         _release(fgl)
                     except Exception:
                         pass
-                    grid_line = make_line_symbol(140, 150, 160, width=0.28, style="solid")
+                    grid_line = make_line_symbol(140, 150, 160, width=0.28 * s, style="solid")
                     igline = _qi(grid_line, IID_ILineSymbol)
                     _vcall(mgrid, 6, c_void_p)(mgrid, igline)
-                    _vcall(mgrid, 14, c_double)(mgrid, 3.0)
+                    _vcall(mgrid, 14, c_double)(mgrid, 3.2 * s)
                     _vcall(mgrid, 24, c_short)(mgrid, -1)
                     _vcall(mgrids, 6, c_void_p)(mgrids, mgrid)
                     _release(igline)
@@ -1300,30 +1460,29 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                         if _vcall(dms_lbl, 7, POINTER(c_void_p))(dms_lbl, byref(dfnt)) == 0 and dfnt.value:
                             difnt = _qi(dfnt, IID_IFont)
                             if difnt:
-                                d_pt = 7.2 if is_a3 else (5.8 if gmode == "dual" else 6.8)
+                                d_pt = (7.2 if gmode == "dual" else 7.6) * s
                                 _vcall(difnt, 6, ctypes.c_longlong)(difnt, int(d_pt * 10000))
                                 _release(difnt)
                             _vcall(dms_lbl, 8, c_void_p)(dms_lbl, dfnt)
                             _release(dfnt)
-                        # Offset outside UTM labels in dual mode so black UTM and blue DMS never collide!
-                        _vcall(dms_lbl, 12, c_double)(dms_lbl, 11.5 if gmode == "dual" else 3.0)
+                        # Offset cleanly outside UTM labels in dual mode so black UTM and blue DMS never collide
+                        _vcall(dms_lbl, 12, c_double)(dms_lbl, (13.8 * s) if gmode == "dual" else (3.2 * s))
                         _vcall(dms_lbl, 14, c_long, c_short)(dms_lbl, 1, -1)  # Top Horizontal
                         _vcall(dms_lbl, 14, c_long, c_short)(dms_lbl, 2, -1)  # Bottom Horizontal
                         _vcall(dms_lbl, 14, c_long, c_short)(dms_lbl, 3, 0)   # Left VERTICAL
                         _vcall(dms_lbl, 14, c_long, c_short)(dms_lbl, 4, 0)   # Right VERTICAL
                         _vcall(gr_grid, 10, c_void_p)(gr_grid, dms_lbl)
                         _release(dms_lbl)
-                        # In dual mode, use clean BIG blue border ticks only (no cluttered crisscrossing lines!)
                         if gmode == "dual":
                             bline = make_line_symbol(0, 112, 192, width=0.0, style="null", null_color=True)
                         else:
-                            bline = make_line_symbol(0, 112, 192, width=0.22, style="dash")
+                            bline = make_line_symbol(0, 112, 192, width=0.22 * s, style="dash")
                         ibline = _qi(bline, IID_ILineSymbol)
                         _vcall(gr_grid, 6, c_void_p)(gr_grid, ibline)
-                        btick = make_line_symbol(0, 112, 192, width=0.65, style="solid")
+                        btick = make_line_symbol(0, 112, 192, width=0.70 * s, style="solid")
                         ibtick = _qi(btick, IID_ILineSymbol)
-                        _vcall(gr_grid, 8, c_void_p)(gr_grid, ibtick)  # put_TickMarkSymbol (BIG Blue ticks!)
-                        _vcall(gr_grid, 14, c_double)(gr_grid, 4.0)
+                        _vcall(gr_grid, 8, c_void_p)(gr_grid, ibtick)
+                        _vcall(gr_grid, 14, c_double)(gr_grid, 4.2 * s)
                         _vcall(gr_grid, 24, c_short)(gr_grid, -1)
                         _vcall(mgrids, 6, c_void_p)(mgrids, gr_grid)
                         _release(ibtick)
@@ -1344,26 +1503,30 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     top_y = py + ph_p
     cur_y = top_y
 
-    # === SECTION 1: JUDUL PETA, SUBJUDUL/NOMOR LEMBAR (BIRU BIG), NAMA WILAYAH ===
-    h_hdr = 3.05 if is_a3 else 2.20
+    # === SECTION 1: JUDUL PETA, SUBJUDUL/NOMOR LEMBAR & NAMA WILAYAH (HITAM SERAGAM, BESAR & SEIMBANG) ===
+    h_hdr = 2.35 * s
     y_hdr_bot = cur_y - h_hdr
-    big_blue = (0, 112, 192)
+    y_hdr_mid = (cur_y + y_hdr_bot) / 2.0
+    mid_txt = sheet_number or subtitle
     if region:
-        _add_text(gc, cx, cur_y - 0.18 * s, _wrap_text(title.upper(), max_chars=30), size=9.2 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
-        mid_txt = sheet_number or subtitle
         if mid_txt:
-            _add_text(gc, cx, cur_y - 0.80 * s, _wrap_text(mid_txt, max_chars=46), size=7.0 * s, rgb=big_blue, halign=1, valign=0, name="lbl_subjudul", bold=True)
-        _add_text(gc, cx, y_hdr_bot + 0.26 * s, region.upper(), size=11.8 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
+            _add_text(gc, cx, cur_y - 0.22 * s, _wrap_text(title.upper(), max_chars=24), size=11.4 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+            _add_text(gc, cx, y_hdr_mid - 0.04 * s, _wrap_text(mid_txt, max_chars=40), size=7.8 * s, rgb=(0, 0, 0), halign=1, valign=1, name="lbl_subjudul", bold=True)
+            _add_text(gc, cx, y_hdr_bot + 0.22 * s, region.upper(), size=13.0 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
+        else:
+            _add_text(gc, cx, cur_y - 0.34 * s, _wrap_text(title.upper(), max_chars=24), size=12.0 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+            _add_text(gc, cx, y_hdr_bot + 0.34 * s, region.upper(), size=13.4 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
     else:
-        _add_text(gc, cx, cur_y - 0.24 * s, _wrap_text(title.upper(), max_chars=26), size=10.5 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
-        mid_txt = sheet_number or subtitle
         if mid_txt:
-            _add_text(gc, cx, y_hdr_bot + 0.26 * s, _wrap_text(mid_txt, max_chars=44), size=7.2 * s, rgb=big_blue, halign=1, valign=2, name="lbl_subjudul", bold=True)
+            _add_text(gc, cx, cur_y - 0.32 * s, _wrap_text(title.upper(), max_chars=22), size=12.4 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+            _add_text(gc, cx, y_hdr_bot + 0.30 * s, _wrap_text(mid_txt, max_chars=40), size=8.0 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_subjudul", bold=True)
+        else:
+            _add_text(gc, cx, y_hdr_mid, _wrap_text(title.upper(), max_chars=22), size=13.0 * s, rgb=(0, 0, 0), halign=1, valign=1, name="lbl_judul", bold=True)
     cur_y = y_hdr_bot
-    _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_header")
+    _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_header")
 
-    # === SECTION 2: ARAH UTARA (PERKABIG 'U' VECTOR OR CLASSIC COMPASS) + SKALA ANGKA & SKALA GARIS ===
-    h_sc = 2.45 if is_a3 else 1.85
+    # === SECTION 2: ARAH UTARA + SKALA ANGKA & SKALA BATANG PRESISI TENGAH ===
+    h_sc = 1.95 * s
     y_sc_bot = cur_y - h_sc
     if mf:
         if (north_style or "big").lower() == "classic":
@@ -1379,7 +1542,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                         _release(ina)
                     _release(na_ms)
                 el = _qi(na_sf, IID_IElement)
-                env = _make_envelope(ix + 0.02 * s, y_sc_bot + 0.16 * s, ix + 1.45 * s, cur_y - 0.16 * s)
+                env = _make_envelope(ix + 0.04 * s, y_sc_bot + 0.16 * s, ix + 1.44 * s, cur_y - 0.16 * s)
                 geom = _qi(env, IID_IGeometry)
                 _vcall(el, 4, c_void_p)(el, geom)
                 _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
@@ -1389,14 +1552,20 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                 _release(na_sf)
             _release(uid_na)
         else:
-            # Authentic PerKaBIG Gambar D.5 Indonesian 'U' vector North Arrow (0% overlap guaranteed!)
-            _add_big_north_arrow(gc, ix + 0.65 * s, y_sc_bot + 0.14 * s, cur_y - 0.14 * s, s=s)
+            _add_big_north_arrow(gc, ix + 0.68 * s, y_sc_bot + 0.16 * s, cur_y - 0.16 * s, s=s)
 
-        # Right side of Section 2: SKALA 1 : N (centered over scale bar!) + Alternating Scale Bar (round km/m)
-        sb_x = ix + 1.55 * s
-        sb_cx = (sb_x + (px + pw_p - pad)) / 2.0
+        # Right side of Section 2: SKALA 1 : N + physically centered Alternating Scale Bar
+        sb_x = ix + 1.50 * s
+        sb_right = px + pw_p - pad
+        sb_slot_w = sb_right - sb_x
+        sb_cx = (sb_x + sb_right) / 2.0
         scale_txt = ("SKALA 1 : %s" % ("{:,}".format(int(round(scale_val))).replace(",", "."))) if scale_val else "SKALA 1 : -"
-        _add_text(gc, sb_cx, cur_y - 0.22 * s, scale_txt, size=9.0 * s, rgb=(0, 0, 0), halign=1, valign=0, name="skala_angka", bold=True)
+        _add_text(gc, sb_cx, cur_y - 0.24 * s, scale_txt, size=9.6 * s, rgb=(0, 0, 0), halign=1, valign=0, name="skala_angka", bold=True)
+
+        use_m, div_val, bar_cm = _select_scalebar_division(scale_val, sb_slot_w)
+        est_total_w = min(sb_slot_w, bar_cm + 0.55 * s)
+        sb_env_x1 = max(sb_x, sb_cx - est_total_w / 2.0)
+        sb_env_x2 = min(sb_right, sb_env_x1 + est_total_w)
 
         uid_sb = _make_uid(SURROUND_SCALEBAR_CLSID)
         sb_sf = c_void_p()
@@ -1406,29 +1575,23 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
             if sb_ms.value:
                 sb = _qi(sb_ms, IID_IScaleBar)
                 if sb:
-                    use_m = (scale_val > 0 and scale_val <= 35000)
                     _vcall(sb, 22, c_long)(sb, 9 if use_m else 10)  # 9=Meters, 10=Kilometers
                     ul = _bstr("m" if use_m else "km")
                     _vcall(sb, 24, c_void_p)(sb, ul)
                     _free_bstr(ul)
                     _vcall(sb, 16, c_short)(sb, 2)  # Divisions = 2
                     _vcall(sb, 20, c_short)(sb, 2)  # Subdivisions = 2
-                    if use_m:
-                        div_val = 50.0 if scale_val <= 3500 else (100.0 if scale_val <= 7500 else (200.0 if scale_val <= 15000 else 500.0))
-                    else:
-                        div_val = 1.0 if scale_val <= 75000 else (2.0 if scale_val <= 150000 else (5.0 if scale_val <= 350000 else 10.0))
-                    _vcall(sb, 14, c_double)(sb, div_val)  # Exact round division (e.g. 5 km -> 0 5 10 km)
+                    _vcall(sb, 14, c_double)(sb, div_val)
                     _vcall(sb, 46, c_long)(sb, 0)          # ResizeHint = 0 (esriScaleBarFixed)
-                    _vcall(sb, 44, c_double)(sb, 5.0 * s)  # BarHeight = 5 pt
-                    # Clean compact 7pt labels on ScaleBar so numbers never crowd!
-                    sb_ts = make_text_symbol(size=7.0 * s, rgb=(0, 0, 0), halign=1, valign=2)
+                    _vcall(sb, 44, c_double)(sb, 5.4 * s)  # BarHeight
+                    sb_ts = make_text_symbol(size=7.4 * s, rgb=(0, 0, 0), halign=1, valign=2)
                     _vcall(sb, 40, c_void_p)(sb, sb_ts)    # put_LabelSymbol
                     _vcall(sb, 30, c_void_p)(sb, sb_ts)    # put_UnitLabelSymbol
                     _release(sb_ts)
                     _release(sb)
                 _release(sb_ms)
             el = _qi(sb_sf, IID_IElement)
-            env = _make_envelope(sb_x, y_sc_bot + 0.22 * s, px + pw_p - pad, y_sc_bot + 1.05 * s)
+            env = _make_envelope(sb_env_x1, y_sc_bot + 0.24 * s, sb_env_x2, y_sc_bot + 1.08 * s)
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)
@@ -1438,39 +1601,37 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
             _release(sb_sf)
         _release(uid_sb)
     cur_y = y_sc_bot
-    _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_skala")
+    _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_skala")
 
-    # === SECTION 3: PETUNJUK LETAK PETA (KIRI) & DIAGRAM LOKASI (KANAN) — 1 OR 2 INSETS ===
+    # === SECTION 3: PETUNJUK LETAK PETA (KIRI) & DIAGRAM LOKASI (KANAN) — HEADER HITAM SERAGAM ===
     inset_created = False
     petunjuk_created = False
     if (has_inset or has_petunjuk) and mf:
-        h_ins = 4.00 if is_a3 else 2.85
+        h_ins = 2.85 * s
         y_ins_bot = cur_y - h_ins
         if has_petunjuk and has_inset:
-            # Dual side-by-side official PerKaBIG Lampiran D inset frames!
             gap = 0.22 * s
             half_w = (pw_p - 2.0 * pad - gap) / 2.0
             x1_l = ix
             x1_r = ix + half_w
             x2_l = x1_r + gap
             x2_r = px + pw_p - pad
-            _add_text(gc, (x1_l + x1_r) / 2.0, cur_y - 0.10 * s, "PETUNJUK LETAK PETA", size=5.8 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_petunjuk_letak", bold=True)
-            _add_text(gc, (x2_l + x2_r) / 2.0, cur_y - 0.10 * s, "DIAGRAM LOKASI", size=5.8 * s, rgb=big_blue, halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
+            _add_text(gc, (x1_l + x1_r) / 2.0, cur_y - 0.11 * s, "PETUNJUK LETAK PETA", size=6.3 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_petunjuk_letak", bold=True)
+            _add_text(gc, (x2_l + x2_r) / 2.0, cur_y - 0.11 * s, "DIAGRAM LOKASI", size=6.3 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
             try:
-                petunjuk_created = _create_inset_mapframe(gc, mf, "Petunjuk Letak Peta", x1_l, y_ins_bot + 0.14 * s, x1_r, cur_y - 0.44 * s, border_rgb=big_blue)
+                petunjuk_created = _create_inset_mapframe(gc, mf, "Petunjuk Letak Peta", x1_l, y_ins_bot + 0.14 * s, x1_r, cur_y - 0.46 * s, border_rgb=(0, 0, 0))
             except Exception:
                 pass
             try:
-                inset_created = _create_inset_mapframe(gc, mf, "Diagram Lokasi", x2_l, y_ins_bot + 0.14 * s, x2_r, cur_y - 0.44 * s, border_rgb=(0, 0, 0))
+                inset_created = _create_inset_mapframe(gc, mf, "Diagram Lokasi", x2_l, y_ins_bot + 0.14 * s, x2_r, cur_y - 0.46 * s, border_rgb=(0, 0, 0))
             except Exception:
                 pass
         else:
             lbl_t = "PETUNJUK LETAK PETA" if has_petunjuk else "DIAGRAM LOKASI"
             frm_nm = "Petunjuk Letak Peta" if has_petunjuk else "Diagram Lokasi"
-            bdr_rgb = big_blue if has_petunjuk else (0, 0, 0)
-            _add_text(gc, cx, cur_y - 0.10 * s, lbl_t, size=7.0 * s, rgb=big_blue, halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
+            _add_text(gc, cx, cur_y - 0.11 * s, lbl_t, size=7.2 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_diagram_lokasi", bold=True)
             try:
-                ok = _create_inset_mapframe(gc, mf, frm_nm, ix + 0.15 * s, y_ins_bot + 0.14 * s, px + pw_p - pad - 0.15 * s, cur_y - 0.46 * s, border_rgb=bdr_rgb)
+                ok = _create_inset_mapframe(gc, mf, frm_nm, ix + 0.15 * s, y_ins_bot + 0.14 * s, px + pw_p - pad - 0.15 * s, cur_y - 0.48 * s, border_rgb=(0, 0, 0))
                 if has_petunjuk:
                     petunjuk_created = ok
                 else:
@@ -1478,11 +1639,12 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
             except Exception:
                 pass
         cur_y = y_ins_bot
-        _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_inset")
+        _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_inset")
 
-    # === SECTION 4: SISTEM REFERENSI KOORDINAT (PROPORSI BESAR & MUDAH DIBACA) ===
-    h_proj = 1.85 if is_a3 else 1.45
+    # === SECTION 4: SISTEM REFERENSI KOORDINAT (VERTIKAL TERPUSAT & LEBIH JELAS) ===
+    h_proj = 1.48 * s
     y_proj_bot = cur_y - h_proj
+    y_proj_mid = (cur_y + y_proj_bot) / 2.0
     zone_txt = utm_zone or (crs_text if crs_text else "UTM")
     grid_desc = "Grid UTM & Gratikul Geografi" if gmode == "dual" else ("Gratikul Geografi (DMS)" if gmode == "dms" else "Grid UTM (Meter)")
     proj_lines = (
@@ -1490,37 +1652,42 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
         "Sistem Grid      : %s\n"
         "Datum Horizontal : SRGI 2013 / WGS 1984"
     ) % (zone_txt, grid_desc)
-    _add_text(gc, ix, cur_y - 0.14 * s, proj_lines, size=6.8 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_proyeksi")
+    _add_text(gc, ix, y_proj_mid, proj_lines, size=7.2 * s, rgb=(0, 0, 0), halign=0, valign=1, name="lbl_proyeksi")
     cur_y = y_proj_bot
-    _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_proyeksi")
+    _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_proyeksi")
 
-    # === SECTION 5: PEMBUAT / INSTANSI (+ OPTIONAL LOGO) & EDISI / HAK CIPTA ===
-    h_org = 2.30 if is_a3 else 1.75
+    # === SECTION 5: PEMBUAT / INSTANSI (+ OPTIONAL LOGO) | GARIS PEMISAH | EDISI & HAK CIPTA ===
+    h_org = 1.95 * s
     y_org_bot = cur_y - h_org
+    y_ed_sep = y_org_bot + 0.44 * s
+    y_org_upper_mid = (cur_y + y_ed_sep) / 2.0
     text_x = ix
-    max_ch = 36
+    max_ch = 34
     if logo_path:
-        lsz = 1.40 if is_a3 else 1.05
-        _add_picture(gc, ix, cur_y - 0.12 * s - lsz, ix + lsz, cur_y - 0.12 * s, logo_path, name="logo_instansi")
-        text_x = ix + lsz + 0.20 * s
-        max_ch = 26
-    _add_text(gc, text_x, cur_y - 0.12 * s, "DIBUAT DAN DITERBITKAN OLEH:", size=6.8 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_instansi_hdr", bold=True)
-    _add_text(gc, text_x, cur_y - 0.50 * s, _wrap_text(author or "Laboratorium SIG / Penyusun", max_chars=max_ch), size=6.8 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_instansi")
+        lsz = 1.10 * s
+        _add_picture(gc, ix, y_org_upper_mid - lsz / 2.0, ix + lsz, y_org_upper_mid + lsz / 2.0, logo_path, name="logo_instansi")
+        text_x = ix + lsz + 0.22 * s
+        max_ch = 25
+    _add_text(gc, text_x, cur_y - 0.16 * s, "DIBUAT DAN DITERBITKAN OLEH:", size=6.9 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_instansi_hdr", bold=True)
+    _add_text(gc, text_x, y_org_upper_mid - 0.10 * s, _wrap_text(author or "Laboratorium SIG / Penyusun", max_chars=max_ch), size=7.0 * s, rgb=(20, 25, 30), halign=0, valign=1, name="lbl_instansi")
+    _add_hline(gc, px, px + pw_p, y_ed_sep, width=0.55 * s, name="garis_edisi")
     hc_txt = "%s  |  Hak cipta dilindungi UU" % (edition or "Edisi 1 - Tahun 2026")
-    _add_text(gc, cx, y_org_bot + 0.14 * s, hc_txt, size=5.8 * s, rgb=(40, 45, 50), halign=1, valign=2, name="lbl_hak_cipta")
+    _add_text(gc, cx, (y_org_bot + y_ed_sep) / 2.0, hc_txt, size=6.0 * s, rgb=(35, 40, 45), halign=1, valign=1, name="lbl_hak_cipta")
     cur_y = y_org_bot
-    _add_hline(gc, px, px + pw_p, cur_y, width=0.7, name="garis_instansi")
+    _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_instansi")
 
-    # === SECTION 7 (ANCHORED AT BOTTOM): SUMBER DATA, RIWAYAT PETA & CATATAN ===
-    h_foot = 3.25 if is_a3 else 2.45
+    # === SECTION 7 (ANCHORED AT BOTTOM): SUMBER DATA | GARIS PEMISAH | CATATAN ===
+    h_foot = 2.65 * s
     y_foot_top = py + h_foot
-    _add_hline(gc, px, px + pw_p, y_foot_top, width=0.7, name="garis_legenda")
-    _add_text(gc, ix, y_foot_top - 0.12 * s, "SUMBER DATA DAN RIWAYAT PETA:", size=6.3 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_sumber_hdr", bold=True)
-    _add_text(gc, ix, y_foot_top - 0.45 * s, _wrap_text(source or "1. Pengolahan Data Spasial GeoKit.", max_chars=42), size=6.1 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_sumber_riwayat")
+    y_note_sep = py + 0.92 * s
+    _add_hline(gc, px, px + pw_p, y_foot_top, width=0.7 * s, name="garis_legenda")
+    _add_text(gc, ix, y_foot_top - 0.14 * s, "SUMBER DATA DAN RIWAYAT PETA:", size=6.6 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_sumber_hdr", bold=True)
+    _add_text(gc, ix, y_foot_top - 0.48 * s, _wrap_text(source or "1. Pengolahan Data Spasial GeoKit.", max_chars=40), size=6.3 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_sumber_riwayat")
+    _add_hline(gc, px, px + pw_p, y_note_sep, width=0.55 * s, name="garis_catatan")
     note_txt = note or "CATATAN: Batas wilayah administrasi pada peta ini bukan referensi resmi penegasan batas."
-    _add_text(gc, ix, py + 0.72 * s, _wrap_text(note_txt, max_chars=46), size=5.5 * s, rgb=(45, 50, 55), halign=0, valign=0, name="lbl_catatan")
+    _add_text(gc, ix, (py + y_note_sep) / 2.0, _wrap_text(note_txt, max_chars=44), size=5.8 * s, rgb=(40, 45, 50), halign=0, valign=1, name="lbl_catatan")
 
-    # === SECTION 6 (FILLS CLEANLY BETWEEN SECTION 5 AND SECTION 7): KETERANGAN ===
+    # === SECTION 6 (TOP-ANCHORED RIGHT UNDER SECTION 5): KETERANGAN ===
     hidden = []
     if mf:
         uid_leg = _make_uid(SURROUND_LEGEND_CLSID)
@@ -1528,6 +1695,8 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
         if _vcall(mf, 21, c_void_p, c_void_p, POINTER(c_void_p))(mf, uid_leg, None, byref(leg_sf)) == 0 and leg_sf.value:
             ms = c_void_p()
             _vcall(leg_sf, 11, POINTER(c_void_p))(leg_sf, byref(ms))
+            visible_rows = 0
+            hide_set = set(n.strip().lower() for n in (hide_legend_names or []) if n.strip())
             if ms.value:
                 leg = _qi(ms, IID_ILegend)
                 if leg:
@@ -1544,6 +1713,11 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                             item_lyr = c_void_p()
                             _vcall(item, 5, POINTER(c_void_p))(item, byref(item_lyr))
                             if item_lyr.value:
+                                bnm = c_void_p()
+                                _vcall(item_lyr, 3, POINTER(c_void_p))(item_lyr, byref(bnm))
+                                lnm = ctypes.wstring_at(bnm).lower() if bnm.value else u""
+                                _free_bstr(bnm)
+                                is_hidden = any(t in lnm for t in hide_set)
                                 gfl = _qi(item_lyr, IID_IGeoFeatureLayer)
                                 if gfl:
                                     rend = c_void_p()
@@ -1552,16 +1726,27 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                                         is_cb = _qi(rend, IID_IClassBreaksRenderer)
                                         if is_uv or is_cb:
                                             _vcall(item, 14, c_short)(item, -1)
+                                            if not is_hidden:
+                                                visible_rows += 5
+                                        elif not is_hidden:
+                                            visible_rows += 1
                                         _release(is_uv)
                                         _release(is_cb)
                                         _release(rend)
                                     _release(gfl)
+                                elif not is_hidden:
+                                    visible_rows += 1
                                 _release(item_lyr)
                             _release(item)
                     _release(leg)
                 _release(ms)
+            # Anchor legend near the top of Section 6 so KETERANGAN sits cleanly under Section 5 divider
+            avail_h = max(1.0 * s, (cur_y - 0.18 * s) - (y_foot_top + 0.16 * s))
+            est_h = min(avail_h, max(1.8 * s, (0.95 + visible_rows * 0.44) * s))
+            leg_ymax = cur_y - 0.18 * s
+            leg_ymin = max(y_foot_top + 0.16 * s, leg_ymax - est_h)
             el = _qi(leg_sf, IID_IElement)
-            env = _make_envelope(ix, y_foot_top + 0.16 * s, px + pw_p - pad, cur_y - 0.16 * s)
+            env = _make_envelope(ix, leg_ymin, px + pw_p - pad, leg_ymax)
             geom = _qi(env, IID_IGeometry)
             _vcall(el, 4, c_void_p)(el, geom)
             _vcall(gc, 5, c_void_p, c_long)(gc, el, 0)

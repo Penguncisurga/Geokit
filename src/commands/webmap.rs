@@ -157,8 +157,35 @@ const PALETTES = {{
   "hazard":        ["#2E7D32","#81C784","#FFF176","#FFA726","#D32F2F"],
   "viridis":       ["#440154","#3B528B","#21918C","#5EC962","#FDE725"],
   "blue":          ["#E3F2FD","#90CAF9","#42A5F5","#1976D2","#0D47A1"],
-  "category":      ["#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD","#8C564B","#E377C2","#17BECF"]
+  "category":      ["#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD","#8C564B","#E377C2","#17BECF"],
+  "klhk":          ["#00441B","#1B7837","#006837","#31A354","#005A32","#41AB5D","#74C476","#C2E699","#A1D99B","#E6F598","#B8E186","#FEE08B","#FDAE61","#CCFF66","#6BAED6","#E31A1C","#F5DEB3","#8C510A","#636363","#FB9A99","#7FCDBB","#2171B5","#F7F7F7"]
 }};
+const KLHK_RULES = [
+  [["hutan lahan kering primer","hutan primer"], "#00441B"],
+  [["hutan lahan kering sekunder","hutan sekunder"], "#1B7837"],
+  [["mangrove primer"], "#006837"],
+  [["mangrove sekunder","mangrove","bakau"], "#31A354"],
+  [["hutan rawa primer"], "#005A32"],
+  [["hutan rawa sekunder","hutan rawa"], "#41AB5D"],
+  [["hutan tanaman","hutan industri","hti"], "#74C476"],
+  [["hutan","forest"], "#1B7837"],
+  [["belukar rawa","semak rawa"], "#A1D99B"],
+  [["semak","belukar","shrub"], "#C2E699"],
+  [["savana","sabana","padang rumput","rumput"], "#E6F598"],
+  [["perkebunan","kebun","plantation"], "#B8E186"],
+  [["lahan kering campur","pertanian campur"], "#FDAE61"],
+  [["pertanian lahan kering","ladang","tegalan"], "#FEE08B"],
+  [["sawah","padi","rice"], "#CCFF66"],
+  [["tambak","empang","kolam"], "#6BAED6"],
+  [["permukiman","pemukiman","terbangun","urban","built"], "#E31A1C"],
+  [["terbuka","kosong","gundul","bare"], "#F5DEB3"],
+  [["tambang","pertambangan","mining"], "#8C510A"],
+  [["bandara","pelabuhan"], "#636363"],
+  [["transmigrasi"], "#FB9A99"],
+  [["rawa","swamp","wetland"], "#7FCDBB"],
+  [["tubuh air","badan air","perairan","danau","waduk","sungai","water"], "#2171B5"],
+  [["awan","cloud"], "#F7F7F7"]
+];
 const HAZARD_RANK = {{
   "sangat rendah": 1, "rendah": 2, "sedang": 3, "tinggi": 4, "sangat tinggi": 5,
   "very low": 1, "low": 2, "medium": 3, "moderate": 3, "high": 4, "very high": 5
@@ -190,7 +217,15 @@ function escHtml(v) {{
     .replace(/'/g, "&#39;");
 }}
 
-function pickColor(idx, total) {{
+function pickColor(idx, total, label) {{
+  if (PRESET === "klhk" || PRESET === "lulc-klhk" || PRESET === "tutupan-lahan") {{
+    const low = String(label || "").toLowerCase();
+    for (const [keys, hex] of KLHK_RULES) {{
+      if (keys.some(k => low.includes(k))) return hex;
+    }}
+    const base = PALETTES["klhk"];
+    return base[idx % base.length];
+  }}
   const stops = PALETTES[PRESET] || PALETTES["hazard-pastel"];
   if (PRESET === "category") return stops[idx % stops.length];
   if (total <= 1) return stops[0];
@@ -234,7 +269,7 @@ LAYERS.forEach((meta, lidx) => {{
       if (ra !== undefined && rb !== undefined) return ra - rb;
       return a.localeCompare(b, undefined, {{ numeric: true }});
     }});
-    orderedClasses.forEach((cls, i) => colorMap.set(cls, pickColor(i, orderedClasses.length)));
+    orderedClasses.forEach((cls, i) => colorMap.set(cls, pickColor(i, orderedClasses.length, cls)));
   }}
 
   const swatchColor = fieldKey

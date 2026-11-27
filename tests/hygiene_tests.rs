@@ -917,3 +917,33 @@ fn test_golden_gdal_project_safe_mode_and_roundtrip() {
     assert_eq!(sum_json["total_features"], 1);
     assert_eq!(sum_json["total_area"], 100.0);
 }
+
+#[test]
+fn test_webmap_klhk_23_class_preset_embedded() {
+    let dir = tempdir().unwrap();
+    let gj = dir.path().join("tutupan.geojson");
+    fs::write(
+        &gj,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"TUTUPAN":"Hutan Lahan Kering Primer","AREA_HA":50.0},"geometry":{"type":"Polygon","coordinates":[[[110.1,-7.0],[110.2,-7.0],[110.2,-6.9],[110.1,-6.9],[110.1,-7.0]]]}}]}"#,
+    )
+    .unwrap();
+    let html_out = dir.path().join("klhk_map.html");
+    let res = geokit_bin()
+        .args([
+            "webmap",
+            gj.to_str().unwrap(),
+            "--field",
+            "TUTUPAN",
+            "--preset",
+            "klhk",
+            "--out",
+            html_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(res.status.success());
+    let html = fs::read_to_string(&html_out).unwrap();
+    assert!(html.contains("KLHK_RULES"));
+    assert!(html.contains("#00441B"));
+    assert!(html.contains("hutan lahan kering primer"));
+}

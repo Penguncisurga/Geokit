@@ -132,9 +132,47 @@ def check_addin_zip():
     print(f"[OK] ArcMap Add-In ZIP verified ({len(names)} files)")
 
 
+def check_jenks_klhk_and_perkabig_papers():
+    src = open(os.path.join(ROOT, "addin/arcmap/Install/arcobjects.py"), "r", encoding="utf-8").read()
+    # Extract pure-Python helper functions (KLHK + Jenks + PAPER_SPECS + _select_scalebar_division)
+    # Note: arcobjects.py uses unicode/basestring for Py2.7, shim them in Py3 test namespace
+    ns = {"unicode": str, "basestring": str}
+    s_pal = src.index("PALETTES = {")
+    e_pal = src.index("LINE_STYLES = {")
+    exec(src[s_pal:e_pal], ns)
+
+    s_spec = src.index("PAPER_SPECS = {")
+    e_spec = src.index("def build_perkabig_layout(")
+    exec(src[s_spec:e_spec], ns)
+
+    # 1. Verify A4/A3/A1/A0 paper specs
+    for p in ("a4", "a3", "a1", "a0"):
+        assert p in ns["PAPER_SPECS"], f"Missing PerKaBIG paper size: {p}"
+    assert ns["PAPER_SPECS"]["a1"][:2] == (84.1, 59.4)
+    assert ns["PAPER_SPECS"]["a0"][:2] == (118.9, 84.1)
+
+    # 2. Verify physical ScaleBar division selection fits slot cleanly
+    use_m, div_val, bar_cm = ns["_select_scalebar_division"](50000, 5.8)
+    assert not use_m and div_val == 1.0 and abs(bar_cm - 4.0) < 0.05, (use_m, div_val, bar_cm)
+
+    # 3. Verify KLHK 23-class official palette & semantic matching
+    assert len(ns["PALETTES"]["klhk"]) == 23
+    assert ns["match_klhk_color"]("Hutan Lahan Kering Primer") == (0, 68, 27)
+    assert ns["match_klhk_color"]("Sawah") == (204, 255, 102)
+    assert ns["match_klhk_color"]("Permukiman") == (227, 26, 28)
+    assert ns["match_klhk_color"]("Badan Air") == (33, 113, 181)
+
+    # 4. Verify Fisher-Jenks Natural Breaks finds natural clusters [1..3], [10..12], [50..53]
+    vals = [1, 2, 2.5, 3, 10, 11, 12, 50, 51, 53]
+    brks = ns["compute_jenks_breaks"](vals, 3)
+    assert len(brks) == 3 and brks == [3.0, 12.0, 53.0], f"Unexpected Jenks breaks: {brks}"
+    print("[OK] PerKaBIG A4/A3/A1/A0, ScaleBar centering math, KLHK 23-class, & Jenks Natural Breaks passed")
+
+
 if __name__ == "__main__":
     check_syntax()
     check_handlers_parity()
     check_golden_safe_math_and_classify()
     check_addin_zip()
+    check_jenks_klhk_and_perkabig_papers()
     print("ALL PYTHON & GOLDEN CHECKS PASSED!")

@@ -193,7 +193,7 @@ pub enum LiveCommand {
         /// Renderer mode: auto, unique (N categories), graduated (numeric breaks), single, or raster
         #[arg(long, default_value = "auto")]
         mode: String,
-        /// Color preset: hazard, hazard5, hazard-pastel, viridis, blue, earth, terrain, gray, category, stream, road, boundary, point
+        /// Color preset: hazard, hazard5, hazard-pastel, viridis, blue, earth, terrain, gray, category, klhk (23-class Indonesian Land Cover), stream, road, boundary, point
         #[arg(long, default_value = "hazard")]
         preset: String,
         /// Custom comma-separated hex color stops (e.g. "#2E7D32,#81C784,#FFF176,#FFA726,#D32F2F")
@@ -205,7 +205,7 @@ pub enum LiveCommand {
         /// Number of classes for graduated numeric breaks (default: 5)
         #[arg(long, default_value_t = 5)]
         classes_count: usize,
-        /// Break method for graduated mode: quantile or equal (default: quantile)
+        /// Break method for graduated mode: quantile, equal, or jenks (Natural Breaks)
         #[arg(long, default_value = "quantile")]
         break_method: String,
         /// Outline color in hex (e.g. "#37474F" or "#FFFFFF")
@@ -248,7 +248,7 @@ pub enum LiveCommand {
         #[arg(long, env = "GEOKIT_LIVE_PORT", default_value_t = 9877)]
         port: u16,
     },
-    /// Build a PerKaBIG No. 3/2016 Landscape layout (A4/A3: vertical UTM grid, North+Scale, Diagram Lokasi inset, CRS, Author, KETERANGAN, Source) or update layout view/text live
+    /// Build a PerKaBIG No. 3/2016 Landscape layout (A4/A3/A1/A0: UTM/DMS grids, North+Scale, Dual Insets, CRS, Author, KETERANGAN, Source) or update layout view/text live
     Layout {
         /// View mode: layout or data
         #[arg(long)]
@@ -256,7 +256,7 @@ pub enum LiveCommand {
         /// Built-in layout generator: "perkabig" (strict PerKaBIG No. 3 Tahun 2016 7-section layout)
         #[arg(long)]
         template: Option<String>,
-        /// Paper size for perkabig template: a4 (29.7x21.0 cm) or a3 (42.0x29.7 cm)
+        /// Paper size for perkabig template: a4 (29.7x21.0 cm), a3 (42.0x29.7 cm), a1 (84.1x59.4 cm), or a0 (118.9x84.1 cm)
         #[arg(long, default_value = "a4")]
         paper: String,
         /// Map type title text (e.g. "PETA KERAWANAN BENCANA")
