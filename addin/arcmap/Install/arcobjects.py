@@ -1504,24 +1504,24 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     cur_y = top_y
 
     # === SECTION 1: JUDUL PETA, SUBJUDUL/NOMOR LEMBAR & NAMA WILAYAH (HITAM SERAGAM, BESAR & SEIMBANG) ===
-    h_hdr = 2.35 * s
+    h_hdr = 2.45 * s
     y_hdr_bot = cur_y - h_hdr
     y_hdr_mid = (cur_y + y_hdr_bot) / 2.0
     mid_txt = sheet_number or subtitle
     if region:
         if mid_txt:
-            _add_text(gc, cx, cur_y - 0.22 * s, _wrap_text(title.upper(), max_chars=24), size=11.4 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
-            _add_text(gc, cx, y_hdr_mid - 0.04 * s, _wrap_text(mid_txt, max_chars=40), size=7.8 * s, rgb=(0, 0, 0), halign=1, valign=1, name="lbl_subjudul", bold=True)
-            _add_text(gc, cx, y_hdr_bot + 0.22 * s, region.upper(), size=13.0 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
+            _add_text(gc, cx, cur_y - 0.18 * s, _wrap_text(title.upper(), max_chars=26), size=11.0 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+            _add_text(gc, cx, y_hdr_mid - 0.08 * s, _wrap_text(mid_txt, max_chars=48), size=7.2 * s, rgb=(0, 0, 0), halign=1, valign=1, name="lbl_subjudul", bold=True)
+            _add_text(gc, cx, y_hdr_bot + 0.18 * s, region.upper(), size=12.6 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
         else:
-            _add_text(gc, cx, cur_y - 0.34 * s, _wrap_text(title.upper(), max_chars=24), size=12.0 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
-            _add_text(gc, cx, y_hdr_bot + 0.34 * s, region.upper(), size=13.4 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
+            _add_text(gc, cx, cur_y - 0.34 * s, _wrap_text(title.upper(), max_chars=24), size=11.8 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+            _add_text(gc, cx, y_hdr_bot + 0.34 * s, region.upper(), size=13.2 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_nama_wilayah", bold=True)
     else:
         if mid_txt:
-            _add_text(gc, cx, cur_y - 0.32 * s, _wrap_text(title.upper(), max_chars=22), size=12.4 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
-            _add_text(gc, cx, y_hdr_bot + 0.30 * s, _wrap_text(mid_txt, max_chars=40), size=8.0 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_subjudul", bold=True)
+            _add_text(gc, cx, cur_y - 0.32 * s, _wrap_text(title.upper(), max_chars=24), size=12.2 * s, rgb=(0, 0, 0), halign=1, valign=0, name="lbl_judul", bold=True)
+            _add_text(gc, cx, y_hdr_bot + 0.28 * s, _wrap_text(mid_txt, max_chars=46), size=7.6 * s, rgb=(0, 0, 0), halign=1, valign=2, name="lbl_subjudul", bold=True)
         else:
-            _add_text(gc, cx, y_hdr_mid, _wrap_text(title.upper(), max_chars=22), size=13.0 * s, rgb=(0, 0, 0), halign=1, valign=1, name="lbl_judul", bold=True)
+            _add_text(gc, cx, y_hdr_mid, _wrap_text(title.upper(), max_chars=22), size=12.8 * s, rgb=(0, 0, 0), halign=1, valign=1, name="lbl_judul", bold=True)
     cur_y = y_hdr_bot
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_header")
 
@@ -1657,37 +1657,37 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_proyeksi")
 
     # === SECTION 5: PEMBUAT / INSTANSI (+ OPTIONAL LOGO) | GARIS PEMISAH | EDISI & HAK CIPTA ===
-    h_org = 1.95 * s
+    h_org = 1.90 * s
     y_org_bot = cur_y - h_org
     y_ed_sep = y_org_bot + 0.44 * s
     y_org_upper_mid = (cur_y + y_ed_sep) / 2.0
     text_x = ix
     max_ch = 34
     if logo_path:
-        lsz = 1.10 * s
+        lsz = 1.06 * s
         _add_picture(gc, ix, y_org_upper_mid - lsz / 2.0, ix + lsz, y_org_upper_mid + lsz / 2.0, logo_path, name="logo_instansi")
         text_x = ix + lsz + 0.22 * s
         max_ch = 25
-    _add_text(gc, text_x, cur_y - 0.16 * s, "DIBUAT DAN DITERBITKAN OLEH:", size=6.9 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_instansi_hdr", bold=True)
-    _add_text(gc, text_x, y_org_upper_mid - 0.10 * s, _wrap_text(author or "Laboratorium SIG / Penyusun", max_chars=max_ch), size=7.0 * s, rgb=(20, 25, 30), halign=0, valign=1, name="lbl_instansi")
+    _add_text(gc, text_x, cur_y - 0.18 * s, "DIBUAT DAN DITERBITKAN OLEH:", size=6.8 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_instansi_hdr", bold=True)
+    _add_text(gc, text_x, cur_y - 0.56 * s, _wrap_text(author or "Laboratorium SIG / Penyusun", max_chars=max_ch), size=6.8 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_instansi")
     _add_hline(gc, px, px + pw_p, y_ed_sep, width=0.55 * s, name="garis_edisi")
     hc_txt = "%s  |  Hak cipta dilindungi UU" % (edition or "Edisi 1 - Tahun 2026")
-    _add_text(gc, cx, (y_org_bot + y_ed_sep) / 2.0, hc_txt, size=6.0 * s, rgb=(35, 40, 45), halign=1, valign=1, name="lbl_hak_cipta")
+    _add_text(gc, cx, (y_org_bot + y_ed_sep) / 2.0, hc_txt, size=5.9 * s, rgb=(35, 40, 45), halign=1, valign=1, name="lbl_hak_cipta")
     cur_y = y_org_bot
     _add_hline(gc, px, px + pw_p, cur_y, width=0.7 * s, name="garis_instansi")
 
     # === SECTION 7 (ANCHORED AT BOTTOM): SUMBER DATA | GARIS PEMISAH | CATATAN ===
     h_foot = 2.65 * s
     y_foot_top = py + h_foot
-    y_note_sep = py + 0.92 * s
+    y_note_sep = py + 1.02 * s
     _add_hline(gc, px, px + pw_p, y_foot_top, width=0.7 * s, name="garis_legenda")
-    _add_text(gc, ix, y_foot_top - 0.14 * s, "SUMBER DATA DAN RIWAYAT PETA:", size=6.6 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_sumber_hdr", bold=True)
-    _add_text(gc, ix, y_foot_top - 0.48 * s, _wrap_text(source or "1. Pengolahan Data Spasial GeoKit.", max_chars=40), size=6.3 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_sumber_riwayat")
+    _add_text(gc, ix, y_foot_top - 0.14 * s, "SUMBER DATA DAN RIWAYAT PETA:", size=6.5 * s, rgb=(0, 0, 0), halign=0, valign=0, name="lbl_sumber_hdr", bold=True)
+    _add_text(gc, ix, y_foot_top - 0.48 * s, _wrap_text(source or "1. Pengolahan Data Spasial GeoKit.", max_chars=42), size=6.1 * s, rgb=(20, 25, 30), halign=0, valign=0, name="lbl_sumber_riwayat")
     _add_hline(gc, px, px + pw_p, y_note_sep, width=0.55 * s, name="garis_catatan")
     note_txt = note or "CATATAN: Batas wilayah administrasi pada peta ini bukan referensi resmi penegasan batas."
-    _add_text(gc, ix, (py + y_note_sep) / 2.0, _wrap_text(note_txt, max_chars=44), size=5.8 * s, rgb=(40, 45, 50), halign=0, valign=1, name="lbl_catatan")
+    _add_text(gc, ix, y_note_sep - 0.12 * s, _wrap_text(note_txt, max_chars=48), size=5.4 * s, rgb=(40, 45, 50), halign=0, valign=0, name="lbl_catatan")
 
-    # === SECTION 6 (TOP-ANCHORED RIGHT UNDER SECTION 5): KETERANGAN ===
+    # === SECTION 6 (CLEANLY BOUNDED BETWEEN SECTION 5 AND SECTION 7): KETERANGAN ===
     hidden = []
     if mf:
         uid_leg = _make_uid(SURROUND_LEGEND_CLSID)
@@ -1727,7 +1727,7 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                                         if is_uv or is_cb:
                                             _vcall(item, 14, c_short)(item, -1)
                                             if not is_hidden:
-                                                visible_rows += 5
+                                                visible_rows += 6
                                         elif not is_hidden:
                                             visible_rows += 1
                                         _release(is_uv)
@@ -1740,11 +1740,12 @@ def build_perkabig_layout(mxdoc, title="PETA TEMATIK WILAYAH", subtitle="", regi
                             _release(item)
                     _release(leg)
                 _release(ms)
-            # Anchor legend near the top of Section 6 so KETERANGAN sits cleanly under Section 5 divider
-            avail_h = max(1.0 * s, (cur_y - 0.18 * s) - (y_foot_top + 0.16 * s))
-            est_h = min(avail_h, max(1.8 * s, (0.95 + visible_rows * 0.44) * s))
-            leg_ymax = cur_y - 0.18 * s
-            leg_ymin = max(y_foot_top + 0.16 * s, leg_ymax - est_h)
+            # ArcMap ILegend expands UPWARD from ymin (~0.92 cm per row + ~1.15 cm title).
+            # Keep leg_ymin safely low enough so the top of KETERANGAN NEVER crosses Section 5!
+            avail_h = max(1.0 * s, (cur_y - 0.20 * s) - (y_foot_top + 0.18 * s))
+            est_h = min(avail_h, max(2.2 * s, (1.15 + visible_rows * 0.92) * s))
+            leg_ymax = cur_y - 0.20 * s
+            leg_ymin = max(y_foot_top + 0.18 * s, leg_ymax - est_h)
             el = _qi(leg_sf, IID_IElement)
             env = _make_envelope(ix, leg_ymin, px + pw_p - pad, leg_ymax)
             geom = _qi(env, IID_IGeometry)
