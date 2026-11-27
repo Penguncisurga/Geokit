@@ -26,6 +26,7 @@ pub struct ScanReport {
     pub datasets: Vec<GisDataset>,
     pub lock_files: Vec<PathBuf>,
     pub temp_files: Vec<PathBuf>,
+    pub unreadable_paths: Vec<PathBuf>,
     pub total_size_bytes: u64,
 }
 
@@ -51,10 +52,19 @@ pub fn scan_directory(root: &Path) -> ScanReport {
     let mut datasets = Vec::new();
     let mut lock_files = Vec::new();
     let mut temp_files = Vec::new();
+    let mut unreadable_paths = Vec::new();
 
     let mut it = WalkDir::new(root).into_iter();
     while let Some(entry_res) = it.next() {
-        let Ok(entry) = entry_res else { continue };
+        let entry = match entry_res {
+            Ok(e) => e,
+            Err(err) => {
+                if let Some(p) = err.path() {
+                    unreadable_paths.push(p.to_path_buf());
+                }
+                continue;
+            }
+        };
         let path = entry.path();
 
         if path == root {
@@ -191,6 +201,7 @@ pub fn scan_directory(root: &Path) -> ScanReport {
     datasets.sort_by(|a, b| a.path.cmp(&b.path));
     lock_files.sort();
     temp_files.sort();
+    unreadable_paths.sort();
 
     let total_size_bytes = datasets.iter().map(|d| d.size_bytes).sum();
 
@@ -199,6 +210,7 @@ pub fn scan_directory(root: &Path) -> ScanReport {
         datasets,
         lock_files,
         temp_files,
+        unreadable_paths,
         total_size_bytes,
     }
 }

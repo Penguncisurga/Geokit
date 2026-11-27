@@ -335,13 +335,31 @@ fn send_live_request(port: u16, payload: &Value) -> Result<Value> {
     stream.set_read_timeout(Some(Duration::from_secs(300)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
-    let msg = format!("{}\n", serde_json::to_string(payload)?);
+    let mut req_val = payload.clone();
+    if let (Some(obj), Some(tok)) = (
+        req_val.as_object_mut(),
+        crate::engine::get_or_create_local_token(),
+    ) {
+        obj.entry("token").or_insert_with(|| json!(tok));
+    }
+    let msg = format!("{}\n", serde_json::to_string(&req_val)?);
     stream.write_all(msg.as_bytes())?;
     stream.flush()?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    if let Err(e) = reader.read_line(&mut line) {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ) {
+            bail!(
+                "Timed out waiting for ArcMap/ArcGIS Pro Live Bridge on 127.0.0.1:{port}.\n\
+                 Hint: Check if a modal dialog or pop-up window is open inside ArcMap/ArcGIS Pro, close it, and retry."
+            );
+        }
+        return Err(e.into());
+    }
     if line.trim().is_empty() {
         bail!("Empty response from GeoKit ArcMap Live Bridge.");
     }

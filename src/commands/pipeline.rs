@@ -106,6 +106,16 @@ fn is_arcpy_step(args: &[String]) -> bool {
     false
 }
 
+struct TempDaemonGuard(Option<u16>);
+
+impl Drop for TempDaemonGuard {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = stop_daemon(p);
+        }
+    }
+}
+
 fn run_pipeline(
     file: &Path,
     dry_run: bool,
@@ -136,7 +146,8 @@ fn run_pipeline(
     );
 
     // Auto-start a temporary warm ArcPy daemon when running 2+ ArcPy steps so `import arcpy` runs ONCE!
-    let mut temp_daemon_port: Option<u16> = None;
+    // Wrapped in RAII Drop guard so the daemon is ALWAYS stopped even on early errors.
+    let mut temp_daemon_guard = TempDaemonGuard(None);
     let arcpy_steps = pipeline
         .steps
         .iter()
@@ -165,7 +176,7 @@ fn run_pipeline(
                 )
                 .is_ok()
                 {
-                    temp_daemon_port = Some(p);
+                    temp_daemon_guard.0 = Some(p);
                 }
             }
         }
@@ -219,9 +230,7 @@ fn run_pipeline(
         }
     }
 
-    if let Some(p) = temp_daemon_port {
-        let _ = stop_daemon(p);
-    }
+    drop(temp_daemon_guard);
 
     if let Some(err) = fatal_err {
         return Err(err);

@@ -42,26 +42,55 @@ pub enum FetchCommand {
         /// Target EPSG code when --clip-aoi is set (auto-detected from AOI .prj UTM zone if omitted)
         #[arg(long)]
         epsg: Option<u32>,
+        /// Maximum number of 1x1-degree SRTM tiles allowed in a single download (safety guard, default: 16)
+        #[arg(long, default_value_t = 16)]
+        max_tiles: usize,
     },
 }
 
 fn resolve_bbox(aoi: Option<&Path>, bbox_str: Option<&str>) -> Result<(f64, f64, f64, f64)> {
-    if let Some(s) = bbox_str {
-        let parts: Vec<f64> = s
-            .split(',')
-            .filter_map(|p| p.trim().parse::<f64>().ok())
-            .collect();
-        if parts.len() != 4 {
-            bail!("--bbox must have 4 comma-separated numbers: min_lon,min_lat,max_lon,max_lat");
+    let (min_lon, min_lat, max_lon, max_lat) = if let Some(s) = bbox_str {
+        let raw_parts: Vec<&str> = s.split(',').collect();
+        if raw_parts.len() != 4 {
+            bail!("--bbox must have exactly 4 comma-separated numbers: min_lon,min_lat,max_lon,max_lat");
         }
-        return Ok((parts[0], parts[1], parts[2], parts[3]));
+        let mut vals = [0.0f64; 4];
+        for (i, tok) in raw_parts.iter().enumerate() {
+            let v = tok.trim().parse::<f64>().map_err(|_| {
+                anyhow::anyhow!(
+                    "Invalid number '{}' in --bbox (expected min_lon,min_lat,max_lon,max_lat)",
+                    tok.trim()
+                )
+            })?;
+            if !v.is_finite() {
+                bail!("Non-finite coordinate '{}' in --bbox", tok.trim());
+            }
+            vals[i] = v;
+        }
+        (vals[0], vals[1], vals[2], vals[3])
+    } else if let Some(path) = aoi {
+        read_wgs84_bbox(path)?
+    } else {
+        bail!(
+            "Provide either --aoi <poly.shp|.geojson> or --bbox \"min_lon,min_lat,max_lon,max_lat\"."
+        );
+    };
+
+    if !min_lon.is_finite() || !min_lat.is_finite() || !max_lon.is_finite() || !max_lat.is_finite()
+    {
+        bail!("AOI bounding box contains non-finite coordinates.");
     }
-    if let Some(path) = aoi {
-        return read_wgs84_bbox(path);
+    if min_lon < -180.0 || max_lon > 180.0 || min_lat < -90.0 || max_lat > 90.0 {
+        bail!(
+            "Bounding box ({min_lon}, {min_lat}, {max_lon}, {max_lat}) is out of WGS84 range (-180..180, -90..90)."
+        );
     }
-    bail!(
-        "Provide either --aoi <poly.shp|.geojson> or --bbox \"min_lon,min_lat,max_lon,max_lat\"."
-    );
+    if min_lon >= max_lon || min_lat >= max_lat {
+        bail!(
+            "Invalid bounding box ordering ({min_lon}, {min_lat}, {max_lon}, {max_lat}): require min_lon < max_lon and min_lat < max_lat."
+        );
+    }
+    Ok((min_lon, min_lat, max_lon, max_lat))
 }
 
 fn curl_post(url: &str, body: &str) -> Result<String> {
@@ -70,7 +99,7 @@ fn curl_post(url: &str, body: &str) -> Result<String> {
             "-4",
             "-fsSL",
             "-A",
-            "geokit-gis-cli/2.4 (+https://github.com/Penguncisurga/Geokit)",
+            "geokit-gis-cli/2.6 (+https://github.com/Penguncisurga/Geokit)",
             "--connect-timeout",
             "10",
             "--max-time",
@@ -79,6 +108,7 @@ fn curl_post(url: &str, body: &str) -> Result<String> {
             "POST",
             "--data-urlencode",
             &format!("data={body}"),
+            "--",
             url,
         ])
         .output()
@@ -91,52 +121,103 @@ fn curl_post(url: &str, body: &str) -> Result<String> {
 }
 
 fn curl_download(url: &str, dst: &Path) -> Result<()> {
+    let part = dst.with_extension(format!(
+        "{}.part",
+        dst.extension().and_then(|e| e.to_str()).unwrap_or("tmp")
+    ));
     let out = Command::new("curl")
         .args([
             "-fsSL",
+            "--retry",
+            "2",
+            "--retry-delay",
+            "2",
             "--max-time",
             "120",
             "-o",
-            &dst.to_string_lossy(),
+            &part.to_string_lossy(),
+            "--",
             url,
         ])
         .output()
         .context("Failed to execute `curl`.")?;
     if !out.status.success() {
+        let _ = fs::remove_file(&part);
         let err = String::from_utf8_lossy(&out.stderr);
         bail!("Download failed ({url}): {err}");
     }
+    if fs::metadata(&part).map(|m| m.len()).unwrap_or(0) == 0 {
+        let _ = fs::remove_file(&part);
+        bail!("Downloaded file from {url} is empty.");
+    }
+    fs::rename(&part, dst).with_context(|| format!("Failed to finalize {}", dst.display()))?;
     Ok(())
 }
 
 fn decompress_gz(gz_path: &Path, dst_path: &Path) -> Result<()> {
+    let dst_part = dst_path.with_extension(format!(
+        "{}.part",
+        dst_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("tmp")
+    ));
     #[cfg(windows)]
     {
-        let script = format!(
-            "$in=[IO.File]::OpenRead('{}');$gz=New-Object IO.Compression.GZipStream($in,[IO.Compression.CompressionMode]::Decompress);$out=[IO.File]::Create('{}');$gz.CopyTo($out);$out.Close();$gz.Close();$in.Close()",
-            gz_path.display().to_string().replace('\'', "''"),
-            dst_path.display().to_string().replace('\'', "''"),
-        );
+        // Pass file paths strictly via environment variables (no string interpolation into PowerShell)
+        // and enforce a 100 MB decompression cap against GZip bombs.
+        let script = r#"
+$ErrorActionPreference = 'Stop'
+$src = $env:GK_GZ_SRC
+$dst = $env:GK_GZ_DST
+$maxBytes = 104857600
+$in = [IO.File]::OpenRead($src)
+$gz = New-Object IO.Compression.GZipStream($in, [IO.Compression.CompressionMode]::Decompress)
+$out = [IO.File]::Create($dst)
+try {
+    $buf = New-Object byte[] 65536
+    $total = 0
+    while (($n = $gz.Read($buf, 0, $buf.Length)) -gt 0) {
+        $total += $n
+        if ($total -gt $maxBytes) { throw "Decompressed file exceeds 100 MB safety limit" }
+        $out.Write($buf, 0, $n)
+    }
+} finally {
+    $out.Close(); $gz.Close(); $in.Close()
+}
+"#;
         let status = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
+            .args(["-NoProfile", "-Command", script])
+            .env("GK_GZ_SRC", gz_path)
+            .env("GK_GZ_DST", &dst_part)
             .status()
             .context("Failed to run PowerShell GZip decompression")?;
         if !status.success() {
+            let _ = fs::remove_file(&dst_part);
             bail!("Failed to decompress {}", gz_path.display());
         }
+        fs::rename(&dst_part, dst_path)
+            .with_context(|| format!("Failed to finalize {}", dst_path.display()))?;
         let _ = fs::remove_file(gz_path);
         Ok(())
     }
     #[cfg(not(windows))]
     {
         let out = Command::new("gzip")
-            .args(["-dc", &gz_path.to_string_lossy()])
+            .args(["-dc", "--", &gz_path.to_string_lossy()])
             .output()
             .context("Failed to run gzip")?;
         if !out.status.success() {
             bail!("gzip decompression failed for {}", gz_path.display());
         }
-        fs::write(dst_path, out.stdout)?;
+        if out.stdout.len() > 104_857_600 {
+            bail!(
+                "Decompressed file exceeds 100 MB safety limit: {}",
+                gz_path.display()
+            );
+        }
+        fs::write(&dst_part, out.stdout)?;
+        fs::rename(&dst_part, dst_path)?;
         let _ = fs::remove_file(gz_path);
         Ok(())
     }
@@ -309,14 +390,23 @@ pub fn run(cmd: FetchCommand) -> Result<()> {
             out,
             clip_aoi,
             epsg,
+            max_tiles,
         } => {
             let (min_lon, min_lat, max_lon, max_lat) =
                 resolve_bbox(aoi.as_deref(), bbox.as_deref())?;
-            fs::create_dir_all(&out)?;
             let lat_start = min_lat.floor() as i32;
             let lat_end = max_lat.floor() as i32;
             let lon_start = min_lon.floor() as i32;
             let lon_end = max_lon.floor() as i32;
+
+            let tile_count = ((lat_end - lat_start + 1).max(0) as usize)
+                .saturating_mul((lon_end - lon_start + 1).max(0) as usize);
+            if tile_count == 0 || tile_count > max_tiles {
+                bail!(
+                    "Requested AOI spans {tile_count} SRTM 1x1-degree tile(s), exceeding --max-tiles {max_tiles}. Narrow your --aoi/--bbox or raise --max-tiles explicitly."
+                );
+            }
+            fs::create_dir_all(&out)?;
 
             let mut downloaded_tiles: Vec<PathBuf> = Vec::new();
             for lat in lat_start..=lat_end {

@@ -6,12 +6,13 @@ use crate::gis::bundle::{
     collect_raster_bundle, collect_shapefile_bundle, move_path, rename_sidecar_filename,
 };
 use crate::gis::scanner::{is_gdb_dir, scan_directory};
-use crate::gis::{is_gis_safe_name, sanitize_gis_name, GisCategory};
+use crate::gis::{is_gis_safe_name, sanitize_gis_name, validate_safe_workspace_dir, GisCategory};
 
 pub fn run(path: &Path, dry_run: bool) -> Result<()> {
     if !path.is_dir() {
         bail!("Path must be an existing directory: {}", path.display());
     }
+    validate_safe_workspace_dir(path)?;
 
     let report = scan_directory(path);
 

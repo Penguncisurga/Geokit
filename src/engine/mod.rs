@@ -58,6 +58,136 @@ fn daemon_disabled() -> bool {
         .unwrap_or(false)
 }
 
+pub fn geokit_home_dir() -> Option<PathBuf> {
+    env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|h| PathBuf::from(h).join(".geokit"))
+}
+
+fn generate_hex_token_64() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::time::UNIX_EPOCH;
+
+    let mut out = String::with_capacity(64);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u64;
+    for i in 0..4u64 {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u128(nanos.wrapping_add(i as u128));
+        h.write_u64(pid.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(i));
+        let v = h.finish();
+        out.push_str(&format!("{v:016x}"));
+    }
+    out
+}
+
+/// Returns the per-user localhost auth token (`GEOKIT_AUTH_TOKEN` or `~/.geokit/token`),
+/// creating `~/.geokit/token` automatically if it does not exist yet.
+pub fn get_or_create_local_token() -> Option<String> {
+    if let Ok(env_tok) = env::var("GEOKIT_AUTH_TOKEN") {
+        let t = env_tok.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    let dir = geokit_home_dir()?;
+    let tok_path = dir.join("token");
+    if let Ok(existing) = std::fs::read_to_string(&tok_path) {
+        let t = existing.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    if std::fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    let tok = generate_hex_token_64();
+    if std::fs::write(&tok_path, format!("{tok}\n")).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tok_path, std::fs::Permissions::from_mode(0o600));
+        }
+        return Some(tok);
+    }
+    None
+}
+
+/// Translates common cryptic ArcPy / ArcMap / GDAL error codes into actionable hints.
+pub fn translate_arcpy_hint(stderr: &str) -> Option<&'static str> {
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("000210") {
+        return Some("Cannot create output (ERROR 000210): check if the file is open/locked in ArcMap/ArcGIS Pro, or pass `--overwrite` if replacing an existing dataset.");
+    }
+    if lower.contains("000732") {
+        return Some("Input dataset does not exist or is not supported (ERROR 000732): verify the file path and run `geokit audit` to check for missing shapefile sidecars.");
+    }
+    if lower.contains("000824")
+        || lower.contains("spatial analyst") && lower.contains("not licensed")
+    {
+        return Some("Spatial Analyst extension is not licensed or unavailable (ERROR 000824): enable Spatial Analyst in ArcMap/ArcGIS Pro Extensions, or switch to `--engine gdal` where supported.");
+    }
+    if lower.contains("010474") {
+        return Some("Overlapping/invalid RemapRange values (ERROR 010474): ensure reclass range boundaries are strictly ascending without inverted intervals.");
+    }
+    if lower.contains("000539") {
+        return Some("Field calculation syntax or null-value error (ERROR 000539): inspect attribute values with `geokit gp values` and guard against NULL values.");
+    }
+    if lower.contains("000358") {
+        return Some("Invalid SQL WHERE expression (ERROR 000358): check field quoting and string literals for Shapefile vs File Geodatabase syntax.");
+    }
+    if lower.contains("000865") || lower.contains("000258") {
+        return Some("Output already exists or parameter path is invalid (ERROR 000865/000258): pass `--overwrite` explicitly or choose a new `--out` path.");
+    }
+    if lower.contains("000622") || lower.contains("out of memory") {
+        return Some("Tool execution ran out of memory (ERROR 000622): use 64-bit ArcGIS Pro / ArcGISx64 Background Geoprocessing, clip to AOI first, or use `--engine gdal`.");
+    }
+    if lower.contains("no raster store is configurated") {
+        return Some("Relative raster path rejected by ArcMap (ERROR 999999): pass an absolute path or update to GeoKit >= 2.6.1 which auto-normalizes paths.");
+    }
+    if lower.contains("999999") {
+        return Some("Generic ArcPy internal error (ERROR 999999): inspect geometry validity (`geokit gp repair`), shorten output filename/path, and check `~/.geokit/logs/geokit.log`.");
+    }
+    None
+}
+
+/// Appends diagnostic details to `~/.geokit/logs/geokit.log` (auto-rotated at 2 MB).
+pub fn append_diagnostic_log(context: &str, details: &str) {
+    if details.trim().is_empty() {
+        return;
+    }
+    let Some(home) = geokit_home_dir() else {
+        return;
+    };
+    let log_dir = home.join("logs");
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
+    let log_path = log_dir.join("geokit.log");
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() > 2 * 1024 * 1024 {
+            let _ = std::fs::rename(&log_path, log_dir.join("geokit.log.1"));
+        }
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut fh) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = writeln!(fh, "=== [{ts}] {context} ===\n{details}\n");
+    }
+}
+
 pub fn daemon_send(
     port: u16,
     payload: &Value,
@@ -68,7 +198,12 @@ pub fn daemon_send(
     let _ = stream.set_read_timeout(read_timeout);
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
 
-    let line = match serde_json::to_string(payload) {
+    let mut req_val = payload.clone();
+    if let (Some(obj), Some(tok)) = (req_val.as_object_mut(), get_or_create_local_token()) {
+        obj.entry("token").or_insert_with(|| json!(tok));
+    }
+
+    let line = match serde_json::to_string(&req_val) {
         Ok(s) => s,
         Err(e) => {
             return Some(Err(anyhow::anyhow!(
@@ -134,7 +269,13 @@ fn try_run_via_daemon<T: Serialize>(port: u16, label: &str, payload: &T) -> Opti
     };
     let resp = match daemon_send(port, &val, None)? {
         Ok(v) => v,
-        Err(e) => return Some(Err(e)),
+        Err(e) => {
+            eprintln!(
+                "[geokit] Warning: {label} daemon on port {port} interrupted ({e}); falling back to direct subprocess..."
+            );
+            append_diagnostic_log(&format!("daemon-fallback:{label}"), &e.to_string());
+            return None;
+        }
     };
     if let Some(out) = resp.get("stdout").and_then(|s| s.as_str()) {
         if !out.is_empty() {
@@ -142,16 +283,19 @@ fn try_run_via_daemon<T: Serialize>(port: u16, label: &str, payload: &T) -> Opti
             let _ = std::io::stdout().flush();
         }
     }
-    if let Some(err) = resp.get("stderr").and_then(|s| s.as_str()) {
-        if !err.is_empty() {
-            eprint!("{err}");
-            let _ = std::io::stderr().flush();
-        }
+    let err_str = resp.get("stderr").and_then(|s| s.as_str()).unwrap_or("");
+    if !err_str.is_empty() {
+        eprint!("{err_str}");
+        let _ = std::io::stderr().flush();
     }
     let code = resp.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
     if code == 0 {
         Some(Ok(()))
     } else {
+        append_diagnostic_log(&format!("daemon:{label}:exit-{code}"), err_str);
+        if let Some(hint) = translate_arcpy_hint(err_str) {
+            eprintln!("Hint: {hint}");
+        }
         Some(Err(anyhow::anyhow!(
             "{label} hot-worker exited with status code {code}"
         )))
@@ -392,14 +536,17 @@ fn find_default_propy() -> Option<PathBuf> {
 
 fn find_default_arcmap_python() -> Option<PathBuf> {
     let versions = ["10.8", "10.7", "10.6", "10.5", "10.4", "10.3"];
+    // Prefer 64-bit Background Geoprocessing Python over 32-bit for large raster/vector memory headroom
+    for ver in versions {
+        let p64 = PathBuf::from(format!(r"C:\Python27\ArcGISx64{ver}\python.exe"));
+        if p64.exists() {
+            return Some(p64);
+        }
+    }
     for ver in versions {
         let p = PathBuf::from(format!(r"C:\Python27\ArcGIS{ver}\python.exe"));
         if p.exists() {
             return Some(p);
-        }
-        let p64 = PathBuf::from(format!(r"C:\Python27\ArcGISx64{ver}\python.exe"));
-        if p64.exists() {
-            return Some(p64);
         }
     }
     None
@@ -586,4 +733,32 @@ pub fn run_arcmap_job<T: Serialize>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_translate_arcpy_hint_matches_common_codes() {
+        assert!(
+            translate_arcpy_hint("ERROR 000210: Cannot create output foo.shp")
+                .unwrap()
+                .contains("--overwrite")
+        );
+        assert!(
+            translate_arcpy_hint("ERROR 000824: The tool is not licensed.")
+                .unwrap()
+                .contains("Spatial Analyst")
+        );
+        assert!(translate_arcpy_hint("ERROR 010474: Invalid remap range")
+            .unwrap()
+            .contains("RemapRange"));
+        assert!(
+            translate_arcpy_hint("ERROR 999999: No raster store is configurated")
+                .unwrap()
+                .contains("absolute path")
+        );
+        assert!(translate_arcpy_hint("OK Reclassified raster -> out.tif").is_none());
+    }
 }

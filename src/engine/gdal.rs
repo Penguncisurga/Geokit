@@ -85,6 +85,81 @@ pub fn detect_gdal() -> GdalEnvironment {
         }
     }
 
+    // Check OSGeo4W installations on Windows (C:\OSGeo4W\bin, C:\OSGeo4W64\bin)
+    for osgeo_root in [PathBuf::from(r"C:\OSGeo4W"), PathBuf::from(r"C:\OSGeo4W64")] {
+        let bin = osgeo_root.join("bin");
+        if bin.join("ogr2ogr.exe").is_file() {
+            let proj_data = osgeo_root.join("share").join("proj");
+            let gdal_data = [
+                osgeo_root.join("share").join("gdal"),
+                osgeo_root
+                    .join("apps")
+                    .join("gdal")
+                    .join("share")
+                    .join("gdal"),
+            ]
+            .into_iter()
+            .find(|p| p.is_dir());
+            return GdalEnvironment {
+                ogr2ogr: Some(bin.join("ogr2ogr.exe")),
+                ogrinfo: bin
+                    .join("ogrinfo.exe")
+                    .is_file()
+                    .then(|| bin.join("ogrinfo.exe")),
+                gdalwarp: bin
+                    .join("gdalwarp.exe")
+                    .is_file()
+                    .then(|| bin.join("gdalwarp.exe")),
+                gdaldem: bin
+                    .join("gdaldem.exe")
+                    .is_file()
+                    .then(|| bin.join("gdaldem.exe")),
+                proj_data: proj_data.is_dir().then_some(proj_data),
+                gdal_data,
+                source: Some(format!("OSGeo4W ({})", bin.display())),
+            };
+        }
+    }
+
+    // Check GDAL bundled inside ArcGIS Pro conda environment (arcgispro-py3\Library\bin)
+    let mut pro_envs = vec![
+        PathBuf::from(r"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\Library"),
+        PathBuf::from(
+            r"C:\Program Files\ArcGIS Pro\ArcGISPro\bin\Python\envs\arcgispro-py3\Library",
+        ),
+    ];
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        pro_envs.push(
+            PathBuf::from(local_app_data)
+                .join(r"Programs\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\Library"),
+        );
+    }
+    for lib in pro_envs {
+        let bin = lib.join("bin");
+        if bin.join("ogr2ogr.exe").is_file() {
+            let proj_data = lib.join("share").join("proj");
+            let gdal_data = lib.join("share").join("gdal");
+            return GdalEnvironment {
+                ogr2ogr: Some(bin.join("ogr2ogr.exe")),
+                ogrinfo: bin
+                    .join("ogrinfo.exe")
+                    .is_file()
+                    .then(|| bin.join("ogrinfo.exe")),
+                gdalwarp: bin
+                    .join("gdalwarp.exe")
+                    .is_file()
+                    .then(|| bin.join("gdalwarp.exe")),
+                gdaldem: bin
+                    .join("gdaldem.exe")
+                    .is_file()
+                    .then(|| bin.join("gdaldem.exe")),
+                proj_data: proj_data.is_dir().then_some(proj_data),
+                gdal_data: gdal_data.is_dir().then_some(gdal_data),
+                source: Some(format!("ArcGIS Pro GDAL ({})", bin.display())),
+            };
+        }
+    }
+
     GdalEnvironment {
         ogr2ogr: None,
         ogrinfo: None,

@@ -63,17 +63,32 @@ fn test_audit_organize_sanitize_clean_workflow() {
     assert!(root.join("02_Raster").join("dem_wilayah.tfw").exists());
     assert!(root.join("03_Geodatabase").join("data_proyek.gdb").is_dir());
 
-    // 4. Clean lock files
-    let clean_out = geokit_bin()
+    // 4. Clean: default Safe Mode protects .gdb internal .lock files!
+    let gdb_lock = root
+        .join("03_Geodatabase")
+        .join("data_proyek.gdb")
+        .join("a00000001.lock");
+    let loose_tmp = root.join("scratch.tmp");
+    fs::write(&loose_tmp, b"tmp").unwrap();
+
+    let clean_safe = geokit_bin()
         .args(["clean", root.to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(clean_out.status.success());
-    assert!(!root
-        .join("03_Geodatabase")
-        .join("data_proyek.gdb")
-        .join("a00000001.lock")
-        .exists());
+    assert!(clean_safe.status.success());
+    assert!(!loose_tmp.exists(), "loose .tmp must be cleaned");
+    assert!(
+        gdb_lock.exists(),
+        "default clean must NOT delete .lock inside .gdb without --include-gdb-locks"
+    );
+
+    // Explicit --include-gdb-locks removes .gdb lock while preserving .gdbtable
+    let clean_gdb = geokit_bin()
+        .args(["clean", root.to_str().unwrap(), "--include-gdb-locks"])
+        .output()
+        .unwrap();
+    assert!(clean_gdb.status.success());
+    assert!(!gdb_lock.exists());
     // Ensure gdb internal table was untouched
     assert!(root
         .join("03_Geodatabase")
@@ -566,4 +581,150 @@ fn test_fetch_osm_safe_mode_refuses_overwrite_without_flag() {
         fs::read_to_string(&existing).unwrap(),
         r#"{"sentinel":"keep-me"}"#
     );
+}
+
+#[test]
+fn test_clean_blocks_protected_root_and_workspace_confinement() {
+    let root_path = if cfg!(windows) { r"C:\" } else { "/" };
+    let res_root = geokit_bin().args(["clean", root_path]).output().unwrap();
+    assert!(!res_root.status.success());
+    let stderr_root = String::from_utf8_lossy(&res_root.stderr);
+    assert!(
+        stderr_root.contains("filesystem root"),
+        "expected root block error, got: {stderr_root}"
+    );
+
+    let allowed = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let res_outside = geokit_bin()
+        .args(["clean", outside.path().to_str().unwrap()])
+        .env("GEOKIT_WORKSPACE_ROOT", allowed.path())
+        .output()
+        .unwrap();
+    assert!(!res_outside.status.success());
+    let stderr_out = String::from_utf8_lossy(&res_outside.stderr);
+    assert!(
+        stderr_out.contains("GEOKIT_WORKSPACE_ROOT"),
+        "expected confinement error, got: {stderr_out}"
+    );
+}
+
+#[test]
+fn test_fetch_bbox_validation_and_dem_tile_cap() {
+    let dir = tempdir().unwrap();
+    let out_s = dir.path().to_str().unwrap();
+
+    // Malformed token must fail (never silently skipped!)
+    let bad_tok = geokit_bin()
+        .args(["fetch", "osm", "--bbox", "110,bad,111,-6", "--out", out_s])
+        .output()
+        .unwrap();
+    assert!(!bad_tok.status.success());
+
+    // Inverted min/max must fail
+    let inv = geokit_bin()
+        .args(["fetch", "osm", "--bbox", "111,-6,110,-7", "--out", out_s])
+        .output()
+        .unwrap();
+    assert!(!inv.status.success());
+
+    // Out-of-WGS84-range must fail
+    let oor = geokit_bin()
+        .args(["fetch", "osm", "--bbox", "200,-7,201,-6", "--out", out_s])
+        .output()
+        .unwrap();
+    assert!(!oor.status.success());
+
+    // Huge DEM bbox exceeding --max-tiles must fail fast offline
+    let huge = geokit_bin()
+        .args([
+            "fetch",
+            "dem",
+            "--bbox",
+            "100,-10,120,5",
+            "--max-tiles",
+            "4",
+            "--out",
+            out_s,
+        ])
+        .output()
+        .unwrap();
+    assert!(!huge.status.success());
+    let stderr = String::from_utf8_lossy(&huge.stderr);
+    assert!(
+        stderr.contains("exceeding --max-tiles"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_mcp_readonly_mode_blocks_mutating_and_allows_readonly() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempdir().unwrap();
+    let root_json = serde_json::to_string(dir.path().to_str().unwrap()).unwrap();
+
+    let mut child = geokit_bin()
+        .arg("mcp")
+        .env("GEOKIT_MCP_READONLY", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || {
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"geokit_doctor","arguments":{{}}}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"geokit_clean","arguments":{{"path":{root_json}}}}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"geokit_clean","arguments":{{"path":{root_json},"dry_run":true}}}}}}"#
+        )
+        .unwrap();
+    });
+
+    let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert!(output.status.success());
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout_str
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 3);
+
+    let r1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(r1["result"]["isError"], false);
+
+    let r2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(r2["result"]["isError"], true);
+    assert!(r2["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("GEOKIT_MCP_READONLY"));
+
+    let r3: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(r3["result"]["isError"], false);
+}
+
+#[test]
+fn test_doctor_json_reports_version_and_bridges() {
+    let res = geokit_bin().args(["doctor", "--json"]).output().unwrap();
+    assert!(res.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&res.stdout).expect("valid doctor JSON");
+    assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
+    assert!(parsed["bridges"]["live_bridge_port"].as_u64().is_some());
+    assert!(parsed["bridges"]["arcmap_daemon_port"].as_u64().is_some());
+    assert!(parsed["bridges"]["arcgis_daemon_port"].as_u64().is_some());
 }

@@ -98,6 +98,9 @@ enum Commands {
         /// Also remove .shp.xml and .aux.xml metadata sidecars
         #[arg(long)]
         include_xml: bool,
+        /// Also remove .lock files inside File Geodatabases (.gdb) — close ArcGIS/QGIS first!
+        #[arg(long)]
+        include_gdb_locks: bool,
         /// Preview files that would be deleted
         #[arg(long)]
         dry_run: bool,
@@ -257,8 +260,9 @@ fn real_main() -> Result<()> {
         Commands::Clean {
             path,
             include_xml,
+            include_gdb_locks,
             dry_run,
-        } => commands::clean::run(&path, include_xml, dry_run),
+        } => commands::clean::run(&path, include_xml, include_gdb_locks, dry_run),
         Commands::Gp { command } => {
             commands::gp::run(command, effective_propy, &cfg, effective_engine)
         }

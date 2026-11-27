@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::config::FolderConfig;
 use crate::gis::bundle::{collect_raster_bundle, collect_shapefile_bundle, move_path};
 use crate::gis::scanner::{is_gdb_dir, scan_directory};
-use crate::gis::GisCategory;
+use crate::gis::{validate_safe_workspace_dir, GisCategory};
 
 pub fn run(
     path: &Path,
@@ -15,6 +15,10 @@ pub fn run(
 ) -> Result<()> {
     if !path.is_dir() {
         bail!("Path must be an existing directory: {}", path.display());
+    }
+    validate_safe_workspace_dir(path)?;
+    if let Some(out) = output {
+        validate_safe_workspace_dir(out)?;
     }
 
     let target_root = output.unwrap_or(path);

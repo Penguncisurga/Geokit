@@ -452,6 +452,26 @@ def _handle_request(req):
     return {"ok": False, "error": f"Unsupported action in ArcGIS Pro Live Bridge: {action}"}
 
 
+def _verify_local_token(req_token):
+    import hmac
+
+    expected = os.environ.get("GEOKIT_AUTH_TOKEN", "").strip()
+    if not expected:
+        home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+        tok_path = os.path.join(home, ".geokit", "token")
+        if os.path.isfile(tok_path):
+            try:
+                with open(tok_path, "r", encoding="utf-8") as fh:
+                    expected = fh.read().strip()
+            except Exception:
+                expected = ""
+    if not expected:
+        return True
+    if not isinstance(req_token, str):
+        return False
+    return hmac.compare_digest(req_token, expected)
+
+
 def _client_worker(conn):
     max_bytes = 10 * 1024 * 1024
     try:
@@ -471,6 +491,9 @@ def _client_worker(conn):
         if not line:
             return
         req = json.loads(line)
+        if not _verify_local_token(req.get("token")):
+            conn.sendall((json.dumps({"ok": False, "error": "Unauthorized: invalid or missing GeoKit local auth token"}) + "\n").encode("utf-8"))
+            return
         try:
             resp = _handle_request(req)
         except Exception as exc:

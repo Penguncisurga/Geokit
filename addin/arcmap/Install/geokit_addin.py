@@ -883,6 +883,31 @@ def _drain_queue_callback(hwnd, msg, id_event, dw_time):
             done_evt.set()
 
 
+def _verify_local_token(req_token):
+    expected = os.environ.get("GEOKIT_AUTH_TOKEN", "").strip()
+    if not expected:
+        home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+        tok_path = os.path.join(home, ".geokit", "token")
+        if os.path.isfile(tok_path):
+            try:
+                with open(tok_path, "r") as fh:
+                    expected = fh.read().strip()
+            except Exception:
+                expected = ""
+    if not expected:
+        return True
+    if not isinstance(req_token, basestring):
+        return False
+    a = str(req_token)
+    b = str(expected)
+    if len(a) != len(b):
+        return False
+    diff = 0
+    for x, y in zip(a, b):
+        diff |= ord(x) ^ ord(y)
+    return diff == 0
+
+
 def _serve_client(conn):
     max_bytes = 10 * 1024 * 1024  # 10 MB safety cap
     try:
@@ -900,6 +925,10 @@ def _serve_client(conn):
         if not data:
             return
         req = json.loads(data.decode("utf-8").strip())
+        if not _verify_local_token(req.get("token")):
+            err = (json.dumps({"ok": False, "error": "Unauthorized: invalid or missing GeoKit local auth token"}) + "\n").encode("utf-8")
+            conn.sendall(err)
+            return
         holder = {}
         done_evt = threading.Event()
         _CMD_QUEUE.put((req, holder, done_evt))

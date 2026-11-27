@@ -625,12 +625,122 @@ fn bool_arg(args: &Value, key: &str) -> bool {
     args.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
+fn mcp_readonly_enabled() -> bool {
+    std::env::var("GEOKIT_MCP_READONLY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn is_readonly_mcp_call(name: &str, args: &Value) -> bool {
+    if bool_arg(args, "dry_run") {
+        return true;
+    }
+    match name {
+        "geokit_doctor" | "geokit_audit" | "geokit_qa" => true,
+        "geokit_summary" => str_arg(args, "out").is_none(),
+        "geokit_gp" => matches!(
+            str_arg(args, "action"),
+            Some("info" | "values" | "tools" | "tool-usage")
+        ),
+        "geokit_layout" => matches!(str_arg(args, "action"), Some("list")),
+        "geokit_map_links" => matches!(str_arg(args, "action"), Some("broken-links")),
+        "geokit_live" => matches!(
+            str_arg(args, "action"),
+            Some("ping" | "layers" | "layer-info" | "tools" | "tool-usage")
+        ),
+        "geokit_daemon" => matches!(str_arg(args, "action"), Some("status")),
+        _ => false,
+    }
+}
+
+fn validate_mcp_workspace_paths(args: &Value) -> Result<(), String> {
+    if std::env::var("GEOKIT_WORKSPACE_ROOT")
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
+        return Ok(());
+    }
+    let path_keys = [
+        "path", "input", "out", "output", "aoi", "file", "dem", "mask", "with", "join", "zones",
+        "band_a", "band_b", "out_poly", "lyr_file", "logo",
+    ];
+    for k in path_keys {
+        if let Some(p) = str_arg(args, k) {
+            if let Err(e) = crate::gis::validate_within_workspace_root(std::path::Path::new(p)) {
+                return Err(e.to_string());
+            }
+        }
+    }
+    if let Some(arr) = args.get("inputs").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(p) = item.as_str() {
+                if let Err(e) = crate::gis::validate_within_workspace_root(std::path::Path::new(p))
+                {
+                    return Err(e.to_string());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn append_mcp_audit_log(tool: &str, read_only: bool, is_error: bool, duration_ms: u128) {
+    let Some(home) = crate::engine::geokit_home_dir() else {
+        return;
+    };
+    let log_dir = home.join("logs");
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
+    let log_path = log_dir.join("mcp_audit.jsonl");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = json!({
+        "ts_unix": ts,
+        "tool": tool,
+        "read_only": read_only,
+        "is_error": is_error,
+        "duration_ms": duration_ms,
+    });
+    if let Ok(mut fh) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = writeln!(fh, "{entry}");
+    }
+}
+
 fn execute_tool(name: &str, args: &Value) -> (String, bool) {
+    let started = std::time::Instant::now();
+    let read_only = is_readonly_mcp_call(name, args);
+    if mcp_readonly_enabled() && !read_only {
+        let msg =
+            format!("Blocked mutating MCP tool '{name}' because GEOKIT_MCP_READONLY is enabled.");
+        append_mcp_audit_log(name, read_only, true, started.elapsed().as_millis());
+        return (msg, true);
+    }
+    if let Err(msg) = validate_mcp_workspace_paths(args) {
+        append_mcp_audit_log(name, read_only, true, started.elapsed().as_millis());
+        return (msg, true);
+    }
+
+    let (text, is_error) = execute_tool_inner(name, args);
+    append_mcp_audit_log(name, read_only, is_error, started.elapsed().as_millis());
+    (text, is_error)
+}
+
+fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
     let mut cli_args: Vec<String> = Vec::new();
 
     if let Some(eng) = str_arg(args, "engine") {
         cli_args.push("--engine".into());
         cli_args.push(eng.into());
+    }
+    if bool_arg(args, "overwrite") {
+        cli_args.push("--overwrite".into());
     }
 
     match name {
@@ -672,6 +782,9 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
             cli_args.extend(["clean".into(), path.into()]);
             if bool_arg(args, "include_xml") {
                 cli_args.push("--include-xml".into());
+            }
+            if bool_arg(args, "include_gdb_locks") {
+                cli_args.push("--include-gdb-locks".into());
             }
             if bool_arg(args, "dry_run") {
                 cli_args.push("--dry-run".into());
@@ -1249,15 +1362,24 @@ fn execute_tool(name: &str, args: &Value) -> (String, bool) {
         .output()
     {
         Ok(output) => {
+            const MAX_MCP_OUTPUT_BYTES: usize = 1024 * 1024;
             let stdout_str = String::from_utf8_lossy(&output.stdout);
             let stderr_str = String::from_utf8_lossy(&output.stderr);
-            let combined = if stderr_str.trim().is_empty() {
+            let mut combined = if stderr_str.trim().is_empty() {
                 stdout_str.into_owned()
             } else if stdout_str.trim().is_empty() {
                 stderr_str.into_owned()
             } else {
                 format!("{stdout_str}\n--- stderr ---\n{stderr_str}")
             };
+            if combined.len() > MAX_MCP_OUTPUT_BYTES {
+                let mut cut = MAX_MCP_OUTPUT_BYTES;
+                while !combined.is_char_boundary(cut) && cut > 0 {
+                    cut -= 1;
+                }
+                combined.truncate(cut);
+                combined.push_str("\n...[output truncated at 1 MB safety limit]");
+            }
             (combined, !output.status.success())
         }
         Err(e) => (format!("Failed to run geokit: {e}"), true),

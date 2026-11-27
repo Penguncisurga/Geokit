@@ -1791,6 +1791,31 @@ def _run_payload_captured(payload):
     return code, _safe_u(buf_out.getvalue()), _safe_u(buf_err.getvalue())
 
 
+def _verify_local_token(req_token):
+    expected = os.environ.get("GEOKIT_AUTH_TOKEN", "").strip()
+    if not expected:
+        home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+        tok_path = os.path.join(home, ".geokit", "token")
+        if os.path.isfile(tok_path):
+            try:
+                with open(tok_path, "r") as fh:
+                    expected = fh.read().strip()
+            except Exception:
+                expected = ""
+    if not expected:
+        return True
+    if not isinstance(req_token, basestring):
+        return False
+    a = str(req_token)
+    b = str(expected)
+    if len(a) != len(b):
+        return False
+    diff = 0
+    for x, y in zip(a, b):
+        diff |= ord(x) ^ ord(y)
+    return diff == 0
+
+
 def _serve_daemon(port, idle_minutes=30):
     import socket
     import time
@@ -1840,6 +1865,10 @@ def _serve_daemon(port, idle_minutes=30):
                 if not raw:
                     continue
                 payload = json.loads(raw)
+                if not _verify_local_token(payload.get("token")):
+                    err_resp = {"ok": False, "code": 401, "stdout": "", "stderr": "Unauthorized: invalid or missing GeoKit local auth token\n"}
+                    conn.sendall((json.dumps(err_resp) + "\n").encode("utf-8"))
+                    continue
                 action = payload.get("action")
                 if action == "__ping__":
                     resp = {
