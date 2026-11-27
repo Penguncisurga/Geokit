@@ -3073,6 +3073,227 @@ def cmd_raster_georef(payload):
     return 0
 
 
+def _esc_html(val):
+    s = str(val)
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _find_field_ci(dataset, target):
+    for f in arcpy.ListFields(dataset):
+        if f.name.lower() == target.lower():
+            return f.name
+    return None
+
+
+def _safe_geodesic_ha(geom, is_geo):
+    if geom is None:
+        return 0.0
+    try:
+        return float(geom.getArea("GEODESIC", "HECTARES"))
+    except Exception:
+        return _geom_area_m2(geom, is_geo) / 10000.0
+
+
+def cmd_change(payload):
+    t1 = payload["input"]
+    t2 = payload["overlay"]
+    f1_req = payload["in_field"]
+    f2_req = payload.get("join_field") or f1_req
+    out_path = payload["out"]
+    table_out = payload.get("table")
+    as_json = bool(payload.get("json", False))
+    overwrite = _is_overwrite(payload)
+
+    err = _check_safe_output(out_path, [t1, t2], overwrite)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    if table_out:
+        err_tbl = _check_safe_output(table_out, [t1, t2], overwrite)
+        if err_tbl:
+            print(err_tbl, file=sys.stderr)
+            return 1
+
+    f1 = _find_field_ci(t1, f1_req)
+    if not f1:
+        print(f"Field '{f1_req}' not found in T1 dataset: {t1}", file=sys.stderr)
+        return 1
+    f2 = _find_field_ci(t2, f2_req)
+    if not f2:
+        print(f"Field '{f2_req}' not found in T2 dataset: {t2}", file=sys.stderr)
+        return 1
+
+    ensure_output_container(out_path, is_batch=False)
+    tmp_t1 = os.path.join("in_memory", "gk_chg_t1")
+    tmp_t2 = os.path.join("in_memory", "gk_chg_t2")
+    tmp_inter = os.path.join("in_memory", "gk_chg_inter")
+
+    totals = {}
+    try:
+        for tmp in (tmp_t1, tmp_t2, tmp_inter):
+            if arcpy.Exists(tmp):
+                arcpy.management.Delete(tmp)
+
+        arcpy.management.CopyFeatures(t1, tmp_t1)
+        arcpy.management.AddField(tmp_t1, "GK_T1", "TEXT", field_length=64)
+        with arcpy.da.UpdateCursor(tmp_t1, [f1, "GK_T1"]) as uc:
+            for row in uc:
+                val = "<NULL>" if row[0] is None or str(row[0]).strip() == "" else str(row[0]).strip()
+                row[1] = val[:64]
+                uc.updateRow(row)
+
+        arcpy.management.CopyFeatures(t2, tmp_t2)
+        arcpy.management.AddField(tmp_t2, "GK_T2", "TEXT", field_length=64)
+        with arcpy.da.UpdateCursor(tmp_t2, [f2, "GK_T2"]) as uc:
+            for row in uc:
+                val = "<NULL>" if row[0] is None or str(row[0]).strip() == "" else str(row[0]).strip()
+                row[1] = val[:64]
+                uc.updateRow(row)
+
+        arcpy.analysis.Intersect([tmp_t1, tmp_t2], tmp_inter)
+        arcpy.management.Dissolve(tmp_inter, out_path, ["GK_T1", "GK_T2"])
+
+        existing = {f.name.upper() for f in arcpy.ListFields(out_path)}
+        if "KLAS_T1" not in existing:
+            arcpy.management.AddField(out_path, "KLAS_T1", "TEXT", field_length=64)
+        if "KLAS_T2" not in existing:
+            arcpy.management.AddField(out_path, "KLAS_T2", "TEXT", field_length=64)
+        if "PERUBAHAN" not in existing:
+            arcpy.management.AddField(out_path, "PERUBAHAN", "TEXT", field_length=128)
+        if "AREA_HA" not in existing:
+            arcpy.management.AddField(out_path, "AREA_HA", "DOUBLE")
+
+        sr = getattr(arcpy.Describe(out_path), "spatialReference", None)
+        is_geo = bool(sr and getattr(sr, "type", "") == "Geographic")
+
+        with arcpy.da.UpdateCursor(
+            out_path,
+            ["GK_T1", "GK_T2", "KLAS_T1", "KLAS_T2", "PERUBAHAN", "AREA_HA", "SHAPE@"],
+        ) as uc:
+            for row in uc:
+                c1 = str(row[0]) if row[0] is not None else "<NULL>"
+                c2 = str(row[1]) if row[1] is not None else "<NULL>"
+                ha = _safe_geodesic_ha(row[6], is_geo)
+                label = f"{c1} -> {c2}" if c1 != c2 else f"{c1} (Tetap)"
+                row[2] = c1[:64]
+                row[3] = c2[:64]
+                row[4] = label[:128]
+                row[5] = ha
+                uc.updateRow(row)
+                totals[(c1, c2)] = totals.get((c1, c2), 0.0) + ha
+
+        try:
+            arcpy.management.DeleteField(out_path, ["GK_T1", "GK_T2"])
+        except Exception:
+            pass
+    finally:
+        for tmp in (tmp_t1, tmp_t2, tmp_inter):
+            if arcpy.Exists(tmp):
+                try:
+                    arcpy.management.Delete(tmp)
+                except Exception:
+                    pass
+
+    total_ha = sum(totals.values())
+    changed_ha = sum(v for (c1, c2), v in totals.items() if c1 != c2)
+    unchanged_ha = total_ha - changed_ha
+    rows_sorted = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+    transitions = []
+    for (c1, c2), ha in rows_sorted:
+        pct = (ha / total_ha * 100.0) if total_ha > 0 else 0.0
+        transitions.append({
+            "klas_t1": c1,
+            "klas_t2": c2,
+            "perubahan": f"{c1} -> {c2}" if c1 != c2 else f"{c1} (Tetap)",
+            "changed": c1 != c2,
+            "area_ha": round(ha, 4),
+            "pct": round(pct, 2),
+        })
+
+    report = {
+        "action": "change",
+        "t1": t1,
+        "t2": t2,
+        "field_t1": f1,
+        "field_t2": f2,
+        "output": out_path,
+        "total_area_ha": round(total_ha, 4),
+        "changed_area_ha": round(changed_ha, 4),
+        "unchanged_area_ha": round(unchanged_ha, 4),
+        "changed_pct": round((changed_ha / total_ha * 100.0) if total_ha > 0 else 0.0, 2),
+        "transitions": transitions,
+    }
+
+    if table_out:
+        t_parent = os.path.dirname(table_out)
+        if t_parent:
+            os.makedirs(t_parent, exist_ok=True)
+        ext = os.path.splitext(table_out)[1].lower()
+        if ext == ".json":
+            with open(table_out, "w", encoding="utf-8") as fh:
+                json.dump(report, fh, indent=2)
+        elif ext == ".csv":
+            import csv
+            with open(table_out, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(["KLAS_T1", "KLAS_T2", "PERUBAHAN", "AREA_HA", "PERSEN"])
+                for item in transitions:
+                    w.writerow([item["klas_t1"], item["klas_t2"], item["perubahan"], item["area_ha"], item["pct"]])
+        elif ext == ".html":
+            body_rows = "".join(
+                f"<tr><td>{_esc_html(i['klas_t1'])}</td><td>{_esc_html(i['klas_t2'])}</td>"
+                f"<td>{_esc_html(i['perubahan'])}</td><td style='text-align:right'>{i['area_ha']:.2f}</td>"
+                f"<td style='text-align:right'>{i['pct']:.2f}%</td></tr>"
+                for i in transitions
+            )
+            html_doc = (
+                "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                "<title>GeoKit Land Cover Change Matrix</title>"
+                "<style>body{font-family:system-ui,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;color:#1e293b}"
+                "table{border-collapse:collapse;width:100%;margin-top:1rem}th,td{border:1px solid #cbd5e1;padding:6px 10px}"
+                "th{background:#f1f5f9;text-align:left}</style></head><body>"
+                "<h1>Matriks Perubahan Penutupan Lahan</h1>"
+                f"<p>Total: <b>{total_ha:.2f} ha</b> | Berubah: <b>{changed_ha:.2f} ha ({report['changed_pct']:.2f}%)</b> | "
+                f"Tetap: <b>{unchanged_ha:.2f} ha</b></p>"
+                "<table><thead><tr><th>KLAS_T1</th><th>KLAS_T2</th><th>PERUBAHAN</th><th>AREA_HA</th><th>PERSEN</th></tr></thead>"
+                f"<tbody>{body_rows}</tbody></table></body></html>"
+            )
+            with open(table_out, "w", encoding="utf-8") as fh:
+                fh.write(html_doc)
+        else:
+            lines = [
+                "# Matriks Perubahan Penutupan Lahan\n",
+                f"- **Total Area:** {total_ha:.2f} ha",
+                f"- **Berubah (Changed):** {changed_ha:.2f} ha ({report['changed_pct']:.2f}%)",
+                f"- **Tetap (Unchanged):** {unchanged_ha:.2f} ha\n",
+                "| KLAS_T1 | KLAS_T2 | PERUBAHAN | AREA_HA | % |",
+                "| --- | --- | --- | ---: | ---: |",
+            ]
+            for item in transitions:
+                lines.append(
+                    f"| {item['klas_t1']} | {item['klas_t2']} | {item['perubahan']} | {item['area_ha']:.2f} | {item['pct']:.2f}% |"
+                )
+            with open(table_out, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+
+    if as_json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(f"OK Change detection -> {out_path}")
+        print(f"   Total: {total_ha:.2f} ha | Changed: {changed_ha:.2f} ha ({report['changed_pct']:.2f}%) | Unchanged: {unchanged_ha:.2f} ha")
+        for item in transitions[:15]:
+            print(f"   - {item['perubahan']}: {item['area_ha']:.2f} ha ({item['pct']:.2f}%)")
+        if table_out:
+            print(f"   Table matrix -> {table_out}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -3110,6 +3331,7 @@ HANDLERS = {
     "near": cmd_near,
     "eliminate": cmd_eliminate,
     "delete_duplicates": cmd_delete_duplicates,
+    "change": cmd_change,
     "topo_check": cmd_topo_check,
     "topo_fix": cmd_topo_fix,
     "qa_check": cmd_qa_check,
@@ -3143,6 +3365,7 @@ PROVENANCE_ACTIONS = {
     "classify",
     "calc_field",
     "union",
+    "change",
     "topo_fix",
     "raster_reclass",
     "raster_weighted_sum",

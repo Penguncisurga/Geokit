@@ -192,7 +192,7 @@ fn test_mcp_server_stdio_handshake_and_tools() {
 
     let list_resp: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 21);
 
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
@@ -758,7 +758,7 @@ fn test_mcp_tools_schema_contract_integrity() {
     let line = String::from_utf8_lossy(&output.stdout);
     let resp: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 21);
 
     let mut seen_names = HashSet::new();
     for tool in tools {
@@ -1455,4 +1455,158 @@ fn test_raster_index_input_validation_and_gdal_composite_band_order() {
     assert_eq!(bands[0]["computedMin"].as_f64().unwrap(), 200.0);
     assert_eq!(bands[0]["computedMax"].as_f64().unwrap(), 230.0);
     assert_eq!(bands[2]["computedMin"].as_f64().unwrap(), 10.0);
+}
+
+#[test]
+fn test_accuracy_cli_and_gp_change_preflight() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // 1. Classified GeoJSON polygon -> geokit accuracy sample
+    let poly_gj = root.join("classified.geojson");
+    fs::write(
+        &poly_gj,
+        r#"{
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "properties": { "KELAS": "Hutan" },
+              "geometry": { "type": "Polygon", "coordinates": [[[110.0, -7.0], [110.05, -7.0], [110.05, -6.95], [110.0, -6.95], [110.0, -7.0]]] }
+            },
+            {
+              "type": "Feature",
+              "properties": { "KELAS": "Sawah" },
+              "geometry": { "type": "Polygon", "coordinates": [[[110.06, -7.0], [110.10, -7.0], [110.10, -6.95], [110.06, -6.95], [110.06, -7.0]]] }
+            }
+          ]
+        }"#,
+    )
+    .unwrap();
+
+    let sample_dir = root.join("samples");
+    let s_out = geokit_bin()
+        .args([
+            "accuracy",
+            "sample",
+            poly_gj.to_str().unwrap(),
+            "--field",
+            "KELAS",
+            "--total",
+            "12",
+            "--min-per-class",
+            "5",
+            "--seed",
+            "7",
+            "--out",
+            sample_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        s_out.status.success(),
+        "accuracy sample stderr: {}",
+        String::from_utf8_lossy(&s_out.stderr)
+    );
+    let prefix = sample_dir.join("validation_points");
+    assert!(prefix.with_extension("shp").is_file());
+    assert!(prefix.with_extension("dbf").is_file());
+    assert!(prefix.with_extension("prj").is_file());
+    assert!(prefix.with_extension("kml").is_file());
+    assert!(prefix.with_extension("geojson").is_file());
+    assert!(prefix.with_extension("csv").is_file());
+
+    // 2. Confusion matrix + RMSE + ROC on synthetic validation CSV
+    let val_csv = root.join("validation.csv");
+    fs::write(
+        &val_csv,
+        "PRED_CLS,REF_CLS,DEM_Z,GPS_Z,PROB,LONGSOR\n\
+         Hutan,Hutan,100.0,100.0,0.92,1\n\
+         Hutan,Hutan,102.0,101.0,0.85,1\n\
+         Sawah,Sawah,50.0,51.0,0.20,0\n\
+         Sawah,Hutan,52.0,52.0,0.65,1\n\
+         Pemukiman,Pemukiman,25.0,25.0,0.10,0\n",
+    )
+    .unwrap();
+
+    let mat_md = root.join("matrix.md");
+    let m_out = geokit_bin()
+        .args([
+            "accuracy",
+            "matrix",
+            val_csv.to_str().unwrap(),
+            "--pred",
+            "PRED_CLS",
+            "--ref-field",
+            "REF_CLS",
+            "--out",
+            mat_md.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        m_out.status.success(),
+        "accuracy matrix stderr: {}",
+        String::from_utf8_lossy(&m_out.stderr)
+    );
+    let mj: serde_json::Value = serde_json::from_slice(&m_out.stdout).unwrap();
+    assert!((mj["overall_accuracy_pct"].as_f64().unwrap() - 80.0).abs() < 1e-6);
+    assert!(mat_md.is_file());
+
+    let r_out = geokit_bin()
+        .args([
+            "accuracy",
+            "rmse",
+            val_csv.to_str().unwrap(),
+            "--pred",
+            "DEM_Z",
+            "--ref",
+            "GPS_Z",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(r_out.status.success());
+    let rj: serde_json::Value = serde_json::from_slice(&r_out.stdout).unwrap();
+    assert!(rj["rmse"].as_f64().unwrap() > 0.0);
+    assert!(rj["le90"].as_f64().unwrap() > 0.0);
+
+    let roc_out = geokit_bin()
+        .args([
+            "accuracy",
+            "roc",
+            val_csv.to_str().unwrap(),
+            "--score",
+            "PROB",
+            "--label",
+            "LONGSOR",
+            "--positive",
+            "1",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(roc_out.status.success());
+    let rocj: serde_json::Value = serde_json::from_slice(&roc_out.stdout).unwrap();
+    assert!((rocj["auc"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+
+    // 3. `gp change` preflight must catch missing field in native shapefile before ArcPy starts
+    let missing_field = geokit_bin()
+        .args([
+            "--engine",
+            "arcgis",
+            "gp",
+            "change",
+            prefix.with_extension("shp").to_str().unwrap(),
+            prefix.with_extension("shp").to_str().unwrap(),
+            "--field-t1",
+            "NON_EXISTENT",
+            "--out",
+            root.join("chg.shp").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!missing_field.status.success());
+    assert!(String::from_utf8_lossy(&missing_field.stderr).contains("NON_EXISTENT"));
 }

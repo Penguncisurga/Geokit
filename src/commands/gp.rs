@@ -431,6 +431,28 @@ pub enum GpCommand {
         #[arg(long)]
         tolerance: Option<String>,
     },
+    /// Land cover / attribute change detection between T1 and T2 polygon layers (transition matrix + polygon shapefile)
+    Change {
+        /// Earlier period (T1) polygon layer (.shp or .gdb feature class)
+        t1: PathBuf,
+        /// Later period (T2) polygon layer (.shp or .gdb feature class)
+        t2: PathBuf,
+        /// Class attribute field name in T1 (e.g. TUTUPAN_18, KELAS)
+        #[arg(long)]
+        field_t1: String,
+        /// Class attribute field name in T2 (defaults to --field-t1 when omitted)
+        #[arg(long)]
+        field_t2: Option<String>,
+        /// Output change polygon dataset (.shp or .gdb feature class) with KLAS_T1, KLAS_T2, PERUBAHAN, AREA_HA
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Optional transition area matrix export (.md, .csv, .html, or .json)
+        #[arg(long)]
+        table: Option<PathBuf>,
+        /// Print JSON transition matrix to stdout
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -519,6 +541,21 @@ pub fn run(
         } => {
             check_shapefile_bundle(input)?;
             check_fields_exist_native(input, in_field)?;
+            check_output_not_locked(out)?;
+        }
+        GpCommand::Change {
+            t1,
+            t2,
+            field_t1,
+            field_t2,
+            out,
+            ..
+        } => {
+            check_shapefile_bundle(t1)?;
+            check_shapefile_bundle(t2)?;
+            check_fields_exist_native(t1, field_t1)?;
+            let f2 = field_t2.as_deref().unwrap_or(field_t1.as_str());
+            check_fields_exist_native(t2, f2)?;
             check_output_not_locked(out)?;
         }
         GpCommand::Info { input, .. }
@@ -1242,6 +1279,34 @@ pub fn run(
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
                 tolerance,
+                ..Default::default()
+            }
+        }
+        GpCommand::Change {
+            t1,
+            t2,
+            field_t1,
+            field_t2,
+            out,
+            table,
+            json,
+        } => {
+            if !t1.exists() && !is_gdb_member(&t1) {
+                bail!("T1 input path does not exist: {}", t1.display());
+            }
+            if !t2.exists() && !is_gdb_member(&t2) {
+                bail!("T2 input path does not exist: {}", t2.display());
+            }
+            let f2 = field_t2.unwrap_or_else(|| field_t1.clone());
+            GpPayload {
+                action: "change".into(),
+                input: abs_string(&t1),
+                overlay: Some(abs_string(&t2)),
+                in_field: Some(field_t1),
+                join_field: Some(f2),
+                out: Some(abs_string(&out)),
+                table: table.map(|p| abs_string(&p)),
+                json: Some(json),
                 ..Default::default()
             }
         }

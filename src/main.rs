@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use commands::accuracy::AccuracyCommand;
 use commands::daemon::DaemonCommand;
 use commands::fetch::FetchCommand;
 use commands::gp::GpCommand;
@@ -148,6 +149,11 @@ enum Commands {
     Pipeline {
         #[command(subcommand)]
         command: PipelineCommand,
+    },
+    /// Scientific accuracy assessment: stratified random sampling, Confusion Matrix (OA/Kappa/F1), RMSE/LE90/CE90, & ROC-AUC (no ArcGIS needed)
+    Accuracy {
+        #[command(subcommand)]
+        command: AccuracyCommand,
     },
     /// Run Spatial Quality Assurance checks (CRS uniformity, invalid geometry, NULL fields, polygon overlaps)
     Qa {
@@ -301,6 +307,7 @@ fn real_main() -> Result<()> {
         Commands::Pipeline { command } => {
             commands::pipeline::run(command, effective_propy, &cfg, effective_engine)
         }
+        Commands::Accuracy { command } => commands::accuracy::run(command),
         Commands::Qa {
             input,
             expected_epsg,

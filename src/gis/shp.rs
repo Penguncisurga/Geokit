@@ -635,6 +635,165 @@ fn signed_ring_area(ring: &[[f64; 2]]) -> f64 {
     -sum * 0.5
 }
 
+const WGS84_PRJ_WKT: &str = r#"GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
+
+/// Writes a valid ESRI Point Shapefile bundle (`.shp`, `.shx`, `.dbf`, `.prj` EPSG:4326)
+/// natively in pure Rust without external ArcGIS or GDAL dependencies.
+pub fn write_point_shapefile_wgs84(
+    shp_path: &Path,
+    points: &[(f64, f64)],
+    rows: &[Map<String, Value>],
+) -> Result<()> {
+    if points.len() != rows.len() {
+        bail!(
+            "Point count ({}) does not match row count ({}).",
+            points.len(),
+            rows.len()
+        );
+    }
+    if points.is_empty() {
+        bail!("Cannot write empty shapefile: {}", shp_path.display());
+    }
+    if let Some(parent) = shp_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    // 1. Build .shp + .shx
+    let mut shp_body = Vec::with_capacity(points.len() * 28);
+    let mut shx_body = Vec::with_capacity(points.len() * 8);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for (idx, &(x, y)) in points.iter().enumerate() {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+        let offset_words = ((100 + shp_body.len()) / 2) as i32;
+        shx_body.extend_from_slice(&offset_words.to_be_bytes());
+        shx_body.extend_from_slice(&10_i32.to_be_bytes());
+
+        shp_body.extend_from_slice(&((idx as i32) + 1).to_be_bytes());
+        shp_body.extend_from_slice(&10_i32.to_be_bytes());
+        shp_body.extend_from_slice(&1_i32.to_le_bytes());
+        shp_body.extend_from_slice(&x.to_le_bytes());
+        shp_body.extend_from_slice(&y.to_le_bytes());
+    }
+    let write_hdr = |len_bytes: usize| -> Vec<u8> {
+        let mut h = vec![0u8; 100];
+        h[0..4].copy_from_slice(&9994_i32.to_be_bytes());
+        h[24..28].copy_from_slice(&((len_bytes / 2) as i32).to_be_bytes());
+        h[28..32].copy_from_slice(&1000_i32.to_le_bytes());
+        h[32..36].copy_from_slice(&1_i32.to_le_bytes());
+        h[36..44].copy_from_slice(&min_x.to_le_bytes());
+        h[44..52].copy_from_slice(&min_y.to_le_bytes());
+        h[52..60].copy_from_slice(&max_x.to_le_bytes());
+        h[60..68].copy_from_slice(&max_y.to_le_bytes());
+        h
+    };
+    let mut shp_all = write_hdr(100 + shp_body.len());
+    shp_all.extend_from_slice(&shp_body);
+    let mut shx_all = write_hdr(100 + shx_body.len());
+    shx_all.extend_from_slice(&shx_body);
+
+    // 2. Build .dbf schema (ordered from first row, clamped to 10-char DBF field names)
+    let mut cols: Vec<(String, String, u8, u8)> = Vec::new(); // (orig_key, dbf_name, type, len)
+    for k in rows[0].keys() {
+        let is_num = rows
+            .iter()
+            .all(|r| matches!(r.get(k), None | Some(Value::Null) | Some(Value::Number(_))));
+        let is_float = is_num
+            && rows
+                .iter()
+                .any(|r| matches!(r.get(k), Some(Value::Number(n)) if !n.is_i64() && !n.is_u64()));
+        let mut dbf_name: String = k
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .take(10)
+            .collect();
+        if dbf_name.is_empty() {
+            dbf_name = "FIELD".into();
+        }
+        let max_str = rows
+            .iter()
+            .filter_map(|r| r.get(k))
+            .map(|v| match v {
+                Value::String(s) => s.len(),
+                Value::Null => 0,
+                other => other.to_string().len(),
+            })
+            .max()
+            .unwrap_or(16);
+        let (ftype, flen, fdec) = if is_num {
+            if is_float {
+                (b'F', 18u8, 6u8)
+            } else {
+                (b'N', 12u8, 0u8)
+            }
+        } else {
+            (b'C', (max_str.clamp(8, 128)) as u8, 0u8)
+        };
+        cols.push((k.clone(), dbf_name, ftype, flen));
+        let _ = fdec;
+    }
+    let header_len = (32 + cols.len() * 32 + 1) as u16;
+    let record_len = (1 + cols.iter().map(|c| c.3 as usize).sum::<usize>()) as u16;
+    let mut dbf = vec![0u8; header_len as usize];
+    dbf[0] = 0x03;
+    dbf[4..8].copy_from_slice(&(rows.len() as u32).to_le_bytes());
+    dbf[8..10].copy_from_slice(&header_len.to_le_bytes());
+    dbf[10..12].copy_from_slice(&record_len.to_le_bytes());
+    for (i, (_, dname, ftype, flen)) in cols.iter().enumerate() {
+        let base = 32 + i * 32;
+        let nb = dname.as_bytes();
+        let copy_n = nb.len().min(10);
+        dbf[base..base + copy_n].copy_from_slice(&nb[..copy_n]);
+        dbf[base + 11] = *ftype;
+        dbf[base + 16] = *flen;
+        dbf[base + 17] = if *ftype == b'F' { 6 } else { 0 };
+    }
+    dbf[header_len as usize - 1] = 0x0D;
+    for row in rows {
+        dbf.push(b' ');
+        for (orig_key, _, ftype, flen) in &cols {
+            let len = *flen as usize;
+            let mut cell = vec![b' '; len];
+            let s = match row.get(orig_key) {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Number(n)) => {
+                    if *ftype == b'F' {
+                        format!("{:.6}", n.as_f64().unwrap_or(0.0))
+                    } else {
+                        n.to_string()
+                    }
+                }
+                Some(other) => other.to_string(),
+            };
+            let b = s.as_bytes();
+            let n = b.len().min(len);
+            if *ftype == b'N' || *ftype == b'F' {
+                cell[len - n..].copy_from_slice(&b[..n]);
+            } else {
+                cell[..n].copy_from_slice(&b[..n]);
+            }
+            dbf.extend_from_slice(&cell);
+        }
+    }
+    dbf.push(0x1A);
+
+    fs::write(shp_path, shp_all)?;
+    fs::write(shp_path.with_extension("shx"), shx_all)?;
+    fs::write(shp_path.with_extension("dbf"), dbf)?;
+    fs::write(shp_path.with_extension("prj"), WGS84_PRJ_WKT)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,6 @@
-# GeoKit AI Agent Playbook (`AGENT_GUIDE.md` — `v2.7.2`)
+# GeoKit AI Agent Playbook (`AGENT_GUIDE.md` — `v2.9.0`)
 
-> Standard Operating Procedures (SOP) for AI assistants (Claude, Antigravity, Cursor, Codex, Gemini) controlling ArcGIS Pro, ArcMap 10.x, and GDAL via **`geokit`** CLI or **`geokit mcp`** (**20 MCP tools** + 3 built-in SOP prompts).
+> Standard Operating Procedures (SOP) for AI assistants (Claude, Antigravity, Cursor, Codex, Gemini) controlling ArcGIS Pro, ArcMap 10.x, and GDAL via **`geokit`** CLI or **`geokit mcp`** (**21 MCP tools** + 3 built-in SOP prompts).
 
 ## Golden Rules (Read First!)
 
@@ -45,10 +45,17 @@ geokit gp dissolve ./work/03_union.shp --field KELAS_RWN --out ./output/kerawana
 geokit topo fix ./output/kerawanan.shp --min-sliver 100 --out ./output/kerawanan_clean.shp
 geokit gp calc-geom ./output/kerawanan_clean.shp --unit ha
 
-# 4. QA, publishable area summary table, & standalone Leaflet webmap (zero ArcGIS needed!)
+# 4. QA, Scientific Accuracy Assessment, summary table, & standalone Leaflet webmap (zero ArcGIS needed!)
 geokit qa ./output/kerawanan_clean.shp --expected-epsg 32749 --check-nulls KELAS_RWN --strict
+geokit accuracy sample ./output/kerawanan_clean.shp --field KELAS_RWN --total 100 --min-per-class 10 --out ./output/validasi_titik
+geokit accuracy roc ./work/validasi_lapangan.csv --score TOTAL_SKOR --label KEJADIAN --positive 1 --out ./output/roc_report.md
 geokit gp summary ./output/kerawanan_clean.shp --group-by KELAS_RWN --out ./output/rekap_luas.md
 geokit webmap ./output/kerawanan_clean.shp ./work/02_clipped/batas_studi.shp --field KELAS_RWN --preset hazard-pastel --out ./output/peta_interaktif.html
+```
+
+**Change Detection (T1 vs T2):**
+```bash
+geokit gp change ./work/tuplah_2018.shp ./work/tuplah_2024.shp --field-t1 KELAS_18 --field-t2 KELAS_24 --out ./output/perubahan.shp --table ./output/matriks_perubahan.md
 ```
 
 **Raster Weighted-Sum path:** align all input rasters first with `geokit raster align <r1.tif> <r2.tif> --ref <dem_utm.tif> --out ./work/aligned`, then run `geokit raster reclass` and `geokit raster weighted-sum --inputs "r1.tif:0.4,r2.tif:0.6" --classes 5 --smooth --polygon-out ./output/zona.shp --out ./output/skor.tif`.

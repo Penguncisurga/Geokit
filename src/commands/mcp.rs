@@ -279,16 +279,20 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_gp",
-            "description": "Run batch geoprocessing, attribute inspection/scoring/classification/union, OR dynamically discover/run ANY installed ArcGIS Pro / ArcMap tool (values, classify, calc-field, union, info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join, xy2shp, convert, tools, tool-usage, run).",
+            "description": "Run batch geoprocessing, attribute inspection/scoring/classification/union/change detection, OR dynamically discover/run ANY installed ArcGIS Pro / ArcMap tool (values, classify, calc-field, union, change, info, project, clip, merge, pack, unpack, repair, buffer, dissolve, calc-geom, intersect, erase, spatial-join, xy2shp, convert, tools, tool-usage, run).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["info", "values", "classify", "calc-field", "union", "select", "export-table", "flatten-2d", "define-crs", "split", "clean-fields", "explode", "centroid", "join", "multi-buffer", "thiessen", "near", "eliminate", "delete-duplicates", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
+                        "enum": ["info", "values", "classify", "calc-field", "union", "change", "select", "export-table", "flatten-2d", "define-crs", "split", "clean-fields", "explode", "centroid", "join", "multi-buffer", "thiessen", "near", "eliminate", "delete-duplicates", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
                     },
                     "input": { "type": "string", "description": "Input file, folder, .gdb, or keyword pattern (for tools)" },
                     "inputs": { "type": "array", "items": { "type": "string" }, "description": "List of input polygon paths (for union)" },
+                    "t1": { "type": "string", "description": "Earlier period (T1) vector layer path (for change)" },
+                    "t2": { "type": "string", "description": "Later period (T2) vector layer path (for change)" },
+                    "field_t1": { "type": "string", "description": "Class field name in T1 layer (for change)" },
+                    "field_t2": { "type": "string", "description": "Optional class field name in T2 layer (for change; defaults to field_t1)" },
                     "out": { "type": "string", "description": "Output file, folder, or .gdb (when required)" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"], "description": "Backend engine" },
                     "epsg": { "type": "integer", "description": "Target EPSG code (for project or xy2shp)" },
@@ -326,6 +330,7 @@ fn tool_definitions() -> Value {
                     "search_radius": { "type": "string", "description": "Optional search radius e.g. '5000 Meters' (for near)" },
                     "min_area": { "type": "number", "description": "Minimum sliver polygon area threshold in m2 (for eliminate)" },
                     "tolerance": { "type": "string", "description": "Optional XY tolerance e.g. '0.01 Meters' (for delete-duplicates)" },
+                    "json": { "type": "boolean", "description": "Return JSON output when supported (e.g. change, values, info)" },
                     "overwrite": { "type": "boolean", "description": "Allow replacing existing output files (Safe Mode is default)" }
                 },
                 "required": ["action"]
@@ -660,6 +665,32 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["action"]
             }
+        },
+        {
+            "name": "geokit_accuracy",
+            "description": "Scientific map accuracy assessment (100% Native Rust, no ArcGIS required): generate Stratified Random validation samples (.shp/.kml/.geojson/.csv) OR compute Confusion Matrix + Kappa + F1, continuous RMSE/MAE/Bias/R2/BIG LE90/CE90, and ROC-AUC + Youden's J.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["sample", "matrix", "rmse", "roc"] },
+                    "input": { "type": "string", "description": "Input polygon shapefile/GeoJSON (sample) or validation table (.csv, .shp, .dbf, .geojson)" },
+                    "out": { "type": "string", "description": "Output directory/prefix (for sample) or optional report path (.md, .csv, .html, .json)" },
+                    "field": { "type": "string", "description": "Class attribute field name (for sample)" },
+                    "total": { "type": "integer", "description": "Total target sample points (for sample, default: 100)" },
+                    "min_per_class": { "type": "integer", "description": "Minimum samples per stratum/class (for sample, default: 10)" },
+                    "seed": { "type": "integer", "description": "Deterministic random seed (for sample, default: 42)" },
+                    "pred": { "type": "string", "description": "Predicted class/numeric field (for matrix or rmse)" },
+                    "ref_field": { "type": "string", "description": "Reference ground-truth class/numeric field (for matrix or rmse)" },
+                    "pred_x": { "type": "string", "description": "Predicted X field for 2D horizontal CE90 (for rmse)" },
+                    "pred_y": { "type": "string", "description": "Predicted Y field for 2D horizontal CE90 (for rmse)" },
+                    "ref_x": { "type": "string", "description": "Reference X field for 2D horizontal CE90 (for rmse)" },
+                    "ref_y": { "type": "string", "description": "Reference Y field for 2D horizontal CE90 (for rmse)" },
+                    "score": { "type": "string", "description": "Numeric hazard/probability score field (for roc)" },
+                    "label": { "type": "string", "description": "Binary ground-truth label field (for roc)" },
+                    "positive": { "type": "string", "description": "Positive class label value (for roc, default: '1')" }
+                },
+                "required": ["action", "input"]
+            }
         }
     ]"#,
     )
@@ -701,6 +732,9 @@ fn is_readonly_mcp_call(name: &str, args: &Value) -> bool {
             Some("ping" | "layers" | "layer-info" | "tools" | "tool-usage")
         ),
         "geokit_daemon" => matches!(str_arg(args, "action"), Some("status")),
+        "geokit_accuracy" => {
+            !matches!(str_arg(args, "action"), Some("sample")) && str_arg(args, "out").is_none()
+        }
         _ => false,
     }
 }
@@ -715,6 +749,8 @@ fn validate_mcp_workspace_paths(args: &Value) -> Result<(), String> {
     let path_keys = [
         "path",
         "input",
+        "t1",
+        "t2",
         "out",
         "output",
         "aoi",
@@ -874,6 +910,12 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             if let Some(input) = str_arg(args, "input") {
                 cli_args.push(input.into());
             }
+            if let Some(t1) = str_arg(args, "t1") {
+                cli_args.push(t1.into());
+            }
+            if let Some(t2) = str_arg(args, "t2") {
+                cli_args.push(t2.into());
+            }
             if let Some(inputs) = args.get("inputs").and_then(|v| v.as_array()) {
                 for item in inputs {
                     if let Some(s) = item.as_str() {
@@ -990,10 +1032,16 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             if let Some(tol) = str_arg(args, "tolerance") {
                 cli_args.extend(["--tolerance".into(), tol.into()]);
             }
+            if let Some(ft1) = str_arg(args, "field_t1") {
+                cli_args.extend(["--field-t1".into(), ft1.into()]);
+            }
+            if let Some(ft2) = str_arg(args, "field_t2") {
+                cli_args.extend(["--field-t2".into(), ft2.into()]);
+            }
             if let Some(lim) = args.get("limit").and_then(|v| v.as_u64()) {
                 cli_args.extend(["--limit".into(), lim.to_string()]);
             }
-            if action == "values" {
+            if action == "values" || bool_arg(args, "json") {
                 cli_args.push("--json".into());
             }
         }
@@ -1545,6 +1593,102 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
                     }
                 }
                 _ => return (format!("Unknown daemon action: {action}"), true),
+            }
+        }
+        "geokit_accuracy" => {
+            let (Some(action), Some(input)) = (str_arg(args, "action"), str_arg(args, "input"))
+            else {
+                return ("Missing required arguments: action, input".into(), true);
+            };
+            cli_args.extend(["accuracy".into(), action.into(), input.into()]);
+            match action {
+                "sample" => {
+                    let (Some(field), Some(out)) = (str_arg(args, "field"), str_arg(args, "out"))
+                    else {
+                        return (
+                            "Missing required arguments for sample: field, out".into(),
+                            true,
+                        );
+                    };
+                    cli_args.extend(["--field".into(), field.into(), "--out".into(), out.into()]);
+                    if let Some(n) = args.get("total").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--total".into(), n.to_string()]);
+                    }
+                    if let Some(m) = args.get("min_per_class").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--min-per-class".into(), m.to_string()]);
+                    }
+                    if let Some(s) = args.get("seed").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--seed".into(), s.to_string()]);
+                    }
+                }
+                "matrix" => {
+                    let (Some(pred), Some(rf)) =
+                        (str_arg(args, "pred"), str_arg(args, "ref_field"))
+                    else {
+                        return (
+                            "Missing required arguments for matrix: pred, ref_field".into(),
+                            true,
+                        );
+                    };
+                    cli_args.extend([
+                        "--pred".into(),
+                        pred.into(),
+                        "--ref-field".into(),
+                        rf.into(),
+                        "--json".into(),
+                    ]);
+                    if let Some(out) = str_arg(args, "out") {
+                        cli_args.extend(["--out".into(), out.into()]);
+                    }
+                }
+                "rmse" => {
+                    if let Some(pred) = str_arg(args, "pred") {
+                        cli_args.extend(["--pred".into(), pred.into()]);
+                    }
+                    if let Some(rf) = str_arg(args, "ref_field") {
+                        cli_args.extend(["--ref".into(), rf.into()]);
+                    }
+                    if let Some(px) = str_arg(args, "pred_x") {
+                        cli_args.extend(["--pred-x".into(), px.into()]);
+                    }
+                    if let Some(py) = str_arg(args, "pred_y") {
+                        cli_args.extend(["--pred-y".into(), py.into()]);
+                    }
+                    if let Some(rx) = str_arg(args, "ref_x") {
+                        cli_args.extend(["--ref-x".into(), rx.into()]);
+                    }
+                    if let Some(ry) = str_arg(args, "ref_y") {
+                        cli_args.extend(["--ref-y".into(), ry.into()]);
+                    }
+                    if let Some(out) = str_arg(args, "out") {
+                        cli_args.extend(["--out".into(), out.into()]);
+                    }
+                    cli_args.push("--json".into());
+                }
+                "roc" => {
+                    let (Some(score), Some(label)) =
+                        (str_arg(args, "score"), str_arg(args, "label"))
+                    else {
+                        return (
+                            "Missing required arguments for roc: score, label".into(),
+                            true,
+                        );
+                    };
+                    cli_args.extend([
+                        "--score".into(),
+                        score.into(),
+                        "--label".into(),
+                        label.into(),
+                        "--json".into(),
+                    ]);
+                    if let Some(pos) = str_arg(args, "positive") {
+                        cli_args.extend(["--positive".into(), pos.into()]);
+                    }
+                    if let Some(out) = str_arg(args, "out") {
+                        cli_args.extend(["--out".into(), out.into()]);
+                    }
+                }
+                _ => return (format!("Unknown accuracy action: {action}"), true),
             }
         }
         _ => return (format!("Unknown tool: {name}"), true),

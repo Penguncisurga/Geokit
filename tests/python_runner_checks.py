@@ -52,7 +52,7 @@ def check_handlers_parity():
         "values", "classify", "calc_field", "union", "qa_check",
         "select", "export_table", "flatten_2d", "define_crs", "split",
         "clean_fields", "explode", "centroid",
-        "join", "multi_buffer", "thiessen", "near", "eliminate", "delete_duplicates",
+        "join", "multi_buffer", "thiessen", "near", "eliminate", "delete_duplicates", "change",
         "topo_check", "topo_fix",
         "raster_mosaic", "raster_terrain", "raster_zonal_stats", "raster_reclass",
         "raster_weighted_sum", "raster_interpolate", "raster_index", "raster_contour",
