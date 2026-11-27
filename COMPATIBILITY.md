@@ -21,15 +21,15 @@ Legend:
 | `gp info`, `project`, `clip`, `merge`, `pack`, `unpack`, `xy2shp`, `convert`, `select`, `flatten-2d`, `define-crs`, `split`, `explode` | — | Yes | Yes | Yes | `xy2shp` auto-parses DMS (`7°00'12"S`, `LS`/`BT`) on all engines; `convert` supports `.gpx` & `.kmz` inputs via GDAL |
 | `gp repair`, `buffer`, `multi-buffer`, `dissolve`, `calc-geom`, `intersect`, `erase`, `spatial-join`, `union`, `join`, `thiessen`, `near`, `eliminate`, `delete-duplicates`, `values`, `classify`, `calc-field`, `clean-fields`, `centroid`, `tools`, `tool-usage`, `run` | — | Yes | Yes | No | `centroid`, `near`, `eliminate`, `delete-duplicates`, `join` work on ArcGIS Basic via cursor fallbacks; `calc-field` uses AST Safe Math |
 | `topo check`, `topo fix` | — | Yes | Yes | No | BIG topology validation (overlaps, interior gaps, slivers, dangles, crossings, duplicates) & 1-command cleanup; `--strict` exits non-zero |
-| `raster mosaic`, `terrain`, `align` | — | Yes | Yes | Yes | `align` snaps CRS, pixel size, grid, and extent to `--ref` via `gdalwarp` or `ProjectRaster` |
-| `raster zonal-stats`, `reclass`, `weighted-sum`, `interpolate`, `index`, `contour`, `extract-points` | — | Yes | Yes | No | `extract-points` falls back to `GetCellValue` without Spatial Analyst; others require **Spatial Analyst** |
-| `hydro delineate`, `basin` | — | Yes | Yes | No | Requires **Spatial Analyst** extension |
+| `raster mosaic`, `terrain`, `align`, `georef` | — | Yes | Yes | Yes | All GeoTIFF outputs use lossless **LZW** compression; `georef` parses QGIS `.points` / CSV & computes affine RMSE natively |
+| `raster zonal-stats`, `reclass`, `weighted-sum`, `interpolate`, `index`, `contour`, `extract-points`, `morphometry` | — | Yes | Yes | No | `extract-points` falls back to `GetCellValue` without Spatial Analyst; `morphometry` (TWI/TPI/Curvature) & others require **Spatial Analyst** |
+| `hydro delineate`, `basin` | — | Yes | Yes | No | Requires **Spatial Analyst** extension; writes `<out>/geokit_provenance.json` |
 | `qa` | — | Yes | Yes | No | Technical dataset QA (CRS, geometry, NULLs, pairwise polygon overlaps); `--strict` exits non-zero on issues |
 | `layout list`, `export`, `update` | — | Yes (`.aprx`) | Yes (`.mxd`) | No | `layout map-series` is ArcGIS Pro (`.aprx`) only |
 | `map broken-links`, `fix-links` | — | Yes (`.aprx`) | Yes (`.mxd`) | No | `map add-layer`, `style` are `.aprx` (ArcGIS Pro) |
-| `live *` (Port `9877`) | — | Yes (Bridge `.pyt`) | Yes (Add-In) | No | PerKaBIG 7-section layout is ArcMap Add-In; Pro bridge uses CIM symbology |
+| `live *` (Port `9877`) | — | Yes (Bridge `.pyt`) | Yes (Add-In) | No | PerKaBIG 7-section layout is ArcMap Add-In; Pro bridge uses CIM symbology; default export **300 DPI** |
 | `daemon start\|status\|stop` | — | Yes (`9879`) | Yes (`9878`) | N/A | GDAL starts natively in <0.1s; daemon auto-authenticates via `~/.geokit/token` |
-| `pipeline init\|run`, `toolbox create`, `mcp` | Yes | Yes | Yes | Yes | `pipeline run` uses RAII daemon guard; `mcp` supports `GEOKIT_MCP_READONLY=1` & `GEOKIT_WORKSPACE_ROOT` |
+| `pipeline init\|run`, `toolbox create`, `mcp` | Yes | Yes | Yes | Yes | `pipeline run` supports `--resume`, per-run logs (`pipeline-run-<ts>.log`), & RAII daemon guard; analytical tools write `<out>.geokit.json` provenance |
 
 ---
 

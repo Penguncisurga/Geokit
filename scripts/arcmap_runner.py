@@ -2613,6 +2613,111 @@ def cmd_raster_extract_points(payload):
     return 0
 
 
+def cmd_raster_morphometry(payload):
+    arcpy.CheckOutExtension("Spatial")
+    from arcpy.sa import (
+        Con,
+        Curvature,
+        Fill,
+        FlowAccumulation,
+        FlowDirection,
+        FocalStatistics,
+        Ln,
+        NbrCircle,
+        Raster,
+        Slope,
+        Tan,
+    )
+
+    dem = payload["input"]
+    out_dir = payload["out"]
+    do_twi = bool(payload.get("twi", True))
+    do_tpi = bool(payload.get("tpi", True))
+    do_curv = bool(payload.get("curvature", True))
+    tpi_rad = max(1, int(payload.get("tpi_radius") or 3))
+
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+    stem = os.path.splitext(os.path.basename(dem))[0]
+    overwrite = _is_overwrite(payload)
+    cell_x = float(arcpy.GetRasterProperties_management(dem, "CELLSIZEX").getOutput(0))
+
+    if do_twi:
+        twi_out = os.path.join(out_dir, "%s_twi.tif" % stem)
+        err = _check_safe_output(twi_out, [dem], overwrite)
+        if err:
+            sys.stderr.write(err + "\n")
+            return 1
+        filled = Fill(dem)
+        fdir = FlowDirection(filled)
+        facc = FlowAccumulation(fdir)
+        sca = (facc + 1.0) * cell_x
+        slp_rad = Slope(filled, "DEGREE") * (math.pi / 180.0)
+        tan_slp = Con(slp_rad > 0.001, Tan(slp_rad), 0.001)
+        twi = Ln(sca / tan_slp)
+        twi.save(twi_out)
+        print("[OK] TWI       -> %s" % twi_out)
+
+    if do_tpi:
+        tpi_out = os.path.join(out_dir, "%s_tpi.tif" % stem)
+        err = _check_safe_output(tpi_out, [dem], overwrite)
+        if err:
+            sys.stderr.write(err + "\n")
+            return 1
+        focal_mean = FocalStatistics(dem, NbrCircle(tpi_rad, "CELL"), "MEAN", "DATA")
+        tpi = Raster(dem) - focal_mean
+        tpi.save(tpi_out)
+        print("[OK] TPI (r=%d) -> %s" % (tpi_rad, tpi_out))
+
+    if do_curv:
+        curv_out = os.path.join(out_dir, "%s_curvature.tif" % stem)
+        err = _check_safe_output(curv_out, [dem], overwrite)
+        if err:
+            sys.stderr.write(err + "\n")
+            return 1
+        curv = Curvature(dem)
+        curv.save(curv_out)
+        print("[OK] Curvature -> %s" % curv_out)
+
+    return 0
+
+
+def cmd_raster_georef(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    epsg = int(payload["epsg"])
+    order = max(1, min(3, int(payload.get("order") or 1)))
+    gcps = payload.get("gcps") or []
+    if len(gcps) < 3:
+        sys.stderr.write("At least 3 GCPs are required for georeferencing.\n")
+        return 1
+
+    parent = os.path.dirname(out_path)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent)
+
+    desc = arcpy.Describe(src)
+    ext = desc.extent
+    rows = float(arcpy.GetRasterProperties_management(src, "ROWCOUNT").getOutput(0))
+    cols = float(arcpy.GetRasterProperties_management(src, "COLUMNCOUNT").getOutput(0))
+    dx = (ext.XMax - ext.XMin) / cols if cols > 0 else 1.0
+    dy = (ext.YMax - ext.YMin) / rows if rows > 0 else 1.0
+
+    src_pts = []
+    dst_pts = []
+    for g in gcps:
+        sx = ext.XMin + float(g["pixel_x"]) * dx
+        sy = ext.YMax - float(g["pixel_y"]) * dy
+        src_pts.append("'%s %s'" % (sx, sy))
+        dst_pts.append("'%s %s'" % (g["map_x"], g["map_y"]))
+
+    tx_type = {1: "POLYORDER1", 2: "POLYORDER2", 3: "POLYORDER3"}[order]
+    arcpy.Warp_management(src, ";".join(src_pts), ";".join(dst_pts), out_path, tx_type, "BILINEAR")
+    arcpy.DefineProjection_management(out_path, arcpy.SpatialReference(epsg))
+    print("OK Georeferenced %s (%d GCPs, %s, EPSG:%d) -> %s" % (os.path.basename(src), len(gcps), tx_type, epsg, out_path))
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -2668,9 +2773,63 @@ HANDLERS = {
     "raster_contour": cmd_raster_contour,
     "raster_align": cmd_raster_align,
     "raster_extract_points": cmd_raster_extract_points,
+    "raster_morphometry": cmd_raster_morphometry,
+    "raster_georef": cmd_raster_georef,
     "hydro_delineate": cmd_hydro_delineate,
     "hydro_basin": cmd_hydro_basin,
 }
+
+
+PROVENANCE_ACTIONS = set([
+    "classify",
+    "calc_field",
+    "union",
+    "topo_fix",
+    "raster_reclass",
+    "raster_weighted_sum",
+    "raster_interpolate",
+    "raster_index",
+    "raster_contour",
+    "raster_align",
+    "raster_morphometry",
+    "raster_georef",
+    "hydro_delineate",
+    "hydro_basin",
+])
+
+
+def _write_provenance(action, payload, engine_name, elapsed_sec):
+    if action not in PROVENANCE_ACTIONS:
+        return
+    if os.environ.get("GEOKIT_NO_PROVENANCE") in ("1", "true", "TRUE"):
+        return
+    import datetime
+
+    target = payload.get("out") or payload.get("input")
+    if not target:
+        return
+    try:
+        if os.path.isdir(target):
+            sidecar = os.path.join(target, "geokit_provenance.json")
+        else:
+            sidecar = target + ".geokit.json"
+        parent = os.path.dirname(sidecar)
+        if parent and not os.path.isdir(parent):
+            return
+        safe_params = dict((k, v) for k, v in payload.items() if k not in ("token", "gcps") and v is not None)
+        record = {
+            "geokit_provenance_version": 1,
+            "action": action,
+            "engine": engine_name,
+            "timestamp_utc": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "duration_sec": round(float(elapsed_sec), 3),
+            "output": target,
+            "parameters": safe_params,
+        }
+        with open(sidecar, "wb") as fh:
+            fh.write(json.dumps(record, indent=2).encode("utf-8"))
+    except Exception:
+        pass
 
 
 def _safe_u(val):
@@ -2684,6 +2843,7 @@ def _safe_u(val):
 
 def _run_payload_captured(payload):
     import StringIO
+    import time
     import traceback
 
     action = payload.get("action")
@@ -2695,8 +2855,14 @@ def _run_payload_captured(payload):
     buf_out, buf_err = StringIO.StringIO(), StringIO.StringIO()
     sys.stdout, sys.stderr = buf_out, buf_err
     code = 0
+    started = time.time()
+    prev_comp = getattr(arcpy.env, "compression", None)
     try:
         arcpy.env.overwriteOutput = _is_overwrite(payload)
+        try:
+            arcpy.env.compression = "LZW"
+        except Exception:
+            pass
         out_p = payload.get("out")
         if out_p and action not in ("layout_export", "raster_reclass", "raster_weighted_sum", "raster_interpolate", "raster_index"):
             in_list = [payload.get("input"), payload.get("aoi"), payload.get("mask"), payload.get("dem"), payload.get("zones")]
@@ -2706,6 +2872,8 @@ def _run_payload_captured(payload):
             if chk_err and not os.path.isdir(out_p):
                 return 1, u"", _safe_u(chk_err + "\n")
         code = int(handler(payload) or 0)
+        if code == 0:
+            _write_provenance(action, payload, "arcmap", time.time() - started)
     except SystemExit as se:
         code = int(se.code) if isinstance(se.code, int) else 1
     except Exception:
@@ -2716,6 +2884,8 @@ def _run_payload_captured(payload):
         try:
             arcpy.env.workspace = None
             arcpy.env.overwriteOutput = False
+            if prev_comp is not None:
+                arcpy.env.compression = prev_comp
         except Exception:
             pass
     return code, _safe_u(buf_out.getvalue()), _safe_u(buf_err.getvalue())
@@ -2884,7 +3054,13 @@ def main():
     if not handler:
         sys.stderr.write("Unsupported ArcMap action: %s\n" % action)
         sys.exit(2)
+    import time
+
     arcpy.env.overwriteOutput = _is_overwrite(payload)
+    try:
+        arcpy.env.compression = "LZW"
+    except Exception:
+        pass
     out_p = payload.get("out")
     if out_p and action not in ("layout_export", "raster_reclass", "raster_weighted_sum", "raster_interpolate", "raster_index"):
         in_list = [payload.get("input"), payload.get("aoi"), payload.get("mask"), payload.get("dem"), payload.get("zones")]
@@ -2894,7 +3070,10 @@ def main():
         if chk_err and not os.path.isdir(out_p):
             sys.stderr.write(chk_err + "\n")
             sys.exit(1)
+    t0 = time.time()
     code = handler(payload)
+    if int(code or 0) == 0:
+        _write_provenance(action, payload, "arcmap", time.time() - t0)
     sys.exit(code)
 
 

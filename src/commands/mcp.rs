@@ -375,12 +375,12 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_raster",
-            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, point-to-raster interpolation (IDW/Spline/Kriging), satellite spectral index (NDVI/NDWI/NDBI/SAVI/NBR), topographic contour lines (with BIG INDEX_KTR), raster grid alignment (align), or raster value extraction to points (extract-points).",
+            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, point-to-raster interpolation (IDW/Spline/Kriging), satellite spectral index (NDVI/NDWI/NDBI/SAVI/NBR), topographic contour lines (with BIG INDEX_KTR), raster grid alignment (align), raster value extraction to points (extract-points), DEM morphometry (TWI/TPI/Curvature), or scanned-map georeferencing with GCP RMSE report (georef).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate", "index", "contour", "align", "extract-points"] },
-                    "input": { "type": "string", "description": "Input raster, point layer (for interpolate), DEM (for contour), or folder" },
+                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate", "index", "contour", "align", "extract-points", "morphometry", "georef"] },
+                    "input": { "type": "string", "description": "Input raster, point layer (for interpolate), DEM (for contour/morphometry), scanned image (for georef), or folder" },
                     "inputs": { "type": "string", "description": "Comma-separated '<raster>:<weight>' pairs (for weighted-sum) OR comma-separated raster paths (for align)" },
                     "out": { "type": "string", "description": "Output file or directory" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"] },
@@ -404,6 +404,11 @@ fn tool_definitions() -> Value {
                     "resampling": { "type": "string", "enum": ["BILINEAR", "NEAREST", "CUBIC"], "description": "Resampling method (for align)" },
                     "points": { "type": "string", "description": "Input point shapefile or .gdb feature class (for extract-points)" },
                     "raster": { "type": "string", "description": "Input raster file to sample (for extract-points)" },
+                    "tpi_radius": { "type": "integer", "description": "Circular focal radius in cells for TPI (default: 3, for morphometry)" },
+                    "gcp": { "type": "string", "description": "GCP file path (.points QGIS or CSV, for georef)" },
+                    "epsg": { "type": "integer", "description": "Target EPSG code (for georef)" },
+                    "order": { "type": "integer", "description": "Polynomial warp order 1-3 (for georef)" },
+                    "report": { "type": "string", "description": "Optional RMSE report output path (.json or .md, for georef)" },
                     "overwrite": { "type": "boolean", "description": "Allow replacing existing output files" }
                 },
                 "required": ["action", "out"]
@@ -537,6 +542,7 @@ fn tool_definitions() -> Value {
                     "action": { "type": "string", "enum": ["init", "run"] },
                     "file": { "type": "string", "description": "Path to pipeline.toml" },
                     "dry_run": { "type": "boolean", "description": "Preview steps without executing (for run)" },
+                    "resume": { "type": "boolean", "description": "Resume from last checkpoint state, skipping already-completed steps (for run)" },
                     "force": { "type": "boolean", "description": "Overwrite existing file (for init)" }
                 },
                 "required": ["action"]
@@ -725,6 +731,8 @@ fn validate_mcp_workspace_paths(args: &Value) -> Result<(), String> {
         "reference",
         "points",
         "raster",
+        "gcp",
+        "report",
     ];
     for k in path_keys {
         if let Some(p) = str_arg(args, k) {
@@ -1091,6 +1099,21 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             if let Some(ras) = str_arg(args, "raster") {
                 cli_args.extend(["--raster".into(), ras.into()]);
             }
+            if let Some(tr) = args.get("tpi_radius").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--tpi-radius".into(), tr.to_string()]);
+            }
+            if let Some(gcp) = str_arg(args, "gcp") {
+                cli_args.extend(["--gcp".into(), gcp.into()]);
+            }
+            if let Some(epsg) = args.get("epsg").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--epsg".into(), epsg.to_string()]);
+            }
+            if let Some(ord) = args.get("order").and_then(|v| v.as_u64()) {
+                cli_args.extend(["--order".into(), ord.to_string()]);
+            }
+            if let Some(rep) = str_arg(args, "report") {
+                cli_args.extend(["--report".into(), rep.into()]);
+            }
             if let Some(cls) = args.get("classes").and_then(|v| v.as_u64()) {
                 cli_args.extend(["--classes".into(), cls.to_string()]);
             }
@@ -1350,6 +1373,9 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
                 cli_args.push(f.into());
                 if bool_arg(args, "dry_run") {
                     cli_args.push("--dry-run".into());
+                }
+                if bool_arg(args, "resume") {
+                    cli_args.push("--resume".into());
                 }
             }
         }

@@ -1,10 +1,13 @@
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use colored::Colorize;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::GeokitConfig;
 use crate::engine::{
@@ -33,7 +36,16 @@ pub enum PipelineCommand {
         /// Disable automatic temporary warm ArcPy daemon for multi-step pipelines
         #[arg(long)]
         no_hot: bool,
+        /// Resume from the last checkpoint state, skipping already-completed steps
+        #[arg(long)]
+        resume: bool,
     },
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct PipelineState {
+    pipeline_name: String,
+    completed_steps: BTreeSet<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,7 +113,10 @@ fn is_arcpy_step(args: &[String]) -> bool {
             i += 1;
             continue;
         }
-        return matches!(a, "gp" | "raster" | "hydro" | "qa" | "layout" | "map");
+        return matches!(
+            a,
+            "gp" | "raster" | "hydro" | "qa" | "topo" | "layout" | "map"
+        );
     }
     false
 }
@@ -116,10 +131,19 @@ impl Drop for TempDaemonGuard {
     }
 }
 
+fn state_file_for(pipeline_file: &Path) -> PathBuf {
+    let fname = pipeline_file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("pipeline.toml");
+    pipeline_file.with_file_name(format!("{fname}.state.json"))
+}
+
 fn run_pipeline(
     file: &Path,
     dry_run: bool,
     no_hot: bool,
+    resume: bool,
     override_propy: Option<&Path>,
     cfg: &GeokitConfig,
     backend: EngineBackend,
@@ -137,6 +161,44 @@ fn run_pipeline(
         return Ok(());
     }
 
+    let state_path = state_file_for(file);
+    let mut state = if resume && state_path.is_file() {
+        fs::read_to_string(&state_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<PipelineState>(&s).ok())
+            .unwrap_or_else(|| PipelineState {
+                pipeline_name: pipeline.name.clone(),
+                completed_steps: BTreeSet::new(),
+            })
+    } else {
+        PipelineState {
+            pipeline_name: pipeline.name.clone(),
+            completed_steps: BTreeSet::new(),
+        }
+    };
+
+    let run_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let log_path = file.with_file_name(format!("pipeline-run-{run_ts}.log"));
+    let mut log_fh = if !dry_run {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok()
+    } else {
+        None
+    };
+    if let Some(ref mut lf) = log_fh {
+        let _ = writeln!(
+            lf,
+            "=== GeoKit Pipeline Run (ts={run_ts}, resume={resume}): {} ===",
+            pipeline.name
+        );
+    }
+
     println!(
         "\n{} {} ({} step{})",
         "Pipeline:".bold().cyan(),
@@ -151,7 +213,8 @@ fn run_pipeline(
     let arcpy_steps = pipeline
         .steps
         .iter()
-        .filter(|s| is_arcpy_step(&s.args))
+        .enumerate()
+        .filter(|(i, s)| !(resume && state.completed_steps.contains(i)) && is_arcpy_step(&s.args))
         .count();
     if !dry_run && !no_hot && arcpy_steps >= 2 {
         let resolved =
@@ -185,11 +248,20 @@ fn run_pipeline(
     let exe = std::env::current_exe().context("Failed to locate geokit executable")?;
     let total = pipeline.steps.len();
     let mut succeeded = 0usize;
+    let mut skipped = 0usize;
     let mut failed = 0usize;
     let mut fatal_err: Option<anyhow::Error> = None;
 
     for (idx, step) in pipeline.steps.iter().enumerate() {
         let label = format!("[{}/{}]", idx + 1, total);
+        if resume && state.completed_steps.contains(&idx) {
+            println!("  {} {} {}", label.cyan(), "SKIP".yellow(), step.name);
+            if let Some(ref mut lf) = log_fh {
+                let _ = writeln!(lf, "{label} SKIP {}", step.name);
+            }
+            skipped += 1;
+            continue;
+        }
         if dry_run {
             println!(
                 "  {} {} {} -> geokit {}",
@@ -203,6 +275,7 @@ fn run_pipeline(
         }
 
         println!("\n{} {}", label.cyan().bold(), step.name.bold());
+        let step_started = Instant::now();
         let status = Command::new(&exe)
             .args(&step.args)
             .stdin(Stdio::null())
@@ -210,10 +283,18 @@ fn run_pipeline(
             .stderr(Stdio::inherit())
             .status()
             .with_context(|| format!("Failed to execute step '{}'", step.name))?;
+        let elapsed = step_started.elapsed().as_secs_f64();
 
         if status.success() {
-            println!("{} {}", "[OK]".green().bold(), step.name);
+            println!("{} {} ({:.2}s)", "[OK]".green().bold(), step.name, elapsed);
+            if let Some(ref mut lf) = log_fh {
+                let _ = writeln!(lf, "{label} OK   {} ({elapsed:.2}s)", step.name);
+            }
             succeeded += 1;
+            state.completed_steps.insert(idx);
+            if let Ok(json_s) = serde_json::to_string_pretty(&state) {
+                let _ = fs::write(&state_path, json_s);
+            }
         } else {
             failed += 1;
             let msg = format!(
@@ -221,10 +302,16 @@ fn run_pipeline(
                 step.name,
                 status.code()
             );
+            if let Some(ref mut lf) = log_fh {
+                let _ = writeln!(lf, "{label} FAIL {msg} ({elapsed:.2}s)");
+            }
             if step.continue_on_error {
                 eprintln!("{} {} (continuing)", "[WARN]".yellow().bold(), msg);
             } else {
-                fatal_err = Some(anyhow::anyhow!("{msg}"));
+                fatal_err = Some(anyhow::anyhow!(
+                    "{msg}\nHint: Fix the issue and re-run with `--resume` to continue from step {}.",
+                    idx + 1
+                ));
                 break;
             }
         }
@@ -236,13 +323,21 @@ fn run_pipeline(
         return Err(err);
     }
 
+    if !dry_run && failed == 0 && state_path.is_file() {
+        let _ = fs::remove_file(&state_path);
+    }
+
     println!(
-        "\n{} {} step(s) {}, {} failed.",
+        "\n{} {} step(s) {}, {} skipped, {} failed.",
         "Pipeline complete:".bold(),
         succeeded,
         if dry_run { "planned" } else { "succeeded" },
+        skipped,
         failed
     );
+    if !dry_run {
+        println!("Run log -> {}", log_path.display());
+    }
 
     if failed > 0 {
         bail!("{failed} pipeline step(s) failed.");
@@ -277,6 +372,7 @@ pub fn run(
             file,
             dry_run,
             no_hot,
-        } => run_pipeline(&file, dry_run, no_hot, override_propy, cfg, backend),
+            resume,
+        } => run_pipeline(&file, dry_run, no_hot, resume, override_propy, cfg, backend),
     }
 }

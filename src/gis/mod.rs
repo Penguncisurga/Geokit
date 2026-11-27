@@ -1,4 +1,5 @@
 pub mod bundle;
+pub mod gcp;
 pub mod scanner;
 pub mod shp;
 

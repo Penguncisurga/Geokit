@@ -4,7 +4,9 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
-use crate::engine::gdal::{detect_gdal, gdal_mosaic, gdal_raster_align, gdal_terrain};
+use crate::engine::gdal::{
+    detect_gdal, gdal_mosaic, gdal_raster_align, gdal_raster_georef, gdal_terrain,
+};
 use crate::engine::{
     abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
 };
@@ -173,6 +175,49 @@ pub enum RasterCommand {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// Generate DEM morphometry indices: TWI (Topographic Wetness Index), TPI (Topographic Position Index), and Curvature
+    Morphometry {
+        /// Input projected DEM raster file (e.g. UTM meters)
+        input: PathBuf,
+        /// Output directory for morphometry rasters
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Generate Topographic Wetness Index (TWI = ln(SCA / tan(slope)))
+        #[arg(long)]
+        twi: bool,
+        /// Generate Topographic Position Index (TPI = DEM - focal mean)
+        #[arg(long)]
+        tpi: bool,
+        /// Generate surface Curvature
+        #[arg(long)]
+        curvature: bool,
+        /// Generate all three (TWI, TPI, Curvature) — default if none specified
+        #[arg(long)]
+        all: bool,
+        /// Circular focal neighborhood radius in cells for TPI (default: 3)
+        #[arg(long, default_value_t = 3)]
+        tpi_radius: u32,
+    },
+    /// Georeference / rectify a scanned map image using a QGIS .points or CSV GCP file with per-point RMSE report
+    Georef {
+        /// Input scanned raster/image (.tif, .jpg, .png)
+        input: PathBuf,
+        /// GCP file path (QGIS .points or CSV with pixel_x,pixel_y,map_x,map_y)
+        #[arg(long)]
+        gcp: PathBuf,
+        /// Target coordinate system EPSG code (e.g. 32749 or 4326)
+        #[arg(long)]
+        epsg: u32,
+        /// Polynomial warp order: 1 (Affine, min 3 GCPs), 2 (min 6 GCPs), or 3 (min 10 GCPs)
+        #[arg(long, default_value_t = 1)]
+        order: u8,
+        /// Output georeferenced GeoTIFF path
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Optional output path (.json or .md) for per-GCP residual & RMSE report
+        #[arg(long)]
+        report: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -205,6 +250,13 @@ struct RasterPayload {
     resampling: Option<String>,
     points: Option<String>,
     raster: Option<String>,
+    twi: Option<bool>,
+    tpi: Option<bool>,
+    curvature: Option<bool>,
+    tpi_radius: Option<u32>,
+    epsg: Option<u32>,
+    order: Option<u8>,
+    gcps: Option<Vec<crate::gis::gcp::GcpPoint>>,
 }
 
 pub fn run(
@@ -526,6 +578,133 @@ pub fn run(
                 raster: Some(abs_string(&raster)),
                 field: Some(field),
                 out: abs_string(&out),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Morphometry {
+            input,
+            out,
+            twi,
+            tpi,
+            curvature,
+            all,
+            tpi_radius,
+        } => {
+            if !input.is_file() {
+                bail!("Input DEM file does not exist: {}", input.display());
+            }
+            if resolved == ResolvedBackend::Gdal {
+                bail!("`geokit raster morphometry` requires ArcGIS Pro or ArcMap 10.x Spatial Analyst.");
+            }
+            let none = !twi && !tpi && !curvature;
+            let payload = RasterPayload {
+                action: "raster_morphometry".into(),
+                input: abs_string(&input),
+                out: abs_string(&out),
+                twi: Some(all || none || twi),
+                tpi: Some(all || none || tpi),
+                curvature: Some(all || none || curvature),
+                tpi_radius: Some(tpi_radius.max(1)),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Georef {
+            input,
+            gcp,
+            epsg,
+            order,
+            out,
+            report,
+        } => {
+            if !input.is_file() {
+                bail!("Input raster file does not exist: {}", input.display());
+            }
+            if !gcp.is_file() {
+                bail!("GCP file does not exist: {}", gcp.display());
+            }
+            let gcps = crate::gis::gcp::parse_gcp_file(&gcp)?;
+            let eff_order = order.clamp(1, 3);
+            let min_pts = match eff_order {
+                1 => 3,
+                2 => 6,
+                _ => 10,
+            };
+            if gcps.len() < min_pts {
+                bail!(
+                    "Polynomial order {eff_order} requires at least {min_pts} enabled GCPs (found {}).",
+                    gcps.len()
+                );
+            }
+            let rmse_report = crate::gis::gcp::compute_affine_rmse(&gcps)?;
+            println!(
+                "GCP Accuracy ({} pts, affine check): RMSE_X={:.4}, RMSE_Y={:.4}, Total RMSE={:.4}, Max={:.4}",
+                rmse_report.count,
+                rmse_report.rmse_x,
+                rmse_report.rmse_y,
+                rmse_report.total_rmse,
+                rmse_report.max_residual
+            );
+            if let Some(rep_path) = report.as_deref() {
+                if let Some(parent) = rep_path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                }
+                let ext = rep_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("json")
+                    .to_ascii_lowercase();
+                if ext == "md" {
+                    let mut md = format!(
+                        "# GCP Georeferencing RMSE Report\n\n- **Total GCPs:** {}\n- **RMSE X:** {:.4}\n- **RMSE Y:** {:.4}\n- **Total RMSE:** {:.4}\n- **Max Residual:** {:.4}\n\n| # | Pixel X | Pixel Y | Map X | Map Y | dX | dY | Residual |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
+                        rmse_report.count,
+                        rmse_report.rmse_x,
+                        rmse_report.rmse_y,
+                        rmse_report.total_rmse,
+                        rmse_report.max_residual
+                    );
+                    for r in &rmse_report.residuals {
+                        md.push_str(&format!(
+                            "| {} | {:.2} | {:.2} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |\n",
+                            r.index,
+                            r.pixel_x,
+                            r.pixel_y,
+                            r.map_x,
+                            r.map_y,
+                            r.residual_x,
+                            r.residual_y,
+                            r.residual
+                        ));
+                    }
+                    std::fs::write(rep_path, md)?;
+                } else {
+                    std::fs::write(rep_path, serde_json::to_string_pretty(&rmse_report)?)?;
+                }
+                println!("OK Saved GCP RMSE report -> {}", rep_path.display());
+            }
+
+            if resolved == ResolvedBackend::Gdal {
+                let gdal = detect_gdal();
+                return gdal_raster_georef(&gdal, &input, &gcps, epsg, eff_order, &out);
+            }
+            let payload = RasterPayload {
+                action: "raster_georef".into(),
+                input: abs_string(&input),
+                out: abs_string(&out),
+                epsg: Some(epsg),
+                order: Some(eff_order),
+                gcps: Some(gcps),
                 ..Default::default()
             };
             if resolved == ResolvedBackend::Arcmap {

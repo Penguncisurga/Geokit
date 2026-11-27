@@ -1240,3 +1240,129 @@ fn test_gdal_xy2shp_dms_and_gpx_convert() {
         serde_json::from_str(&fs::read_to_string(&gpx_gj).unwrap()).unwrap();
     assert_eq!(gpx_val["features"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn test_pipeline_resume_and_run_log() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let pipe = root.join("resume_test.toml");
+    // Step 1 succeeds (doctor), Step 2 fails because target folder doesn't exist yet
+    let missing_dir = root.join("created_later");
+    let missing_s = missing_dir.to_str().unwrap().replace('\\', "/");
+    fs::write(
+        &pipe,
+        format!(
+            "name = \"Resume Test\"\n\
+             [[steps]]\n\
+             name = \"Check doctor\"\n\
+             args = [\"doctor\", \"--json\"]\n\
+             [[steps]]\n\
+             name = \"Audit target\"\n\
+             args = [\"audit\", \"{missing_s}\"]\n"
+        ),
+    )
+    .unwrap();
+
+    // First run: step 1 succeeds, step 2 fails -> checkpoint state file must persist
+    let r1 = geokit_bin()
+        .args(["pipeline", "run", pipe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!r1.status.success());
+    let state_file = root.join("resume_test.toml.state.json");
+    assert!(
+        state_file.is_file(),
+        "state checkpoint must be written on failure"
+    );
+
+    // Fix the missing folder and run with --resume -> step 1 skipped, step 2 succeeds, state file cleaned up
+    fs::create_dir_all(&missing_dir).unwrap();
+    let r2 = geokit_bin()
+        .args(["pipeline", "run", pipe.to_str().unwrap(), "--resume"])
+        .output()
+        .unwrap();
+    assert!(
+        r2.status.success(),
+        "resume stderr: {}",
+        String::from_utf8_lossy(&r2.stderr)
+    );
+    let out2 = String::from_utf8_lossy(&r2.stdout);
+    assert!(
+        out2.contains("SKIP"),
+        "step 1 should be skipped on --resume: {out2}"
+    );
+    assert!(
+        !state_file.exists(),
+        "state file must be removed once pipeline completes"
+    );
+
+    let has_log = fs::read_dir(root)
+        .unwrap()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().starts_with("pipeline-run-"));
+    assert!(has_log, "pipeline-run-<ts>.log must be created");
+}
+
+#[test]
+fn test_gdal_raster_georef_with_rmse_report() {
+    let doc = geokit_bin().args(["doctor", "--json"]).output().unwrap();
+    let doc_json: serde_json::Value = serde_json::from_slice(&doc.stdout).unwrap();
+    if doc_json["gdal"]["gdal_translate"].is_null() || doc_json["gdal"]["gdalwarp"].is_null() {
+        return;
+    }
+
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Write a tiny 4x4 binary PGM (P5) image (natively supported by GDAL PNM driver)
+    let pgm = root.join("scan.pgm");
+    let mut pgm_bytes = b"P5\n4 4\n255\n".to_vec();
+    pgm_bytes.extend_from_slice(&[
+        10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+    ]);
+    fs::write(&pgm, pgm_bytes).unwrap();
+
+    // QGIS .points format GCPs (negative sourceY)
+    let pts = root.join("scan.points");
+    fs::write(
+        &pts,
+        "#CRS: EPSG:32749\n\
+         mapX,mapY,sourceX,sourceY,enable\n\
+         400000,9250000,0,0,1\n\
+         400040,9250000,4,0,1\n\
+         400000,9249960,0,-4,1\n\
+         400040,9249960,4,-4,1\n",
+    )
+    .unwrap();
+
+    let out_tif = root.join("scan_georef.tif");
+    let rep_json = root.join("scan_rmse.json");
+    let res = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "raster",
+            "georef",
+            pgm.to_str().unwrap(),
+            "--gcp",
+            pts.to_str().unwrap(),
+            "--epsg",
+            "32749",
+            "--out",
+            out_tif.to_str().unwrap(),
+            "--report",
+            rep_json.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        res.status.success(),
+        "georef stderr: {}",
+        String::from_utf8_lossy(&res.stderr)
+    );
+    assert!(out_tif.is_file());
+    let rep: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&rep_json).unwrap()).unwrap();
+    assert_eq!(rep["count"], 4);
+    assert!(rep["total_rmse"].as_f64().unwrap() < 1e-6);
+}

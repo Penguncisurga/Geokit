@@ -13,6 +13,7 @@ pub struct GdalEnvironment {
     pub ogr2ogr: Option<PathBuf>,
     pub ogrinfo: Option<PathBuf>,
     pub gdalinfo: Option<PathBuf>,
+    pub gdal_translate: Option<PathBuf>,
     pub gdalwarp: Option<PathBuf>,
     pub gdaldem: Option<PathBuf>,
     pub proj_data: Option<PathBuf>,
@@ -33,6 +34,7 @@ pub fn detect_gdal() -> GdalEnvironment {
             ogr2ogr: Some(ogr2ogr),
             ogrinfo: find_on_path("ogrinfo"),
             gdalinfo: find_on_path("gdalinfo"),
+            gdal_translate: find_on_path("gdal_translate"),
             gdalwarp: find_on_path("gdalwarp"),
             gdaldem: find_on_path("gdaldem"),
             proj_data: None,
@@ -76,6 +78,10 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("gdalinfo.exe")
                     .is_file()
                     .then(|| bin.join("gdalinfo.exe")),
+                gdal_translate: bin
+                    .join("gdal_translate.exe")
+                    .is_file()
+                    .then(|| bin.join("gdal_translate.exe")),
                 gdalwarp: bin
                     .join("gdalwarp.exe")
                     .is_file()
@@ -116,6 +122,10 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("gdalinfo.exe")
                     .is_file()
                     .then(|| bin.join("gdalinfo.exe")),
+                gdal_translate: bin
+                    .join("gdal_translate.exe")
+                    .is_file()
+                    .then(|| bin.join("gdal_translate.exe")),
                 gdalwarp: bin
                     .join("gdalwarp.exe")
                     .is_file()
@@ -159,6 +169,10 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("gdalinfo.exe")
                     .is_file()
                     .then(|| bin.join("gdalinfo.exe")),
+                gdal_translate: bin
+                    .join("gdal_translate.exe")
+                    .is_file()
+                    .then(|| bin.join("gdal_translate.exe")),
                 gdalwarp: bin
                     .join("gdalwarp.exe")
                     .is_file()
@@ -178,6 +192,7 @@ pub fn detect_gdal() -> GdalEnvironment {
         ogr2ogr: None,
         ogrinfo: None,
         gdalinfo: None,
+        gdal_translate: None,
         gdalwarp: None,
         gdaldem: None,
         proj_data: None,
@@ -291,6 +306,24 @@ fn normalize_path_key(p: &Path) -> String {
     }
 }
 
+fn geotiff_lzw_args(dst: &Path) -> Vec<String> {
+    let ext = dst
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(ext.as_str(), "tif" | "tiff") {
+        vec![
+            "-co".into(),
+            "COMPRESS=LZW".into(),
+            "-co".into(),
+            "TILED=YES".into(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
 fn check_safe_gdal_output(dst: &Path, inputs: &[&Path]) -> Result<()> {
     let dst_key = normalize_path_key(dst);
     for inp in inputs {
@@ -344,6 +377,7 @@ pub fn gdal_project(gdal: &GdalEnvironment, input: &Path, epsg: u32, out: &Path)
                         if overwrite {
                             args.push("-overwrite".into());
                         }
+                        args.extend(geotiff_lzw_args(&dst));
                         args.extend([
                             "-t_srs".into(),
                             srs.clone(),
@@ -426,6 +460,7 @@ pub fn gdal_clip(gdal: &GdalEnvironment, input: &Path, aoi: &Path, out: &Path) -
                         if overwrite {
                             args.push("-overwrite".into());
                         }
+                        args.extend(geotiff_lzw_args(&dst));
                         args.extend([
                             "-cutline".into(),
                             aoi.display().to_string(),
@@ -590,6 +625,7 @@ pub fn gdal_mosaic(gdal: &GdalEnvironment, input_dir: &Path, out: &Path) -> Resu
     if crate::engine::overwrite_enabled() {
         args.push("-overwrite".to_string());
     }
+    args.extend(geotiff_lzw_args(out));
     for r in &rasters {
         args.push(r.display().to_string());
     }
@@ -620,43 +656,37 @@ pub fn gdal_terrain(
     if slope {
         let dst = out_dir.join(format!("{stem}_slope.tif"));
         check_safe_gdal_output(&dst, &[dem])?;
-        run_cmd(
-            gdal,
-            gdaldem,
-            &[
-                "slope".into(),
-                dem.display().to_string(),
-                dst.display().to_string(),
-            ],
-        )?;
+        let mut args = vec![
+            "slope".into(),
+            dem.display().to_string(),
+            dst.display().to_string(),
+        ];
+        args.extend(geotiff_lzw_args(&dst));
+        run_cmd(gdal, gdaldem, &args)?;
         println!("[OK] Slope     -> {}", dst.display());
     }
     if aspect {
         let dst = out_dir.join(format!("{stem}_aspect.tif"));
         check_safe_gdal_output(&dst, &[dem])?;
-        run_cmd(
-            gdal,
-            gdaldem,
-            &[
-                "aspect".into(),
-                dem.display().to_string(),
-                dst.display().to_string(),
-            ],
-        )?;
+        let mut args = vec![
+            "aspect".into(),
+            dem.display().to_string(),
+            dst.display().to_string(),
+        ];
+        args.extend(geotiff_lzw_args(&dst));
+        run_cmd(gdal, gdaldem, &args)?;
         println!("[OK] Aspect    -> {}", dst.display());
     }
     if hillshade {
         let dst = out_dir.join(format!("{stem}_hillshade.tif"));
         check_safe_gdal_output(&dst, &[dem])?;
-        run_cmd(
-            gdal,
-            gdaldem,
-            &[
-                "hillshade".into(),
-                dem.display().to_string(),
-                dst.display().to_string(),
-            ],
-        )?;
+        let mut args = vec![
+            "hillshade".into(),
+            dem.display().to_string(),
+            dst.display().to_string(),
+        ];
+        args.extend(geotiff_lzw_args(&dst));
+        run_cmd(gdal, gdaldem, &args)?;
         println!("[OK] Hillshade -> {}", dst.display());
     }
     Ok(())
@@ -1196,6 +1226,7 @@ pub fn gdal_raster_align(
         if overwrite {
             args.push("-overwrite".into());
         }
+        args.extend(geotiff_lzw_args(&dst));
         args.extend([
             "-t_srs".into(),
             wkt_file.display().to_string(),
@@ -1224,5 +1255,74 @@ pub fn gdal_raster_align(
             gdal_resamp
         );
     }
+    Ok(())
+}
+
+pub fn gdal_raster_georef(
+    gdal: &GdalEnvironment,
+    input: &Path,
+    gcps: &[crate::gis::gcp::GcpPoint],
+    epsg: u32,
+    order: u8,
+    out: &Path,
+) -> Result<()> {
+    let Some(translate) = &gdal.gdal_translate else {
+        bail!("gdal_translate not found in GDAL environment.");
+    };
+    let Some(warp) = &gdal.gdalwarp else {
+        bail!("gdalwarp not found in GDAL environment.");
+    };
+    check_safe_gdal_output(out, &[input])?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let tmp_dir = tempfile::tempdir()?;
+    let gcp_tif = tmp_dir.path().join("geokit_gcp_stage.tif");
+
+    let mut t_args = vec![
+        "-of".into(),
+        "GTiff".into(),
+        "-a_srs".into(),
+        format!("EPSG:{epsg}"),
+    ];
+    for g in gcps {
+        t_args.extend([
+            "-gcp".into(),
+            format!("{}", g.pixel_x),
+            format!("{}", g.pixel_y),
+            format!("{}", g.map_x),
+            format!("{}", g.map_y),
+        ]);
+    }
+    t_args.extend([input.display().to_string(), gcp_tif.display().to_string()]);
+    run_cmd(gdal, translate, &t_args)?;
+
+    let mut w_args = Vec::new();
+    if crate::engine::overwrite_enabled() {
+        w_args.push("-overwrite".into());
+    }
+    w_args.extend(geotiff_lzw_args(out));
+    w_args.extend([
+        "-t_srs".into(),
+        format!("EPSG:{epsg}"),
+        "-order".into(),
+        order.clamp(1, 3).to_string(),
+        "-r".into(),
+        "bilinear".into(),
+        gcp_tif.display().to_string(),
+        out.display().to_string(),
+    ]);
+    run_cmd(gdal, warp, &w_args)?;
+    println!(
+        "OK Georeferenced {} ({} GCPs, order={}, EPSG:{}) -> {}",
+        input.display(),
+        gcps.len(),
+        order.clamp(1, 3),
+        epsg,
+        out.display()
+    );
     Ok(())
 }
