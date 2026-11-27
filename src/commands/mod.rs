@@ -17,4 +17,5 @@ pub mod raster;
 pub mod report;
 pub mod sanitize;
 pub mod toolbox;
+pub mod topo;
 pub mod webmap;

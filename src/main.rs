@@ -17,6 +17,7 @@ use commands::map::MapCommand;
 use commands::pipeline::PipelineCommand;
 use commands::raster::RasterCommand;
 use commands::toolbox::ToolboxCommand;
+use commands::topo::TopoCommand;
 use engine::EngineBackend;
 
 #[derive(Debug, Parser)]
@@ -159,6 +160,11 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Run BIG topology checks & automated fixes (overlaps, interior gaps, slivers, dangles, duplicates)
+    Topo {
+        #[command(subcommand)]
+        command: TopoCommand,
     },
     /// Generate a clean Markdown (.md), HTML (.html), or JSON workspace inventory report (no ArcGIS needed)
     Report {
@@ -305,6 +311,9 @@ fn real_main() -> Result<()> {
             &cfg,
             effective_engine,
         ),
+        Commands::Topo { command } => {
+            commands::topo::run(command, effective_propy, &cfg, effective_engine)
+        }
         Commands::Report { path, out } => commands::report::run(&path, &out),
         Commands::Fetch { command } => commands::fetch::run(command),
         Commands::Webmap {

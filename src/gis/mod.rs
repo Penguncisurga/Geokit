@@ -150,7 +150,7 @@ pub enum GisCategory {
 }
 
 pub const VECTOR_PRIMARY_EXTS: &[&str] = &[
-    "shp", "gpkg", "geojson", "kml", "kmz", "gml", "dxf", "dwg", "fgb",
+    "shp", "gpkg", "geojson", "kml", "kmz", "gpx", "gml", "dxf", "dwg", "fgb",
 ];
 
 pub const RASTER_PRIMARY_EXTS: &[&str] = &[
@@ -221,9 +221,242 @@ pub fn sanitize_gis_name(stem: &str) -> String {
     out
 }
 
+/// Parses either a standard decimal degree string (e.g. `"-7.003333"`, `"110.4083"`)
+/// or a Degrees-Minutes-Seconds (DMS / DM) coordinate string such as:
+/// - `7°00'12"S`, `110°24'30.5"E`
+/// - `7° 00' 12" LS`, `110° 24' 30" BT` (Indonesian hemisphere abbreviations: LU/LS/BT/BB)
+/// - `S 7° 0' 12"`, `7 00 12 S`, `7°30'N`
+pub fn parse_dms_or_decimal(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim().trim_matches('"').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Fast path: plain decimal number (also allow single comma decimal like "-7,0033")
+    if let Ok(v) = trimmed.parse::<f64>() {
+        return v.is_finite().then_some(v);
+    }
+    if !trimmed.contains('°')
+        && !trimmed.contains('\'')
+        && !trimmed.contains(' ')
+        && trimmed.matches(',').count() == 1
+    {
+        if let Ok(v) = trimmed.replace(',', ".").parse::<f64>() {
+            return v.is_finite().then_some(v);
+        }
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    // Detect hemisphere tokens (both English N/S/E/W and Indonesian LU/LS/BT/BB/U/T/B)
+    let mut sign: Option<f64> = None;
+    let alpha_tokens: Vec<String> = upper
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect();
+    for tok in &alpha_tokens {
+        match tok.as_str() {
+            "S" | "W" | "LS" | "BB" | "B" => sign = Some(-1.0),
+            "N" | "E" | "LU" | "BT" | "U" | "T" => {
+                if sign.is_none() {
+                    sign = Some(1.0);
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    // Extract numeric components (degrees, optional minutes, optional seconds)
+    let mut nums: Vec<f64> = Vec::new();
+    let mut buf = String::new();
+    let chars: Vec<char> = trimmed.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch.is_ascii_digit()
+            || ch == '.'
+            || (ch == ','
+                && !buf.is_empty()
+                && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit()))
+            || ((ch == '-' || ch == '+') && buf.is_empty() && nums.is_empty())
+        {
+            buf.push(if ch == ',' { '.' } else { ch });
+        } else if !buf.is_empty() {
+            let v: f64 = buf.parse().ok()?;
+            nums.push(v);
+            buf.clear();
+        }
+    }
+    if !buf.is_empty() {
+        let v: f64 = buf.parse().ok()?;
+        nums.push(v);
+    }
+
+    if nums.is_empty() || nums.len() > 3 {
+        return None;
+    }
+    // Must either have DMS symbols, hemisphere indicator, or 2-3 parts
+    let has_dms_hint = trimmed.contains('°')
+        || trimmed.contains('\'')
+        || trimmed.contains('′')
+        || trimmed.contains('″')
+        || !alpha_tokens.is_empty()
+        || nums.len() >= 2;
+    if !has_dms_hint {
+        return None;
+    }
+
+    let deg_raw = nums[0];
+    let deg_abs = deg_raw.abs();
+    let min = if nums.len() >= 2 { nums[1] } else { 0.0 };
+    let sec = if nums.len() == 3 { nums[2] } else { 0.0 };
+    if !(0.0..60.0).contains(&min) || !(0.0..60.0).contains(&sec) || deg_abs > 180.0 {
+        return None;
+    }
+    let eff_sign = if let Some(s) = sign {
+        s
+    } else if deg_raw < 0.0 || trimmed.starts_with('-') {
+        -1.0
+    } else {
+        1.0
+    };
+    let dec = eff_sign * (deg_abs + min / 60.0 + sec / 3600.0);
+    dec.is_finite().then_some(dec)
+}
+
+fn split_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    cur.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                cur.push(ch);
+            }
+        } else if ch == '"' && cur.is_empty() {
+            in_quotes = true;
+        } else if ch == ',' {
+            fields.push(std::mem::take(&mut cur));
+        } else {
+            cur.push(ch);
+        }
+    }
+    fields.push(cur);
+    fields
+}
+
+fn quote_csv_cell(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Inspects a CSV file's `x_field` and `y_field` columns for DMS coordinates.
+/// If any row contains DMS notation (e.g. `7°00'12"S`), writes a temporary normalized CSV
+/// with decimal degrees and returns `Ok(Some(temp_file))` so GDAL/ArcGIS/ArcMap all accept it.
+/// Returns `Ok(None)` when all coordinates are already plain decimals.
+pub fn preprocess_dms_csv(
+    input_csv: &Path,
+    x_field: &str,
+    y_field: &str,
+) -> Result<Option<tempfile::NamedTempFile>> {
+    let raw = std::fs::read_to_string(input_csv)?;
+    let mut lines = raw.lines();
+    let Some(header_line) = lines.next() else {
+        return Ok(None);
+    };
+    let headers = split_csv_line(header_line.trim_start_matches('\u{feff}'));
+    let x_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case(x_field));
+    let y_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case(y_field));
+    let (Some(xi), Some(yi)) = (x_idx, y_idx) else {
+        return Ok(None);
+    };
+
+    let mut converted_rows: Vec<Vec<String>> = Vec::new();
+    let mut any_dms = false;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut cells = split_csv_line(line);
+        for &idx in &[xi, yi] {
+            if let Some(cell) = cells.get_mut(idx) {
+                let t = cell.trim();
+                if !t.is_empty() && t.parse::<f64>().is_err() {
+                    if let Some(dec) = parse_dms_or_decimal(t) {
+                        *cell = format!("{dec:.7}");
+                        any_dms = true;
+                    }
+                }
+            }
+        }
+        converted_rows.push(cells);
+    }
+
+    if !any_dms {
+        return Ok(None);
+    }
+
+    let mut tmp = tempfile::Builder::new()
+        .prefix("geokit_dms_")
+        .suffix(".csv")
+        .tempfile()?;
+    use std::io::Write;
+    let header_out = headers
+        .iter()
+        .map(|h| quote_csv_cell(h.trim()))
+        .collect::<Vec<_>>()
+        .join(",");
+    writeln!(tmp, "{header_out}")?;
+    for row in converted_rows {
+        let line_out = row
+            .iter()
+            .map(|c| quote_csv_cell(c))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(tmp, "{line_out}")?;
+    }
+    tmp.flush()?;
+    Ok(Some(tmp))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_dms_or_decimal() {
+        let lat = parse_dms_or_decimal(r#"7°00'12"S"#).unwrap();
+        assert!((lat - (-7.0033333)).abs() < 1e-5, "got {lat}");
+
+        let lon = parse_dms_or_decimal(r#"110°24'30"E"#).unwrap();
+        assert!((lon - 110.4083333).abs() < 1e-5, "got {lon}");
+
+        let indo_ls = parse_dms_or_decimal(r#"6° 58' 30" LS"#).unwrap();
+        assert!((indo_ls - (-6.975)).abs() < 1e-5, "got {indo_ls}");
+
+        let indo_bt = parse_dms_or_decimal(r#"110° 25' 12" BT"#).unwrap();
+        assert!((indo_bt - 110.42).abs() < 1e-5, "got {indo_bt}");
+
+        let space_dms = parse_dms_or_decimal("7 30 00 S").unwrap();
+        assert!((space_dms - (-7.5)).abs() < 1e-5, "got {space_dms}");
+
+        let plain = parse_dms_or_decimal("-6.98765").unwrap();
+        assert!((plain - (-6.98765)).abs() < 1e-9);
+
+        assert!(parse_dms_or_decimal("not_a_coord").is_none());
+    }
 
     #[test]
     fn test_sanitize_gis_name() {

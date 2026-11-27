@@ -350,6 +350,84 @@ pub enum GpCommand {
         #[arg(long)]
         inside: bool,
     },
+    /// Permanently join attributes from a CSV table onto a vector layer by matching key fields
+    Join {
+        /// Input shapefile or .gdb feature class
+        input: PathBuf,
+        /// CSV table file containing attributes to join
+        #[arg(long)]
+        table: PathBuf,
+        /// Key field name in the input vector layer (e.g. KODE_DESA, NAMOBJ)
+        #[arg(long)]
+        in_field: String,
+        /// Matching key column name in the CSV table
+        #[arg(long)]
+        join_field: String,
+        /// Output shapefile or .gdb feature class with joined attributes
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Create concentric multi-ring buffers around features (e.g. --dists "500,1000,2000")
+    MultiBuffer {
+        /// Input shapefile or .gdb feature class
+        input: PathBuf,
+        /// Comma-separated ring distances (e.g. "500,1000,2000")
+        #[arg(long)]
+        dists: String,
+        /// Distance unit: Meters (default), Kilometers, Feet, Miles
+        #[arg(long, default_value = "Meters")]
+        unit: String,
+        /// Output multi-ring buffer shapefile or .gdb feature class
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Dissolve option: ALL (non-overlapping rings, default) or NONE
+        #[arg(long, default_value = "ALL")]
+        dissolve: String,
+    },
+    /// Generate Thiessen (Voronoi) polygons from point features (e.g. rainfall stations / fasilitas)
+    Thiessen {
+        /// Input point shapefile or .gdb feature class
+        input: PathBuf,
+        /// Output Thiessen polygon shapefile or .gdb feature class
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Optional extent/boundary polygon layer to bound the Thiessen polygons
+        #[arg(long)]
+        extent: Option<PathBuf>,
+    },
+    /// Compute nearest distance (NEAR_FID, NEAR_DIST) from each feature to a target layer (works on all licenses)
+    Near {
+        /// Input shapefile or .gdb feature class (modified in-place with NEAR_FID & NEAR_DIST)
+        input: PathBuf,
+        /// Target near layer (e.g. rivers, roads, health facilities)
+        #[arg(long = "near")]
+        near_layer: PathBuf,
+        /// Optional search radius (e.g. "5000 Meters")
+        #[arg(long)]
+        search_radius: Option<String>,
+    },
+    /// Eliminate tiny sliver polygons below a minimum area (m2) by merging into longest-border neighbor
+    Eliminate {
+        /// Input polygon shapefile or .gdb feature class
+        input: PathBuf,
+        /// Minimum polygon area threshold in square meters (e.g. 100.0)
+        #[arg(long)]
+        min_area: f64,
+        /// Output cleaned polygon shapefile or .gdb feature class
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Remove exact duplicate geometries from a vector dataset (works on all licenses)
+    DeleteDuplicates {
+        /// Input shapefile or .gdb feature class
+        input: PathBuf,
+        /// Output deduplicated shapefile or .gdb feature class
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Optional XY tolerance (e.g. "0.01 Meters")
+        #[arg(long)]
+        tolerance: Option<String>,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -383,6 +461,16 @@ struct GpPayload {
     keep_fields: Option<String>,
     drop_fields: Option<String>,
     inside: Option<bool>,
+    table: Option<String>,
+    in_field: Option<String>,
+    join_field: Option<String>,
+    dists: Option<String>,
+    dissolve_option: Option<String>,
+    extent: Option<String>,
+    near_layer: Option<String>,
+    search_radius: Option<String>,
+    min_area: Option<f64>,
+    tolerance: Option<String>,
 }
 
 pub fn run(
@@ -484,7 +572,9 @@ pub fn run(
                 if !input.is_file() {
                     bail!("Input CSV file does not exist: {}", input.display());
                 }
-                gdal_xy2shp(&gdal, &input, &x_field, &y_field, epsg, &out)
+                let dms_tmp = crate::gis::preprocess_dms_csv(&input, &x_field, &y_field)?;
+                let eff_csv = dms_tmp.as_ref().map(|t| t.path()).unwrap_or(&input);
+                gdal_xy2shp(&gdal, eff_csv, &x_field, &y_field, epsg, &out)
             }
             GpCommand::Convert { input, to, out } => {
                 if !input.exists() {
@@ -538,6 +628,8 @@ pub fn run(
             ),
         };
     }
+
+    let mut _dms_guard: Option<tempfile::NamedTempFile> = None;
 
     let payload = match cmd {
         GpCommand::Info { input, json } => {
@@ -749,9 +841,11 @@ pub fn run(
             if !input.is_file() {
                 bail!("Input CSV file does not exist: {}", input.display());
             }
+            _dms_guard = crate::gis::preprocess_dms_csv(&input, &x_field, &y_field)?;
+            let eff_csv = _dms_guard.as_ref().map(|t| t.path()).unwrap_or(&input);
             GpPayload {
                 action: "xy2shp".into(),
-                input: abs_string(&input),
+                input: abs_string(eff_csv),
                 out: Some(abs_string(&out)),
                 epsg: Some(epsg),
                 x_field: Some(x_field),
@@ -763,9 +857,14 @@ pub fn run(
             if !input.exists() {
                 bail!("Input path does not exist: {}", input.display());
             }
-            // Prefer GDAL if available for formats like fgb/geojson/gpkg/kml, else route to ArcPy
+            // Prefer GDAL if available for formats like fgb/kml or GPX/KMZ inputs
             let fmt = to.to_ascii_lowercase();
-            if matches!(fmt.as_str(), "fgb" | "kml") {
+            let src_ext = input
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if matches!(fmt.as_str(), "fgb" | "kml") || matches!(src_ext.as_str(), "gpx" | "kmz") {
                 let gdal = detect_gdal();
                 if gdal.is_available() {
                     return gdal_convert(&gdal, &input, &fmt, &out);
@@ -974,6 +1073,120 @@ pub fn run(
                 input: abs_string(&input),
                 out: Some(abs_string(&out)),
                 inside: Some(inside),
+                ..Default::default()
+            }
+        }
+        GpCommand::Join {
+            input,
+            table,
+            in_field,
+            join_field,
+            out,
+        } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            if !table.is_file() {
+                bail!("Join table CSV does not exist: {}", table.display());
+            }
+            GpPayload {
+                action: "join".into(),
+                input: abs_string(&input),
+                table: Some(abs_string(&table)),
+                in_field: Some(in_field),
+                join_field: Some(join_field),
+                out: Some(abs_string(&out)),
+                ..Default::default()
+            }
+        }
+        GpCommand::MultiBuffer {
+            input,
+            dists,
+            unit,
+            out,
+            dissolve,
+        } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "multi_buffer".into(),
+                input: abs_string(&input),
+                dists: Some(dists),
+                unit: Some(unit),
+                dissolve_option: Some(dissolve),
+                out: Some(abs_string(&out)),
+                ..Default::default()
+            }
+        }
+        GpCommand::Thiessen { input, out, extent } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            if let Some(ref ext) = extent {
+                if !ext.exists() && !is_gdb_member(ext) {
+                    bail!("Extent layer does not exist: {}", ext.display());
+                }
+            }
+            GpPayload {
+                action: "thiessen".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                extent: extent.as_deref().map(abs_string),
+                ..Default::default()
+            }
+        }
+        GpCommand::Near {
+            input,
+            near_layer,
+            search_radius,
+        } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            if !near_layer.exists() && !is_gdb_member(&near_layer) {
+                bail!("Near layer does not exist: {}", near_layer.display());
+            }
+            GpPayload {
+                action: "near".into(),
+                input: abs_string(&input),
+                near_layer: Some(abs_string(&near_layer)),
+                search_radius,
+                ..Default::default()
+            }
+        }
+        GpCommand::Eliminate {
+            input,
+            min_area,
+            out,
+        } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            if !min_area.is_finite() || min_area <= 0.0 {
+                bail!("--min-area must be a positive finite number in m2.");
+            }
+            GpPayload {
+                action: "eliminate".into(),
+                input: abs_string(&input),
+                min_area: Some(min_area),
+                out: Some(abs_string(&out)),
+                ..Default::default()
+            }
+        }
+        GpCommand::DeleteDuplicates {
+            input,
+            out,
+            tolerance,
+        } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "delete_duplicates".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                tolerance,
                 ..Default::default()
             }
         }

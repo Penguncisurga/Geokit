@@ -18,10 +18,11 @@ Legend:
 | `gp summary`, `gp export-table` | Yes | Yes (`.gdb`) | Yes (`.gdb`) | Yes (`.gpkg`/etc.) | Pure Rust for `.shp`/`.geojson`; ArcGIS/GDAL for `.gdb`/`.gpkg` |
 | `fetch osm` | Yes | — | — | — | Uses `curl` + Overpass API mirrors; respects `--overwrite` |
 | `fetch dem` | Yes | Optional | Optional | Optional | Download is Native; `--clip-aoi` uses ArcGIS/ArcMap/GDAL for mosaic/reproject/clip |
-| `gp info`, `project`, `clip`, `merge`, `pack`, `unpack`, `xy2shp`, `convert`, `select`, `flatten-2d`, `define-crs`, `split`, `explode` | — | Yes | Yes | Yes | Full cross-platform support with Safe Mode (`--overwrite` required to replace existing outputs) |
-| `gp repair`, `buffer`, `dissolve`, `calc-geom`, `intersect`, `erase`, `spatial-join`, `union`, `values`, `classify`, `calc-field`, `clean-fields`, `centroid`, `tools`, `tool-usage`, `run` | — | Yes | Yes | No | `erase` requires ArcGIS Advanced license; `centroid` works on Basic via cursor fallback; `calc-field` uses AST Safe Math |
-| `raster mosaic`, `terrain` | — | Yes | Yes | Yes | ArcGIS/ArcMap `terrain` requires **Spatial Analyst**; GDAL `gdaldem` requires no license |
-| `raster zonal-stats`, `reclass`, `weighted-sum`, `interpolate`, `index`, `contour` | — | Yes | Yes | No | Requires **Spatial Analyst** extension |
+| `gp info`, `project`, `clip`, `merge`, `pack`, `unpack`, `xy2shp`, `convert`, `select`, `flatten-2d`, `define-crs`, `split`, `explode` | — | Yes | Yes | Yes | `xy2shp` auto-parses DMS (`7°00'12"S`, `LS`/`BT`) on all engines; `convert` supports `.gpx` & `.kmz` inputs via GDAL |
+| `gp repair`, `buffer`, `multi-buffer`, `dissolve`, `calc-geom`, `intersect`, `erase`, `spatial-join`, `union`, `join`, `thiessen`, `near`, `eliminate`, `delete-duplicates`, `values`, `classify`, `calc-field`, `clean-fields`, `centroid`, `tools`, `tool-usage`, `run` | — | Yes | Yes | No | `centroid`, `near`, `eliminate`, `delete-duplicates`, `join` work on ArcGIS Basic via cursor fallbacks; `calc-field` uses AST Safe Math |
+| `topo check`, `topo fix` | — | Yes | Yes | No | BIG topology validation (overlaps, interior gaps, slivers, dangles, crossings, duplicates) & 1-command cleanup; `--strict` exits non-zero |
+| `raster mosaic`, `terrain`, `align` | — | Yes | Yes | Yes | `align` snaps CRS, pixel size, grid, and extent to `--ref` via `gdalwarp` or `ProjectRaster` |
+| `raster zonal-stats`, `reclass`, `weighted-sum`, `interpolate`, `index`, `contour`, `extract-points` | — | Yes | Yes | No | `extract-points` falls back to `GetCellValue` without Spatial Analyst; others require **Spatial Analyst** |
 | `hydro delineate`, `basin` | — | Yes | Yes | No | Requires **Spatial Analyst** extension |
 | `qa` | — | Yes | Yes | No | Technical dataset QA (CRS, geometry, NULLs, pairwise polygon overlaps); `--strict` exits non-zero on issues |
 | `layout list`, `export`, `update` | — | Yes (`.aprx`) | Yes (`.mxd`) | No | `layout map-series` is ArcGIS Pro (`.aprx`) only |

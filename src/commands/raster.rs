@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
-use crate::engine::gdal::{detect_gdal, gdal_mosaic, gdal_terrain};
+use crate::engine::gdal::{detect_gdal, gdal_mosaic, gdal_raster_align, gdal_terrain};
 use crate::engine::{
     abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
 };
@@ -143,6 +143,36 @@ pub enum RasterCommand {
         #[arg(long, default_value_t = 4)]
         index_every: usize,
     },
+    /// Align one or more rasters to a reference raster's exact CRS, pixel size, snap grid, and extent
+    Align {
+        /// One or more input raster files to align
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        /// Reference raster defining target CRS, cell size, snap grid, and extent
+        #[arg(long = "ref")]
+        reference: PathBuf,
+        /// Output raster file (single input) or directory (multiple inputs)
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Resampling method: BILINEAR (default), NEAREST, or CUBIC
+        #[arg(long, default_value = "BILINEAR")]
+        resampling: String,
+    },
+    /// Extract raster pixel values onto point locations (e.g. DEM elevation / slope / NDVI at sample points)
+    ExtractPoints {
+        /// Input point shapefile or .gdb feature class
+        #[arg(long)]
+        points: PathBuf,
+        /// Input raster file to sample
+        #[arg(long)]
+        raster: PathBuf,
+        /// Output attribute field name for extracted values (default: RAST_VAL)
+        #[arg(long, default_value = "RAST_VAL")]
+        field: String,
+        /// Output point shapefile or .gdb feature class with sampled values
+        #[arg(short, long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -170,6 +200,11 @@ struct RasterPayload {
     interval: Option<f64>,
     base_contour: Option<f64>,
     index_every: Option<usize>,
+    inputs: Option<Vec<String>>,
+    reference: Option<String>,
+    resampling: Option<String>,
+    points: Option<String>,
+    raster: Option<String>,
 }
 
 pub fn run(
@@ -425,6 +460,72 @@ pub fn run(
                 interval: Some(interval),
                 base_contour: Some(base),
                 index_every: Some(index_every.max(1)),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::Align {
+            inputs,
+            reference,
+            out,
+            resampling,
+        } => {
+            if !reference.exists() {
+                bail!("Reference raster does not exist: {}", reference.display());
+            }
+            for inp in &inputs {
+                if !inp.exists() {
+                    bail!("Input raster does not exist: {}", inp.display());
+                }
+            }
+            if resolved == ResolvedBackend::Gdal {
+                let gdal = detect_gdal();
+                return gdal_raster_align(&gdal, &inputs, &reference, &out, &resampling);
+            }
+            let abs_inputs: Vec<String> = inputs.iter().map(|p| abs_string(p)).collect();
+            let payload = RasterPayload {
+                action: "raster_align".into(),
+                input: abs_inputs[0].clone(),
+                inputs: Some(abs_inputs),
+                reference: Some(abs_string(&reference)),
+                resampling: Some(resampling.to_ascii_uppercase()),
+                out: abs_string(&out),
+                ..Default::default()
+            };
+            if resolved == ResolvedBackend::Arcmap {
+                run_arcmap_job(cfg.arcgis.arcmap_python.as_deref(), &payload)
+            } else {
+                run_arcpy_job(override_propy, &payload)
+            }
+        }
+        RasterCommand::ExtractPoints {
+            points,
+            raster,
+            field,
+            out,
+        } => {
+            if !points.exists() {
+                bail!("Input point dataset does not exist: {}", points.display());
+            }
+            if !raster.exists() {
+                bail!("Input raster does not exist: {}", raster.display());
+            }
+            if resolved == ResolvedBackend::Gdal {
+                bail!(
+                    "`geokit raster extract-points` requires ArcGIS Pro or ArcMap 10.x (`--engine arcgis` or `--engine arcmap`)."
+                );
+            }
+            let payload = RasterPayload {
+                action: "raster_extract_points".into(),
+                input: abs_string(&points),
+                points: Some(abs_string(&points)),
+                raster: Some(abs_string(&raster)),
+                field: Some(field),
+                out: abs_string(&out),
                 ..Default::default()
             };
             if resolved == ResolvedBackend::Arcmap {

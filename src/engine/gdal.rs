@@ -12,6 +12,7 @@ use crate::gis::{RASTER_PRIMARY_EXTS, VECTOR_PRIMARY_EXTS};
 pub struct GdalEnvironment {
     pub ogr2ogr: Option<PathBuf>,
     pub ogrinfo: Option<PathBuf>,
+    pub gdalinfo: Option<PathBuf>,
     pub gdalwarp: Option<PathBuf>,
     pub gdaldem: Option<PathBuf>,
     pub proj_data: Option<PathBuf>,
@@ -31,6 +32,7 @@ pub fn detect_gdal() -> GdalEnvironment {
         return GdalEnvironment {
             ogr2ogr: Some(ogr2ogr),
             ogrinfo: find_on_path("ogrinfo"),
+            gdalinfo: find_on_path("gdalinfo"),
             gdalwarp: find_on_path("gdalwarp"),
             gdaldem: find_on_path("gdaldem"),
             proj_data: None,
@@ -70,6 +72,10 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("ogrinfo.exe")
                     .is_file()
                     .then(|| bin.join("ogrinfo.exe")),
+                gdalinfo: bin
+                    .join("gdalinfo.exe")
+                    .is_file()
+                    .then(|| bin.join("gdalinfo.exe")),
                 gdalwarp: bin
                     .join("gdalwarp.exe")
                     .is_file()
@@ -106,6 +112,10 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("ogrinfo.exe")
                     .is_file()
                     .then(|| bin.join("ogrinfo.exe")),
+                gdalinfo: bin
+                    .join("gdalinfo.exe")
+                    .is_file()
+                    .then(|| bin.join("gdalinfo.exe")),
                 gdalwarp: bin
                     .join("gdalwarp.exe")
                     .is_file()
@@ -145,6 +155,10 @@ pub fn detect_gdal() -> GdalEnvironment {
                     .join("ogrinfo.exe")
                     .is_file()
                     .then(|| bin.join("ogrinfo.exe")),
+                gdalinfo: bin
+                    .join("gdalinfo.exe")
+                    .is_file()
+                    .then(|| bin.join("gdalinfo.exe")),
                 gdalwarp: bin
                     .join("gdalwarp.exe")
                     .is_file()
@@ -163,6 +177,7 @@ pub fn detect_gdal() -> GdalEnvironment {
     GdalEnvironment {
         ogr2ogr: None,
         ogrinfo: None,
+        gdalinfo: None,
         gdalwarp: None,
         gdaldem: None,
         proj_data: None,
@@ -745,6 +760,18 @@ pub fn gdal_convert(gdal: &GdalEnvironment, input: &Path, to_fmt: &str, out: &Pa
             }
             args.push(dst.display().to_string());
             args.push(src.display().to_string());
+            // GPX files expose multiple OGR sub-layers (waypoints, tracks, routes).
+            // Single-layer formats (GeoJSON, Shapefile, FlatGeobuf) need an explicit layer name.
+            let src_ext = src
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if src_ext == "gpx" && matches!(ext, "geojson" | "shp" | "fgb") {
+                if let Some(layer) = detect_primary_gpx_layer(gdal, src) {
+                    args.push(layer);
+                }
+            }
             run_cmd(gdal, ogr2ogr, &args)
         });
         match res {
@@ -1030,6 +1057,171 @@ pub fn gdal_split(gdal: &GdalEnvironment, input: &Path, field: &str, out_dir: &P
             idx + 1,
             unique_vals.len(),
             dst.display()
+        );
+    }
+    Ok(())
+}
+
+fn run_cmd_capture(gdal: &GdalEnvironment, bin: &Path, args: &[String]) -> Result<String> {
+    let mut cmd = Command::new(bin);
+    if let Some(proj) = &gdal.proj_data {
+        cmd.env("PROJ_DATA", proj).env("PROJ_LIB", proj);
+    }
+    if let Some(gd) = &gdal.gdal_data {
+        cmd.env("GDAL_DATA", gd);
+    }
+    let output = cmd
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("Failed to execute {}", bin.display()))?;
+    if !output.status.success() {
+        bail!(
+            "{} exited with status {:?}: {}",
+            bin.display(),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn detect_primary_gpx_layer(gdal: &GdalEnvironment, gpx_path: &Path) -> Option<String> {
+    let ogrinfo = gdal.ogrinfo.as_ref()?;
+    for candidate in ["tracks", "waypoints", "routes", "track_points"] {
+        if let Ok(out) = run_cmd_capture(
+            gdal,
+            ogrinfo,
+            &[
+                "-so".into(),
+                gpx_path.display().to_string(),
+                candidate.into(),
+            ],
+        ) {
+            for line in out.lines() {
+                if let Some(rest) = line.trim().strip_prefix("Feature Count:") {
+                    if rest.trim().parse::<usize>().unwrap_or(0) > 0 {
+                        return Some(candidate.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Some("waypoints".to_string())
+}
+
+pub fn gdal_raster_align(
+    gdal: &GdalEnvironment,
+    inputs: &[PathBuf],
+    reference: &Path,
+    out: &Path,
+    resampling: &str,
+) -> Result<()> {
+    let Some(warp) = &gdal.gdalwarp else {
+        bail!("gdalwarp not found in GDAL environment.");
+    };
+    let Some(gdalinfo) = &gdal.gdalinfo else {
+        bail!("gdalinfo not found in GDAL environment.");
+    };
+    let info_raw = run_cmd_capture(
+        gdal,
+        gdalinfo,
+        &["-json".into(), reference.display().to_string()],
+    )?;
+    let info: serde_json::Value =
+        serde_json::from_str(&info_raw).context("Failed to parse gdalinfo -json output")?;
+
+    let wkt = info
+        .get("coordinateSystem")
+        .and_then(|c| c.get("wkt"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!("Reference raster has no CRS WKT: {}", reference.display())
+        })?;
+    let gt = info
+        .get("geoTransform")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Reference raster missing geoTransform"))?;
+    let px_x = gt.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0).abs();
+    let px_y = gt.get(5).and_then(|v| v.as_f64()).unwrap_or(0.0).abs();
+    if px_x <= 0.0 || px_y <= 0.0 {
+        bail!("Invalid reference raster pixel size ({px_x}, {px_y}).");
+    }
+
+    let corners = info
+        .get("cornerCoordinates")
+        .ok_or_else(|| anyhow::anyhow!("Reference raster missing cornerCoordinates"))?;
+    let ll = corners.get("lowerLeft").and_then(|v| v.as_array());
+    let ur = corners.get("upperRight").and_then(|v| v.as_array());
+    let (Some(ll), Some(ur)) = (ll, ur) else {
+        bail!("Reference raster missing lowerLeft/upperRight extent.");
+    };
+    let xmin = ll[0].as_f64().unwrap_or(0.0);
+    let ymin = ll[1].as_f64().unwrap_or(0.0);
+    let xmax = ur[0].as_f64().unwrap_or(0.0);
+    let ymax = ur[1].as_f64().unwrap_or(0.0);
+
+    let gdal_resamp = match resampling.to_ascii_lowercase().as_str() {
+        "nearest" | "near" => "near",
+        "cubic" => "cubic",
+        "average" => "average",
+        "mode" => "mode",
+        _ => "bilinear",
+    };
+
+    // Write WKT to a temp .prj file so Windows command-line length/quoting is never an issue
+    let tmp_dir = tempfile::tempdir()?;
+    let wkt_file = tmp_dir.path().join("ref_srs.prj");
+    fs::write(&wkt_file, wkt)?;
+
+    let is_batch = inputs.len() > 1 || out.is_dir() || out.extension().is_none();
+    if is_batch {
+        fs::create_dir_all(out)?;
+    } else if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let overwrite = crate::engine::overwrite_enabled();
+    for (idx, src) in inputs.iter().enumerate() {
+        let dst = if is_batch {
+            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
+            out.join(format!("{stem}_aligned.tif"))
+        } else {
+            out.to_path_buf()
+        };
+        check_safe_gdal_output(&dst, &[src.as_path(), reference])?;
+        let mut args = Vec::new();
+        if overwrite {
+            args.push("-overwrite".into());
+        }
+        args.extend([
+            "-t_srs".into(),
+            wkt_file.display().to_string(),
+            "-tr".into(),
+            format!("{px_x}"),
+            format!("{px_y}"),
+            "-te".into(),
+            format!("{xmin}"),
+            format!("{ymin}"),
+            format!("{xmax}"),
+            format!("{ymax}"),
+            "-r".into(),
+            gdal_resamp.into(),
+            src.display().to_string(),
+            dst.display().to_string(),
+        ]);
+        run_cmd(gdal, warp, &args)?;
+        println!(
+            "[{}/{}] OK   Aligned {} -> {} ({:.4}x{:.4}, {})",
+            idx + 1,
+            inputs.len(),
+            src.display(),
+            dst.display(),
+            px_x,
+            px_y,
+            gdal_resamp
         );
     }
     Ok(())

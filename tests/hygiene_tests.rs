@@ -192,7 +192,7 @@ fn test_mcp_server_stdio_handshake_and_tools() {
 
     let list_resp: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 20);
 
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
@@ -758,7 +758,7 @@ fn test_mcp_tools_schema_contract_integrity() {
     let line = String::from_utf8_lossy(&output.stdout);
     let resp: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 20);
 
     let mut seen_names = HashSet::new();
     for tool in tools {
@@ -1146,4 +1146,97 @@ fn test_gdal_select_flatten_explode_and_split() {
     );
     assert!(split_dir.join("kota_a.shp").is_file());
     assert!(split_dir.join("kota_b.shp").is_file());
+}
+
+#[test]
+fn test_gdal_xy2shp_dms_and_gpx_convert() {
+    let doc = geokit_bin().args(["doctor", "--json"]).output().unwrap();
+    let doc_json: serde_json::Value = serde_json::from_slice(&doc.stdout).unwrap();
+    if doc_json["gdal"]["ogr2ogr"].is_null() {
+        return;
+    }
+
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // 1. CSV with DMS coordinates (English + Indonesian LS/BT) -> GeoJSON via xy2shp
+    let csv_path = root.join("stasiun_dms.csv");
+    fs::write(
+        &csv_path,
+        "NAMA,LON,LAT,CH_MM\n\
+         Stasiun A,\"110°24'30\"\"E\",\"7°00'12\"\"S\",2450\n\
+         Stasiun B,\"110° 25' 12\"\" BT\",\"6° 58' 30\"\" LS\",2100\n",
+    )
+    .unwrap();
+
+    let pts_gj = root.join("stasiun.geojson");
+    let r_xy = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "xy2shp",
+            csv_path.to_str().unwrap(),
+            "--x-field",
+            "LON",
+            "--y-field",
+            "LAT",
+            "--epsg",
+            "4326",
+            "--out",
+            pts_gj.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r_xy.status.success(),
+        "xy2shp DMS stderr: {}",
+        String::from_utf8_lossy(&r_xy.stderr)
+    );
+    let gj_val: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&pts_gj).unwrap()).unwrap();
+    let feats = gj_val["features"].as_array().unwrap();
+    assert_eq!(feats.len(), 2);
+    let c0 = feats[0]["geometry"]["coordinates"].as_array().unwrap();
+    assert!((c0[0].as_f64().unwrap() - 110.4083333).abs() < 1e-4);
+    assert!((c0[1].as_f64().unwrap() - (-7.0033333)).abs() < 1e-4);
+    let c1 = feats[1]["geometry"]["coordinates"].as_array().unwrap();
+    assert!((c1[0].as_f64().unwrap() - 110.42).abs() < 1e-4);
+    assert!((c1[1].as_f64().unwrap() - (-6.975)).abs() < 1e-4);
+
+    // 2. GPX waypoints -> GeoJSON via `gp convert`
+    let gpx_path = root.join("survey_gps.gpx");
+    fs::write(
+        &gpx_path,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GeoKitTest" xmlns="http://www.topografix.com/GPX/1/1">
+  <wpt lat="-7.0123" lon="110.4150"><name>BM-01</name></wpt>
+  <wpt lat="-7.0250" lon="110.4320"><name>BM-02</name></wpt>
+</gpx>"#,
+    )
+    .unwrap();
+
+    let gpx_gj = root.join("survey_gps.geojson");
+    let r_gpx = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "convert",
+            gpx_path.to_str().unwrap(),
+            "--to",
+            "geojson",
+            "--out",
+            gpx_gj.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r_gpx.status.success(),
+        "gpx convert stderr: {}",
+        String::from_utf8_lossy(&r_gpx.stderr)
+    );
+    let gpx_val: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&gpx_gj).unwrap()).unwrap();
+    assert_eq!(gpx_val["features"].as_array().unwrap().len(), 2);
 }

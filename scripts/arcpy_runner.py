@@ -2163,6 +2163,708 @@ def cmd_centroid(payload):
     return 0
 
 
+def _geom_area_m2(geom, is_geo):
+    if geom is None:
+        return 0.0
+    if is_geo:
+        try:
+            return float(geom.getArea("GEODESIC", "SQUAREMETERS"))
+        except Exception:
+            pass
+    try:
+        return float(geom.area)
+    except Exception:
+        return 0.0
+
+
+def _infer_csv_field_type(values):
+    non_empty = [v.strip() for v in values if v is not None and str(v).strip() != ""]
+    if not non_empty:
+        return "TEXT", 64
+    all_int = True
+    all_float = True
+    max_len = 16
+    for s in non_empty:
+        max_len = max(max_len, len(s))
+        try:
+            int(s)
+        except ValueError:
+            all_int = False
+        try:
+            float(s)
+        except ValueError:
+            all_float = False
+    if all_int:
+        return "LONG", None
+    if all_float:
+        return "DOUBLE", None
+    return "TEXT", min(254, max(32, max_len + 16))
+
+
+def _unique_field_name(raw_name, existing_lower, is_shp):
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", raw_name.strip())
+    if not clean or clean[0].isdigit():
+        clean = "F_" + clean
+    max_len = 10 if is_shp else 60
+    cand = clean[:max_len]
+    idx = 1
+    while cand.lower() in existing_lower:
+        suf = f"_{idx}"
+        cand = clean[: max(1, max_len - len(suf))] + suf
+        idx += 1
+    existing_lower.add(cand.lower())
+    return cand
+
+
+def cmd_join(payload):
+    import csv
+
+    src = payload["input"]
+    csv_path = payload["table"]
+    in_field_req = payload["in_field"]
+    join_field_req = payload["join_field"]
+    out_path = payload["out"]
+    ensure_output_container(out_path, is_batch=False)
+
+    in_fields = {f.name.lower(): f.name for f in arcpy.ListFields(src)}
+    if in_field_req.lower() not in in_fields:
+        print(f"Input key field '{in_field_req}' not found in {src}", file=sys.stderr)
+        return 1
+    in_key = in_fields[in_field_req.lower()]
+
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        if not reader.fieldnames:
+            print(f"CSV table has no header row: {csv_path}", file=sys.stderr)
+            return 1
+        csv_map = {c.strip().lower(): c for c in reader.fieldnames if c}
+        if join_field_req.lower() not in csv_map:
+            print(f"Join key column '{join_field_req}' not found in {csv_path}", file=sys.stderr)
+            return 1
+        join_col = csv_map[join_field_req.lower()]
+        extra_cols = [c for c in reader.fieldnames if c and c != join_col]
+        lookup = {}
+        col_samples = {c: [] for c in extra_cols}
+        for row in reader:
+            k_raw = row.get(join_col)
+            if k_raw is None:
+                continue
+            k = str(k_raw).strip().lower()
+            if not k:
+                continue
+            lookup[k] = row
+            for c in extra_cols:
+                col_samples[c].append(row.get(c, ""))
+
+    if not extra_cols:
+        print("CSV table has no extra columns to join beyond key column.", file=sys.stderr)
+        return 1
+
+    arcpy.management.CopyFeatures(src, out_path)
+    is_shp = out_path.lower().endswith(".shp")
+    existing_lower = {f.name.lower() for f in arcpy.ListFields(out_path)}
+    added = []  # (csv_col, out_field, ftype)
+    for col in extra_cols:
+        ftype, flen = _infer_csv_field_type(col_samples[col])
+        out_f = _unique_field_name(col, existing_lower, is_shp)
+        if ftype == "TEXT":
+            arcpy.management.AddField(out_path, out_f, "TEXT", field_length=flen)
+        else:
+            arcpy.management.AddField(out_path, out_f, ftype)
+        added.append((col, out_f, ftype))
+
+    matched = 0
+    total = 0
+    upd_cols = [in_key] + [x[1] for x in added]
+    with arcpy.da.UpdateCursor(out_path, upd_cols) as cur:
+        for row in cur:
+            total += 1
+            k_val = row[0]
+            if k_val is None:
+                continue
+            rec = lookup.get(str(k_val).strip().lower())
+            if not rec:
+                continue
+            matched += 1
+            for i, (col, _, ftype) in enumerate(added, 1):
+                raw_v = (rec.get(col) or "").strip()
+                if raw_v == "":
+                    row[i] = None
+                elif ftype == "LONG":
+                    try:
+                        row[i] = int(float(raw_v))
+                    except ValueError:
+                        row[i] = None
+                elif ftype == "DOUBLE":
+                    try:
+                        row[i] = float(raw_v)
+                    except ValueError:
+                        row[i] = None
+                else:
+                    row[i] = raw_v[:254]
+            cur.updateRow(row)
+
+    print(f"OK Joined {len(added)} field(s) ({matched}/{total} features matched) -> {out_path}")
+    return 0
+
+
+def cmd_multi_buffer(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    dists_raw = payload.get("dists") or ""
+    dists = []
+    for tok in dists_raw.split(","):
+        tok = tok.strip()
+        if tok:
+            dists.append(float(tok))
+    if not dists:
+        print("No valid distances provided in --dists (e.g. '500,1000,2000').", file=sys.stderr)
+        return 1
+    unit = payload.get("unit") or "Meters"
+    dissolve = (payload.get("dissolve_option") or "ALL").upper()
+    ensure_output_container(out_path, is_batch=False)
+    arcpy.analysis.MultipleRingBuffer(src, out_path, dists, unit, "distance", dissolve)
+    cnt = int(arcpy.management.GetCount(out_path)[0])
+    print(f"OK Multi-ring buffer ({dists} {unit}, {cnt} polygon(s)) -> {out_path}")
+    return 0
+
+
+def cmd_thiessen(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    ext_layer = payload.get("extent")
+    ensure_output_container(out_path, is_batch=False)
+    prev_ext = arcpy.env.extent
+    try:
+        if ext_layer:
+            arcpy.env.extent = arcpy.Describe(ext_layer).extent
+        arcpy.analysis.CreateThiessenPolygons(src, out_path, "ALL")
+    finally:
+        arcpy.env.extent = prev_ext
+    cnt = int(arcpy.management.GetCount(out_path)[0])
+    print(f"OK Created {cnt} Thiessen polygon(s) -> {out_path}")
+    return 0
+
+
+def _parse_search_radius_num(raw):
+    if not raw:
+        return None
+    m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)", str(raw))
+    if not m:
+        return None
+    val = float(m.group(1))
+    low = str(raw).lower()
+    if "kilometer" in low or low.endswith("km"):
+        return val * 1000.0
+    return val
+
+
+def cmd_near(payload):
+    src = payload["input"]
+    near_fc = payload["near_layer"]
+    radius = payload.get("search_radius") or ""
+    try:
+        arcpy.analysis.Near(src, near_fc, radius if radius else None)
+        print(f"OK Computed NEAR_FID & NEAR_DIST against {os.path.basename(near_fc)} -> {src}")
+        return 0
+    except Exception:
+        # License-independent fallback (works on ArcGIS Basic!)
+        near_geoms = []
+        with arcpy.da.SearchCursor(near_fc, ["OID@", "SHAPE@"]) as sc:
+            for oid, g in sc:
+                if g is not None:
+                    near_geoms.append((int(oid), g))
+        if not near_geoms:
+            print(f"Near layer has no valid geometries: {near_fc}", file=sys.stderr)
+            return 1
+        existing = {f.name.lower() for f in arcpy.ListFields(src)}
+        if "near_fid" not in existing:
+            arcpy.management.AddField(src, "NEAR_FID", "LONG")
+        if "near_dist" not in existing:
+            arcpy.management.AddField(src, "NEAR_DIST", "DOUBLE")
+        max_d = _parse_search_radius_num(radius)
+        cnt = 0
+        with arcpy.da.UpdateCursor(src, ["SHAPE@", "NEAR_FID", "NEAR_DIST"]) as uc:
+            for row in uc:
+                g = row[0]
+                if g is None:
+                    continue
+                best_oid = -1
+                best_d = -1.0
+                for noid, ng in near_geoms:
+                    d = float(g.distanceTo(ng))
+                    if max_d is not None and d > max_d:
+                        continue
+                    if best_oid == -1 or d < best_d:
+                        best_oid = noid
+                        best_d = d
+                row[1] = best_oid
+                row[2] = best_d
+                uc.updateRow(row)
+                cnt += 1
+        print(f"OK Computed NEAR_FID & NEAR_DIST ({cnt} feature(s), Basic fallback) -> {src}")
+        return 0
+
+
+def _eliminate_slivers_inplace(fc, min_area):
+    desc = arcpy.Describe(fc)
+    sr = getattr(desc, "spatialReference", None)
+    is_geo = bool(sr and getattr(sr, "type", "") == "Geographic")
+    records = []
+    with arcpy.da.SearchCursor(fc, ["OID@", "SHAPE@"]) as sc:
+        for oid, g in sc:
+            if g is not None:
+                records.append((int(oid), g, _geom_area_m2(g, is_geo)))
+    slivers = [(oid, g, a) for oid, g, a in records if a < min_area]
+    if not slivers:
+        return 0
+
+    # Try ArcGIS Eliminate_management first (Advanced license)
+    sliver_oids = {oid for oid, _, _ in slivers}
+    try:
+        oid_field = desc.OIDFieldName
+        lyr = "geokit_elim_lyr"
+        if arcpy.Exists(lyr):
+            arcpy.management.Delete(lyr)
+        arcpy.management.MakeFeatureLayer(fc, lyr)
+        oid_csv = ",".join(str(x) for x in sorted(sliver_oids))
+        arcpy.management.SelectLayerByAttribute(lyr, "NEW_SELECTION", f"{oid_field} IN ({oid_csv})")
+        tmp_out = os.path.join("in_memory", "gk_elim_tmp")
+        if arcpy.Exists(tmp_out):
+            arcpy.management.Delete(tmp_out)
+        arcpy.management.Eliminate(lyr, tmp_out, "LENGTH")
+        arcpy.management.Delete(lyr)
+        prev_ow = arcpy.env.overwriteOutput
+        arcpy.env.overwriteOutput = True
+        try:
+            arcpy.management.CopyFeatures(tmp_out, fc)
+        finally:
+            arcpy.env.overwriteOutput = prev_ow
+            if arcpy.Exists(tmp_out):
+                arcpy.management.Delete(tmp_out)
+        return len(sliver_oids)
+    except Exception:
+        # License-independent Basic fallback: merge each sliver into longest-shared-border non-sliver neighbor
+        keepers = {oid: g for oid, g, a in records if a >= min_area}
+        if not keepers:
+            return 0
+        eliminated_oids = set()
+        for soid, sg, _ in slivers:
+            sext = sg.extent
+            best_k = None
+            best_score = -1.0
+            for koid, kg in keepers.items():
+                kext = kg.extent
+                if sext.XMax < kext.XMin or sext.XMin > kext.XMax or sext.YMax < kext.YMin or sext.YMin > kext.YMax:
+                    continue
+                try:
+                    shared = sg.intersect(kg, 2)  # 2 = polyline shared boundary
+                    score = float(shared.length) if shared else 0.0
+                except Exception:
+                    score = 0.0
+                if score == 0.0 and not sg.disjoint(kg):
+                    score = 1e-6
+                if score > best_score:
+                    best_score = score
+                    best_k = koid
+            if best_k is not None and best_score > 0.0:
+                try:
+                    keepers[best_k] = keepers[best_k].union(sg)
+                    eliminated_oids.add(soid)
+                except Exception:
+                    pass
+        if not eliminated_oids:
+            return 0
+        with arcpy.da.UpdateCursor(fc, ["OID@", "SHAPE@"]) as uc:
+            for row in uc:
+                oid = int(row[0])
+                if oid in eliminated_oids:
+                    uc.deleteRow()
+                elif oid in keepers:
+                    row[1] = keepers[oid]
+                    uc.updateRow(row)
+        return len(eliminated_oids)
+
+
+def cmd_eliminate(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    min_area = float(payload.get("min_area") or 100.0)
+    ensure_output_container(out_path, is_batch=False)
+    arcpy.management.CopyFeatures(src, out_path)
+    removed = _eliminate_slivers_inplace(out_path, min_area)
+    remaining = int(arcpy.management.GetCount(out_path)[0])
+    print(f"OK Eliminated {removed} sliver polygon(s) (< {min_area:.2f} m2), {remaining} remaining -> {out_path}")
+    return 0
+
+
+def _delete_duplicates_inplace(fc, tolerance=None):
+    before = int(arcpy.management.GetCount(fc)[0])
+    try:
+        arcpy.management.DeleteIdentical(fc, ["Shape"], tolerance if tolerance else None)
+        after = int(arcpy.management.GetCount(fc)[0])
+        return max(0, before - after)
+    except Exception:
+        # License-independent fallback (works on ArcGIS Basic!)
+        seen = set()
+        removed = 0
+        with arcpy.da.UpdateCursor(fc, ["SHAPE@"]) as uc:
+            for (g,) in uc:
+                if g is None:
+                    continue
+                try:
+                    sig = g.WKB
+                except Exception:
+                    c = g.centroid
+                    sig = (round(c.X, 4), round(c.Y, 4), round(g.area, 4), round(g.length, 4))
+                if sig in seen:
+                    uc.deleteRow()
+                    removed += 1
+                else:
+                    seen.add(sig)
+        return removed
+
+
+def cmd_delete_duplicates(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    tol = payload.get("tolerance")
+    ensure_output_container(out_path, is_batch=False)
+    arcpy.management.CopyFeatures(src, out_path)
+    removed = _delete_duplicates_inplace(out_path, tol)
+    remaining = int(arcpy.management.GetCount(out_path)[0])
+    print(f"OK Removed {removed} duplicate geometry feature(s), {remaining} remaining -> {out_path}")
+    return 0
+
+
+def cmd_topo_check(payload):
+    src = payload["input"]
+    out_dir = payload.get("out_dir")
+    min_sliver = float(payload.get("min_sliver") or 100.0)
+    strict = bool(payload.get("strict", False))
+    as_json = bool(payload.get("json", False))
+
+    desc = arcpy.Describe(src)
+    shape_type = (getattr(desc, "shapeType", "") or "").lower()
+    sr = getattr(desc, "spatialReference", None)
+    is_geo = bool(sr and getattr(sr, "type", "") == "Geographic")
+    total_features = int(arcpy.management.GetCount(src)[0])
+
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    # 1. Invalid geometries via CheckGeometry
+    invalid_count = 0
+    try:
+        chk_tbl = os.path.join("in_memory", "gk_topo_chk")
+        if arcpy.Exists(chk_tbl):
+            arcpy.management.Delete(chk_tbl)
+        arcpy.management.CheckGeometry(src, chk_tbl)
+        invalid_count = int(arcpy.management.GetCount(chk_tbl)[0])
+        arcpy.management.Delete(chk_tbl)
+    except Exception:
+        invalid_count = 0
+
+    # 2. Load geometries
+    geoms = []
+    seen_wkb = set()
+    duplicate_count = 0
+    sliver_count = 0
+    with arcpy.da.SearchCursor(src, ["OID@", "SHAPE@"]) as sc:
+        for oid, g in sc:
+            if g is None:
+                continue
+            try:
+                sig = g.WKB
+            except Exception:
+                c = g.centroid
+                sig = (round(c.X, 4), round(c.Y, 4), round(g.area, 4), round(g.length, 4))
+            if sig in seen_wkb:
+                duplicate_count += 1
+            else:
+                seen_wkb.add(sig)
+            if shape_type == "polygon" and _geom_area_m2(g, is_geo) < min_sliver:
+                sliver_count += 1
+            geoms.append((int(oid), g, g.extent))
+
+    overlap_geoms = []
+    gap_geoms = []
+    dangle_pts = []
+    self_intersections = 0
+    exported_files = []
+
+    if shape_type == "polygon":
+        # 3a. Pairwise polygon overlaps (bbox prefiltered)
+        n = len(geoms)
+        for i in range(n):
+            oid_a, ga, ea = geoms[i]
+            for j in range(i + 1, n):
+                oid_b, gb, eb = geoms[j]
+                if ea.XMax <= eb.XMin or ea.XMin >= eb.XMax or ea.YMax <= eb.YMin or ea.YMin >= eb.YMax:
+                    continue
+                try:
+                    inter = ga.intersect(gb, 4)  # 4 = polygon
+                    if inter is not None and inter.area > 0:
+                        overlap_geoms.append((oid_a, oid_b, inter))
+                except Exception:
+                    pass
+
+        # 3b. Interior gaps (dissolve all polygons -> inspect interior rings of dissolved parts)
+        try:
+            diss_fc = os.path.join("in_memory", "gk_topo_diss")
+            if arcpy.Exists(diss_fc):
+                arcpy.management.Delete(diss_fc)
+            arcpy.management.Dissolve(src, diss_fc)
+            with arcpy.da.SearchCursor(diss_fc, ["SHAPE@"]) as sc:
+                for (dg,) in sc:
+                    if dg is None:
+                        continue
+                    for part in dg:
+                        rings = []
+                        cur_ring = []
+                        for pt in part:
+                            if pt is None:
+                                if cur_ring:
+                                    rings.append(cur_ring)
+                                    cur_ring = []
+                            else:
+                                cur_ring.append(pt)
+                        if cur_ring:
+                            rings.append(cur_ring)
+                        # Rings after index 0 are interior holes (gaps)
+                        for hole in rings[1:]:
+                            if len(hole) >= 4:
+                                arr = arcpy.Array(hole)
+                                poly_gap = arcpy.Polygon(arr, sr)
+                                if poly_gap.area > 0:
+                                    gap_geoms.append(poly_gap)
+            arcpy.management.Delete(diss_fc)
+        except Exception:
+            pass
+
+        if out_dir and overlap_geoms:
+            ov_path = os.path.join(out_dir, "topo_overlaps.shp")
+            if arcpy.Exists(ov_path):
+                arcpy.management.Delete(ov_path)
+            arcpy.management.CreateFeatureclass(out_dir, "topo_overlaps.shp", "POLYGON", spatial_reference=sr)
+            arcpy.management.AddField(ov_path, "OID_A", "LONG")
+            arcpy.management.AddField(ov_path, "OID_B", "LONG")
+            with arcpy.da.InsertCursor(ov_path, ["SHAPE@", "OID_A", "OID_B"]) as ic:
+                for oa, ob, ig in overlap_geoms:
+                    ic.insertRow([ig, oa, ob])
+            exported_files.append(ov_path)
+
+        if out_dir and gap_geoms:
+            gp_path = os.path.join(out_dir, "topo_gaps.shp")
+            if arcpy.Exists(gp_path):
+                arcpy.management.Delete(gp_path)
+            arcpy.management.CreateFeatureclass(out_dir, "topo_gaps.shp", "POLYGON", spatial_reference=sr)
+            with arcpy.da.InsertCursor(gp_path, ["SHAPE@"]) as ic:
+                for gg in gap_geoms:
+                    ic.insertRow([gg])
+            exported_files.append(gp_path)
+
+    elif shape_type == "polyline":
+        # 3c. Polyline dangling endpoints (node degree == 1) & crossings
+        node_counts = {}
+        node_coords = {}
+        prec = 6 if is_geo else 2
+        for _, g, _ in geoms:
+            for part in g:
+                pts = [p for p in part if p is not None]
+                if len(pts) < 2:
+                    continue
+                for end_pt in (pts[0], pts[-1]):
+                    key = (round(end_pt.X, prec), round(end_pt.Y, prec))
+                    node_counts[key] = node_counts.get(key, 0) + 1
+                    node_coords[key] = end_pt
+        for key, cnt in node_counts.items():
+            if cnt == 1:
+                dangle_pts.append(node_coords[key])
+
+        n = len(geoms)
+        for i in range(n):
+            _, ga, ea = geoms[i]
+            for j in range(i + 1, n):
+                _, gb, eb = geoms[j]
+                if ea.XMax < eb.XMin or ea.XMin > eb.XMax or ea.YMax < eb.YMin or ea.YMin > eb.YMax:
+                    continue
+                try:
+                    if ga.crosses(gb):
+                        self_intersections += 1
+                except Exception:
+                    pass
+
+        if out_dir and dangle_pts:
+            dg_path = os.path.join(out_dir, "topo_dangles.shp")
+            if arcpy.Exists(dg_path):
+                arcpy.management.Delete(dg_path)
+            arcpy.management.CreateFeatureclass(out_dir, "topo_dangles.shp", "POINT", spatial_reference=sr)
+            with arcpy.da.InsertCursor(dg_path, ["SHAPE@XY"]) as ic:
+                for pt in dangle_pts:
+                    ic.insertRow([(pt.X, pt.Y)])
+            exported_files.append(dg_path)
+
+    total_errors = (
+        invalid_count
+        + duplicate_count
+        + sliver_count
+        + len(overlap_geoms)
+        + len(gap_geoms)
+        + len(dangle_pts)
+        + self_intersections
+    )
+    report = {
+        "dataset": src,
+        "shape_type": shape_type,
+        "features": total_features,
+        "min_sliver_m2": min_sliver,
+        "invalid_geometries": invalid_count,
+        "duplicate_geometries": duplicate_count,
+        "sliver_polygons": sliver_count,
+        "overlaps": len(overlap_geoms),
+        "interior_gaps": len(gap_geoms),
+        "dangles": len(dangle_pts),
+        "line_crossings": self_intersections,
+        "total_errors": total_errors,
+        "exported_error_layers": exported_files,
+        "passed": total_errors == 0,
+    }
+    if as_json:
+        print(json.dumps(report, indent=2))
+    else:
+        status = "PASS" if total_errors == 0 else f"ISSUES ({total_errors})"
+        print(f"Topology Check [{status}]: {os.path.basename(src)} ({shape_type}, {total_features} features)")
+        print(f"  Invalid geometries : {invalid_count}")
+        print(f"  Duplicate features : {duplicate_count}")
+        if shape_type == "polygon":
+            print(f"  Overlaps           : {len(overlap_geoms)}")
+            print(f"  Interior gaps      : {len(gap_geoms)}")
+            print(f"  Slivers (<{min_sliver:g} m2): {sliver_count}")
+        elif shape_type == "polyline":
+            print(f"  Dangling nodes     : {len(dangle_pts)}")
+            print(f"  Line crossings     : {self_intersections}")
+        for ef in exported_files:
+            print(f"  Exported error shp : {ef}")
+    return 1 if (strict and total_errors > 0) else 0
+
+
+def cmd_topo_fix(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    min_sliver = float(payload.get("min_sliver") or 100.0)
+    ensure_output_container(out_path, is_batch=False)
+    arcpy.management.CopyFeatures(src, out_path)
+    arcpy.management.RepairGeometry(out_path, "DELETE_NULL")
+    dups_removed = _delete_duplicates_inplace(out_path)
+    desc = arcpy.Describe(out_path)
+    slivers_removed = 0
+    if (getattr(desc, "shapeType", "") or "").lower() == "polygon" and min_sliver > 0:
+        slivers_removed = _eliminate_slivers_inplace(out_path, min_sliver)
+    final_cnt = int(arcpy.management.GetCount(out_path)[0])
+    print(
+        f"OK Topology Fix complete -> {out_path} "
+        f"(repaired geometry, removed {dups_removed} duplicates, eliminated {slivers_removed} slivers, {final_cnt} feature(s) remaining)"
+    )
+    return 0
+
+
+def cmd_raster_align(payload):
+    inputs = payload.get("inputs") or [payload["input"]]
+    ref_raster = payload["reference"]
+    out_path = payload["out"]
+    resamp = (payload.get("resampling") or "BILINEAR").upper()
+    if resamp not in ("NEAREST", "BILINEAR", "CUBIC", "MAJORITY"):
+        resamp = "BILINEAR"
+
+    ref_desc = arcpy.Describe(ref_raster)
+    ref_sr = ref_desc.spatialReference
+    cell_x = float(arcpy.management.GetRasterProperties(ref_raster, "CELLSIZEX")[0])
+    cell_y = float(arcpy.management.GetRasterProperties(ref_raster, "CELLSIZEY")[0])
+    cell_str = f"{cell_x} {cell_y}"
+
+    is_batch = len(inputs) > 1 or os.path.isdir(out_path) or not os.path.splitext(out_path)[1]
+    if is_batch:
+        os.makedirs(out_path, exist_ok=True)
+    else:
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+    prev_snap = arcpy.env.snapRaster
+    prev_ext = arcpy.env.extent
+    prev_cs = arcpy.env.cellSize
+    arcpy.env.snapRaster = ref_raster
+    arcpy.env.extent = ref_desc.extent
+    arcpy.env.cellSize = ref_raster
+    try:
+        for idx, src in enumerate(inputs, 1):
+            if is_batch:
+                stem = os.path.splitext(os.path.basename(src))[0]
+                dst = os.path.join(out_path, f"{stem}_aligned.tif")
+            else:
+                dst = out_path
+            arcpy.management.ProjectRaster(src, dst, ref_sr, resamp, cell_str)
+            print(f"[{idx}/{len(inputs)}] OK   Aligned {os.path.basename(src)} -> {dst} ({cell_x:g}x{cell_y:g}, {resamp})")
+    finally:
+        arcpy.env.snapRaster = prev_snap
+        arcpy.env.extent = prev_ext
+        arcpy.env.cellSize = prev_cs
+    return 0
+
+
+def cmd_raster_extract_points(payload):
+    pts = payload["points"]
+    ras = payload["raster"]
+    field_name = payload.get("field") or "RAST_VAL"
+    out_path = payload["out"]
+    ensure_output_container(out_path, is_batch=False)
+
+    used_sa = False
+    try:
+        arcpy.CheckOutExtension("Spatial")
+        from arcpy.sa import ExtractValuesToPoints
+
+        ExtractValuesToPoints(pts, ras, out_path, "NONE", "VALUE_ONLY")
+        used_sa = True
+        if field_name.upper() != "RASTERVALU":
+            existing = {f.name.lower() for f in arcpy.ListFields(out_path)}
+            if field_name.lower() not in existing:
+                arcpy.management.AddField(out_path, field_name, "DOUBLE")
+            with arcpy.da.UpdateCursor(out_path, ["RASTERVALU", field_name]) as uc:
+                for row in uc:
+                    row[1] = row[0]
+                    uc.updateRow(row)
+            arcpy.management.DeleteField(out_path, ["RASTERVALU"])
+    except Exception:
+        # License-independent fallback using GetCellValue_management!
+        arcpy.management.CopyFeatures(pts, out_path)
+        existing = {f.name.lower() for f in arcpy.ListFields(out_path)}
+        if field_name.lower() not in existing:
+            arcpy.management.AddField(out_path, field_name, "DOUBLE")
+        ras_sr = arcpy.Describe(ras).spatialReference
+        pts_sr = arcpy.Describe(out_path).spatialReference
+        need_proj = bool(ras_sr and pts_sr and ras_sr.factoryCode != pts_sr.factoryCode)
+        with arcpy.da.UpdateCursor(out_path, ["SHAPE@", field_name]) as uc:
+            for row in uc:
+                g = row[0]
+                if g is None:
+                    continue
+                if need_proj:
+                    g = g.projectAs(ras_sr)
+                pt = g.firstPoint
+                try:
+                    res = arcpy.management.GetCellValue(ras, f"{pt.X} {pt.Y}")[0]
+                    row[1] = None if str(res).lower() in ("nodata", "") else float(res)
+                except Exception:
+                    row[1] = None
+                uc.updateRow(row)
+    cnt = int(arcpy.management.GetCount(out_path)[0])
+    mode = "Spatial Analyst" if used_sa else "GetCellValue fallback"
+    print(f"OK Extracted raster values ({field_name}, {cnt} points, {mode}) -> {out_path}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -2194,6 +2896,14 @@ HANDLERS = {
     "clean_fields": cmd_clean_fields,
     "explode": cmd_explode,
     "centroid": cmd_centroid,
+    "join": cmd_join,
+    "multi_buffer": cmd_multi_buffer,
+    "thiessen": cmd_thiessen,
+    "near": cmd_near,
+    "eliminate": cmd_eliminate,
+    "delete_duplicates": cmd_delete_duplicates,
+    "topo_check": cmd_topo_check,
+    "topo_fix": cmd_topo_fix,
     "qa_check": cmd_qa_check,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
@@ -2211,6 +2921,8 @@ HANDLERS = {
     "raster_interpolate": cmd_raster_interpolate,
     "raster_index": cmd_raster_index,
     "raster_contour": cmd_raster_contour,
+    "raster_align": cmd_raster_align,
+    "raster_extract_points": cmd_raster_extract_points,
     "hydro_delineate": cmd_hydro_delineate,
     "hydro_basin": cmd_hydro_basin,
 }

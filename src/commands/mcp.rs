@@ -285,7 +285,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["info", "values", "classify", "calc-field", "union", "select", "export-table", "flatten-2d", "define-crs", "split", "clean-fields", "explode", "centroid", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
+                        "enum": ["info", "values", "classify", "calc-field", "union", "select", "export-table", "flatten-2d", "define-crs", "split", "clean-fields", "explode", "centroid", "join", "multi-buffer", "thiessen", "near", "eliminate", "delete-duplicates", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
                     },
                     "input": { "type": "string", "description": "Input file, folder, .gdb, or keyword pattern (for tools)" },
                     "inputs": { "type": "array", "items": { "type": "string" }, "description": "List of input polygon paths (for union)" },
@@ -316,6 +316,16 @@ fn tool_definitions() -> Value {
                     "keep": { "type": "string", "description": "Comma-separated field names to keep (for clean-fields)" },
                     "drop": { "type": "string", "description": "Comma-separated field names to drop (for clean-fields)" },
                     "inside": { "type": "boolean", "description": "Force centroid strictly inside polygon (for centroid)" },
+                    "table": { "type": "string", "description": "CSV table path to join attributes from (for join)" },
+                    "in_field": { "type": "string", "description": "Input vector key field name (for join)" },
+                    "join_field": { "type": "string", "description": "CSV key column name (for join)" },
+                    "dists": { "type": "string", "description": "Comma-separated multi-ring buffer distances e.g. '500,1000,2000' (for multi-buffer)" },
+                    "dissolve_option": { "type": "string", "enum": ["ALL", "NONE"], "description": "Dissolve option for multi-buffer" },
+                    "extent": { "type": "string", "description": "Optional boundary polygon path to bound Thiessen polygons (for thiessen)" },
+                    "near": { "type": "string", "description": "Target near layer path (for near)" },
+                    "search_radius": { "type": "string", "description": "Optional search radius e.g. '5000 Meters' (for near)" },
+                    "min_area": { "type": "number", "description": "Minimum sliver polygon area threshold in m2 (for eliminate)" },
+                    "tolerance": { "type": "string", "description": "Optional XY tolerance e.g. '0.01 Meters' (for delete-duplicates)" },
                     "overwrite": { "type": "boolean", "description": "Allow replacing existing output files (Safe Mode is default)" }
                 },
                 "required": ["action"]
@@ -365,13 +375,13 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "geokit_raster",
-            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, point-to-raster interpolation (IDW/Spline/Kriging), satellite spectral index (NDVI/NDWI/NDBI/SAVI/NBR), or topographic contour lines (with BIG INDEX_KTR).",
+            "description": "Run raster mosaic, terrain (slope/aspect/hillshade), zonal statistics, reclass (with optional smoothing), weighted-sum multi-raster overlay, point-to-raster interpolation (IDW/Spline/Kriging), satellite spectral index (NDVI/NDWI/NDBI/SAVI/NBR), topographic contour lines (with BIG INDEX_KTR), raster grid alignment (align), or raster value extraction to points (extract-points).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate", "index", "contour"] },
+                    "action": { "type": "string", "enum": ["mosaic", "terrain", "zonal-stats", "reclass", "weighted-sum", "interpolate", "index", "contour", "align", "extract-points"] },
                     "input": { "type": "string", "description": "Input raster, point layer (for interpolate), DEM (for contour), or folder" },
-                    "inputs": { "type": "string", "description": "Comma-separated '<raster>:<weight>' pairs (for weighted-sum)" },
+                    "inputs": { "type": "string", "description": "Comma-separated '<raster>:<weight>' pairs (for weighted-sum) OR comma-separated raster paths (for align)" },
                     "out": { "type": "string", "description": "Output file or directory" },
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap", "gdal"] },
                     "zones": { "type": "string", "description": "Zone polygon path (for zonal-stats)" },
@@ -380,7 +390,7 @@ fn tool_definitions() -> Value {
                     "smooth": { "type": "boolean", "description": "Apply MajorityFilter smoothing (for reclass or weighted-sum)" },
                     "classes": { "type": "integer", "description": "Optional number of classes (for weighted-sum or index)" },
                     "polygon_out": { "type": "string", "description": "Optional classified polygon output path (for weighted-sum or index)" },
-                    "field": { "type": "string", "description": "Value field to interpolate (for interpolate)" },
+                    "field": { "type": "string", "description": "Value field to interpolate (for interpolate) or output field name (for extract-points)" },
                     "method": { "type": "string", "enum": ["idw", "spline", "kriging"], "description": "Interpolation method (for interpolate)" },
                     "cell_size": { "type": "number", "description": "Output cell size in map units (for interpolate)" },
                     "mask": { "type": "string", "description": "Optional polygon mask/AOI (for interpolate)" },
@@ -389,7 +399,12 @@ fn tool_definitions() -> Value {
                     "band_b": { "type": "string", "description": "Band B raster path e.g. Red/NIR/SWIR2 (for index)" },
                     "interval": { "type": "number", "description": "Contour elevation interval e.g. 12.5 or 25 (for contour)" },
                     "base": { "type": "number", "description": "Base contour elevation (for contour)" },
-                    "index_every": { "type": "integer", "description": "Index contour interval count (default 4 per BIG RBI, for contour)" }
+                    "index_every": { "type": "integer", "description": "Index contour interval count (default 4 per BIG RBI, for contour)" },
+                    "reference": { "type": "string", "description": "Reference raster path defining CRS, pixel size, snap grid, and extent (for align)" },
+                    "resampling": { "type": "string", "enum": ["BILINEAR", "NEAREST", "CUBIC"], "description": "Resampling method (for align)" },
+                    "points": { "type": "string", "description": "Input point shapefile or .gdb feature class (for extract-points)" },
+                    "raster": { "type": "string", "description": "Input raster file to sample (for extract-points)" },
+                    "overwrite": { "type": "boolean", "description": "Allow replacing existing output files" }
                 },
                 "required": ["action", "out"]
             }
@@ -449,11 +464,11 @@ fn tool_definitions() -> Value {
                     "show": { "type": "boolean", "description": "True/false toggle (for visible or labels)" },
                     "field": { "type": "string", "description": "Field name e.g. KELAS_RWN or NAMOBJ (for style or labels; omit for single-symbol or raster)" },
                     "mode": { "type": "string", "enum": ["auto", "unique", "graduated", "single", "raster"], "description": "ArcObjects renderer mode (for style)" },
-                    "preset": { "type": "string", "enum": ["hazard", "hazard5", "hazard-pastel", "viridis", "blue", "earth", "terrain", "gray", "category", "stream", "road", "boundary", "point"], "description": "Modern cartographic palette or single-symbol preset (for style)" },
+                    "preset": { "type": "string", "enum": ["hazard", "hazard5", "hazard-pastel", "viridis", "blue", "earth", "terrain", "gray", "category", "klhk", "stream", "road", "boundary", "point"], "description": "Modern cartographic palette or single-symbol preset (for style)" },
                     "colors": { "type": "string", "description": "Custom comma-separated hex color stops e.g. '#2E7D32,#FFF176,#D32F2F' (for style)" },
                     "color": { "type": "string", "description": "Single hex color e.g. '#0288D1' (for single/stream/road/boundary/point)" },
                     "classes_count": { "type": "integer", "description": "Number of numeric classes for graduated mode (default: 5)" },
-                    "break_method": { "type": "string", "enum": ["quantile", "equal"], "description": "Break method for graduated mode" },
+                    "break_method": { "type": "string", "enum": ["quantile", "equal", "jenks"], "description": "Break method for graduated mode (quantile, equal, or jenks Natural Breaks)" },
                     "outline_color": { "type": "string", "description": "Outline hex color e.g. '#37474F'" },
                     "outline_width": { "type": "number", "description": "Outline width in pt (0.0 = borderless)" },
                     "outline_style": { "type": "string", "enum": ["solid", "dash", "dot", "dashdot", "admin-kab", "admin-kec", "admin-desa"], "description": "True CartographicLineSymbol dash or BIG admin boundary pattern" },
@@ -463,7 +478,7 @@ fn tool_definitions() -> Value {
                     "halo": { "type": "boolean", "description": "White halo around labels (for labels, default: true)" },
                     "font_size": { "type": "number", "description": "Label font size in pt (for labels)" },
                     "template": { "type": "string", "enum": ["perkabig"], "description": "Built-in PerKaBIG No. 3/2016 7-section layout generator (for layout)" },
-                    "paper": { "type": "string", "enum": ["a4", "a3"], "description": "Paper size for perkabig layout: a4 (default) or a3" },
+                    "paper": { "type": "string", "enum": ["a4", "a3", "a1", "a0"], "description": "Paper size for perkabig layout: a4 (default), a3, a1, or a0" },
                     "region": { "type": "string", "description": "Region / study area name (bold header line 3, e.g. 'KABUPATEN KENDAL')" },
                     "sheet_number": { "type": "string", "description": "Optional BIG sheet number in blue (e.g. 'Lembar: 33.24.01.2001')" },
                     "author": { "type": "string", "description": "Map author / publisher / institution name (PerKaBIG Section 5)" },
@@ -540,6 +555,24 @@ fn tool_definitions() -> Value {
                     "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap"], "description": "Backend engine" }
                 },
                 "required": ["input"]
+            }
+        },
+        {
+            "name": "geokit_topo",
+            "description": "Run BIG topology checks (`check`: overlaps, interior gaps, slivers, dangles, line crossings, duplicates, invalid geometry) or automated 1-command topology cleanup (`fix`: RepairGeometry + remove duplicates + eliminate slivers).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["check", "fix"] },
+                    "input": { "type": "string", "description": "Input polygon/polyline shapefile or .gdb feature class" },
+                    "out": { "type": "string", "description": "Output cleaned dataset path (required for fix)" },
+                    "out_dir": { "type": "string", "description": "Optional directory to export error shapefiles topo_overlaps.shp / topo_gaps.shp / topo_dangles.shp (for check)" },
+                    "min_sliver": { "type": "number", "description": "Minimum sliver polygon area threshold in m2 (default: 100.0)" },
+                    "strict": { "type": "boolean", "description": "Exit non-zero if any topology error is found (for check)" },
+                    "engine": { "type": "string", "enum": ["auto", "arcgis", "arcmap"] },
+                    "overwrite": { "type": "boolean", "description": "Allow replacing existing output files" }
+                },
+                "required": ["action", "input"]
             }
         },
         {
@@ -642,6 +675,9 @@ fn is_readonly_mcp_call(name: &str, args: &Value) -> bool {
     }
     match name {
         "geokit_doctor" | "geokit_audit" | "geokit_qa" => true,
+        "geokit_topo" => {
+            matches!(str_arg(args, "action"), Some("check")) && str_arg(args, "out_dir").is_none()
+        }
         "geokit_summary" => str_arg(args, "out").is_none(),
         "geokit_gp" => matches!(
             str_arg(args, "action"),
@@ -666,8 +702,29 @@ fn validate_mcp_workspace_paths(args: &Value) -> Result<(), String> {
         return Ok(());
     }
     let path_keys = [
-        "path", "input", "out", "output", "aoi", "file", "dem", "mask", "with", "join", "zones",
-        "band_a", "band_b", "out_poly", "lyr_file", "logo",
+        "path",
+        "input",
+        "out",
+        "output",
+        "aoi",
+        "file",
+        "dem",
+        "mask",
+        "with",
+        "join",
+        "zones",
+        "band_a",
+        "band_b",
+        "out_poly",
+        "lyr_file",
+        "logo",
+        "table",
+        "extent",
+        "near",
+        "out_dir",
+        "reference",
+        "points",
+        "raster",
     ];
     for k in path_keys {
         if let Some(p) = str_arg(args, k) {
@@ -889,6 +946,36 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             if bool_arg(args, "inside") {
                 cli_args.push("--inside".into());
             }
+            if let Some(tbl) = str_arg(args, "table") {
+                cli_args.extend(["--table".into(), tbl.into()]);
+            }
+            if let Some(inf) = str_arg(args, "in_field") {
+                cli_args.extend(["--in-field".into(), inf.into()]);
+            }
+            if let Some(jf) = str_arg(args, "join_field") {
+                cli_args.extend(["--join-field".into(), jf.into()]);
+            }
+            if let Some(ds) = str_arg(args, "dists") {
+                cli_args.extend(["--dists".into(), ds.into()]);
+            }
+            if let Some(dopt) = str_arg(args, "dissolve_option") {
+                cli_args.extend(["--dissolve".into(), dopt.into()]);
+            }
+            if let Some(ext) = str_arg(args, "extent") {
+                cli_args.extend(["--extent".into(), ext.into()]);
+            }
+            if let Some(nr) = str_arg(args, "near") {
+                cli_args.extend(["--near".into(), nr.into()]);
+            }
+            if let Some(sr) = str_arg(args, "search_radius") {
+                cli_args.extend(["--search-radius".into(), sr.into()]);
+            }
+            if let Some(ma) = args.get("min_area").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--min-area".into(), ma.to_string()]);
+            }
+            if let Some(tol) = str_arg(args, "tolerance") {
+                cli_args.extend(["--tolerance".into(), tol.into()]);
+            }
             if let Some(lim) = args.get("limit").and_then(|v| v.as_u64()) {
                 cli_args.extend(["--limit".into(), lim.to_string()]);
             }
@@ -963,7 +1050,15 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
                 return ("Missing required arguments: action, out".into(), true);
             };
             cli_args.extend(["raster".into(), action.into()]);
-            if let Some(input) = str_arg(args, "input") {
+            if action == "align" {
+                if let Some(ins) = str_arg(args, "inputs") {
+                    for part in ins.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                        cli_args.push(part.into());
+                    }
+                } else if let Some(input) = str_arg(args, "input") {
+                    cli_args.push(input.into());
+                }
+            } else if let Some(input) = str_arg(args, "input") {
                 cli_args.push(input.into());
             }
             cli_args.extend(["--out".into(), out.into()]);
@@ -979,8 +1074,22 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             if bool_arg(args, "smooth") {
                 cli_args.push("--smooth".into());
             }
-            if let Some(ins) = str_arg(args, "inputs") {
-                cli_args.extend(["--inputs".into(), ins.into()]);
+            if action != "align" {
+                if let Some(ins) = str_arg(args, "inputs") {
+                    cli_args.extend(["--inputs".into(), ins.into()]);
+                }
+            }
+            if let Some(rf) = str_arg(args, "reference") {
+                cli_args.extend(["--ref".into(), rf.into()]);
+            }
+            if let Some(rs) = str_arg(args, "resampling") {
+                cli_args.extend(["--resampling".into(), rs.into()]);
+            }
+            if let Some(pts) = str_arg(args, "points") {
+                cli_args.extend(["--points".into(), pts.into()]);
+            }
+            if let Some(ras) = str_arg(args, "raster") {
+                cli_args.extend(["--raster".into(), ras.into()]);
             }
             if let Some(cls) = args.get("classes").and_then(|v| v.as_u64()) {
                 cli_args.extend(["--classes".into(), cls.to_string()]);
@@ -1260,6 +1369,27 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             }
             if bool_arg(args, "strict") {
                 cli_args.push("--strict".into());
+            }
+        }
+        "geokit_topo" => {
+            let (Some(action), Some(input)) = (str_arg(args, "action"), str_arg(args, "input"))
+            else {
+                return ("Missing required arguments: action, input".into(), true);
+            };
+            cli_args.extend(["topo".into(), action.into(), input.into()]);
+            if action == "check" {
+                cli_args.push("--json".into());
+                if let Some(od) = str_arg(args, "out_dir") {
+                    cli_args.extend(["--out-dir".into(), od.into()]);
+                }
+                if bool_arg(args, "strict") {
+                    cli_args.push("--strict".into());
+                }
+            } else if let Some(out) = str_arg(args, "out") {
+                cli_args.extend(["--out".into(), out.into()]);
+            }
+            if let Some(ms) = args.get("min_sliver").and_then(|v| v.as_f64()) {
+                cli_args.extend(["--min-sliver".into(), ms.to_string()]);
             }
         }
         "geokit_report" => {
