@@ -1,6 +1,6 @@
-# GeoKit AI Agent Playbook (`AGENT_GUIDE.md` — `v2.9.0`)
+# GeoKit AI Agent Playbook (`AGENT_GUIDE.md` — `v2.10.0`)
 
-> Standard Operating Procedures (SOP) for AI assistants (Claude, Antigravity, Cursor, Codex, Gemini) controlling ArcGIS Pro, ArcMap 10.x, and GDAL via **`geokit`** CLI or **`geokit mcp`** (**21 MCP tools** + 3 built-in SOP prompts).
+> Standard Operating Procedures (SOP) for AI assistants (Claude, Antigravity, Cursor, Codex, Gemini) controlling ArcGIS Pro, ArcMap 10.x, and GDAL via **`geokit`** CLI or **`geokit mcp`** (**22 MCP tools** + 3 built-in SOP prompts).
 
 ## Golden Rules (Read First!)
 
@@ -56,6 +56,12 @@ geokit webmap ./output/kerawanan_clean.shp ./work/02_clipped/batas_studi.shp --f
 **Change Detection (T1 vs T2):**
 ```bash
 geokit gp change ./work/tuplah_2018.shp ./work/tuplah_2024.shp --field-t1 KELAS_18 --field-t2 KELAS_24 --out ./output/perubahan.shp --table ./output/matriks_perubahan.md
+```
+
+**Drone Survey Flight Blocks & GCP/ICP Planning:**
+```bash
+geokit survey blocks ./work/aoi_wgs84.shp --block-ha 50 --overlap-m 50 --split-kml --out ./output/drone_blocks
+geokit survey gcp ./work/aoi_wgs84.shp --gcp-count 8 --icp-count 4 --margin-m 25 --out ./output/gcp_plan
 ```
 
 **Raster Weighted-Sum path:** align all input rasters first with `geokit raster align <r1.tif> <r2.tif> --ref <dem_utm.tif> --out ./work/aligned`, then run `geokit raster reclass` and `geokit raster weighted-sum --inputs "r1.tif:0.4,r2.tif:0.6" --classes 5 --smooth --polygon-out ./output/zona.shp --out ./output/skor.tif`.

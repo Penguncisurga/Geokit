@@ -17,6 +17,7 @@ use commands::live::LiveCommand;
 use commands::map::MapCommand;
 use commands::pipeline::PipelineCommand;
 use commands::raster::RasterCommand;
+use commands::survey::SurveyCommand;
 use commands::toolbox::ToolboxCommand;
 use commands::topo::TopoCommand;
 use engine::EngineBackend;
@@ -230,6 +231,11 @@ enum Commands {
     },
     /// Run geokit as a Model Context Protocol (MCP) JSON-RPC 2.0 server over stdio
     Mcp,
+    /// Drone survey flight blocks (DJI Pilot 2 KML) and GCP/ICP ground control planning (100% Native Rust)
+    Survey {
+        #[command(subcommand)]
+        command: SurveyCommand,
+    },
 }
 
 fn resolve_engine(cli_engine: Option<EngineBackend>, cfg_engine: Option<&str>) -> EngineBackend {
@@ -308,6 +314,7 @@ fn real_main() -> Result<()> {
             commands::pipeline::run(command, effective_propy, &cfg, effective_engine)
         }
         Commands::Accuracy { command } => commands::accuracy::run(command),
+        Commands::Survey { command } => commands::survey::run(command),
         Commands::Qa {
             input,
             expected_epsg,

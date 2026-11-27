@@ -192,7 +192,7 @@ fn test_mcp_server_stdio_handshake_and_tools() {
 
     let list_resp: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 21);
+    assert_eq!(tools.len(), 22);
 
     let call_resp: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(call_resp["result"]["isError"], false);
@@ -758,7 +758,7 @@ fn test_mcp_tools_schema_contract_integrity() {
     let line = String::from_utf8_lossy(&output.stdout);
     let resp: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 21);
+    assert_eq!(tools.len(), 22);
 
     let mut seen_names = HashSet::new();
     for tool in tools {
@@ -1609,4 +1609,81 @@ fn test_accuracy_cli_and_gp_change_preflight() {
         .unwrap();
     assert!(!missing_field.status.success());
     assert!(String::from_utf8_lossy(&missing_field.stderr).contains("NON_EXISTENT"));
+}
+
+#[test]
+fn test_survey_blocks_and_gcp_cli() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let aoi = root.join("survey_aoi.geojson");
+    fs::write(
+        &aoi,
+        r#"{
+          "type": "FeatureCollection",
+          "features": [{
+            "type": "Feature",
+            "properties": { "NAMA": "TestAOI" },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [[[110.0, -7.0], [110.025, -7.0], [110.025, -6.975], [110.0, -6.975], [110.0, -7.0]]]
+            }
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    let blk_dir = root.join("blocks");
+    let b_out = geokit_bin()
+        .args([
+            "survey",
+            "blocks",
+            aoi.to_str().unwrap(),
+            "--block-ha",
+            "50",
+            "--split-kml",
+            "--out",
+            blk_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        b_out.status.success(),
+        "survey blocks stderr: {}",
+        String::from_utf8_lossy(&b_out.stderr)
+    );
+    let bj: serde_json::Value = serde_json::from_slice(&b_out.stdout).unwrap();
+    assert!(bj["block_count"].as_u64().unwrap() >= 4);
+    assert!(blk_dir.join("flight_blocks.shp").is_file());
+    assert!(blk_dir.join("flight_blocks.kml").is_file());
+    assert!(blk_dir.join("blocks_kml").join("BLOK_01.kml").is_file());
+
+    let gcp_dir = root.join("gcp");
+    let g_out = geokit_bin()
+        .args([
+            "survey",
+            "gcp",
+            aoi.to_str().unwrap(),
+            "--gcp-count",
+            "6",
+            "--icp-count",
+            "3",
+            "--margin-m",
+            "30",
+            "--out",
+            gcp_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        g_out.status.success(),
+        "survey gcp stderr: {}",
+        String::from_utf8_lossy(&g_out.stderr)
+    );
+    let gj: serde_json::Value = serde_json::from_slice(&g_out.stdout).unwrap();
+    assert_eq!(gj["gcp_count"], 6);
+    assert_eq!(gj["icp_count"], 3);
+    assert!(gcp_dir.join("survey_gcp_icp.shp").is_file());
+    assert!(gcp_dir.join("survey_gcp_icp.kml").is_file());
 }

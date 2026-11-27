@@ -691,6 +691,28 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["action", "input"]
             }
+        },
+        {
+            "name": "geokit_survey",
+            "description": "Drone & photogrammetry survey planning (100% Native Rust): split AOI into uniform drone flight blocks (.shp/.kml/.geojson/.csv + per-block DJI Pilot 2 KML) OR plan evenly distributed GCP/ICP ground control points.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["blocks", "gcp"] },
+                    "aoi": { "type": "string", "description": "Input AOI polygon shapefile (.shp) or GeoJSON (.geojson)" },
+                    "out": { "type": "string", "description": "Output directory or base path prefix" },
+                    "block_size_m": { "type": "number", "description": "Square flight block size in meters (for blocks, default: 1000)" },
+                    "block_ha": { "type": "number", "description": "Target block area in hectares (for blocks, alternative to block_size_m)" },
+                    "cols": { "type": "integer", "description": "Explicit grid columns (for blocks, used with rows)" },
+                    "rows": { "type": "integer", "description": "Explicit grid rows (for blocks, used with cols)" },
+                    "overlap_m": { "type": "number", "description": "Overlap between adjacent flight blocks in meters (for blocks, default: 0)" },
+                    "split_kml": { "type": "boolean", "description": "Write individual BLOK_01.kml files per block (for blocks)" },
+                    "gcp_count": { "type": "integer", "description": "Number of GCP points to place (for gcp, default: 8)" },
+                    "icp_count": { "type": "integer", "description": "Number of ICP check points to place (for gcp, default: 4)" },
+                    "margin_m": { "type": "number", "description": "Inward margin from AOI boundary in meters (for gcp, default: 25)" }
+                },
+                "required": ["action", "aoi", "out"]
+            }
         }
     ]"#,
     )
@@ -1689,6 +1711,57 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
                     }
                 }
                 _ => return (format!("Unknown accuracy action: {action}"), true),
+            }
+        }
+        "geokit_survey" => {
+            let (Some(action), Some(aoi), Some(out)) = (
+                str_arg(args, "action"),
+                str_arg(args, "aoi"),
+                str_arg(args, "out"),
+            ) else {
+                return ("Missing required arguments: action, aoi, out".into(), true);
+            };
+            cli_args.extend([
+                "survey".into(),
+                action.into(),
+                aoi.into(),
+                "--out".into(),
+                out.into(),
+                "--json".into(),
+            ]);
+            match action {
+                "blocks" => {
+                    if let Some(s) = args.get("block_size_m").and_then(|v| v.as_f64()) {
+                        cli_args.extend(["--block-size-m".into(), s.to_string()]);
+                    }
+                    if let Some(h) = args.get("block_ha").and_then(|v| v.as_f64()) {
+                        cli_args.extend(["--block-ha".into(), h.to_string()]);
+                    }
+                    if let Some(c) = args.get("cols").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--cols".into(), c.to_string()]);
+                    }
+                    if let Some(r) = args.get("rows").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--rows".into(), r.to_string()]);
+                    }
+                    if let Some(ov) = args.get("overlap_m").and_then(|v| v.as_f64()) {
+                        cli_args.extend(["--overlap-m".into(), ov.to_string()]);
+                    }
+                    if bool_arg(args, "split_kml") {
+                        cli_args.push("--split-kml".into());
+                    }
+                }
+                "gcp" => {
+                    if let Some(g) = args.get("gcp_count").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--gcp-count".into(), g.to_string()]);
+                    }
+                    if let Some(i) = args.get("icp_count").and_then(|v| v.as_u64()) {
+                        cli_args.extend(["--icp-count".into(), i.to_string()]);
+                    }
+                    if let Some(m) = args.get("margin_m").and_then(|v| v.as_f64()) {
+                        cli_args.extend(["--margin-m".into(), m.to_string()]);
+                    }
+                }
+                _ => return (format!("Unknown survey action: {action}"), true),
             }
         }
         _ => return (format!("Unknown tool: {name}"), true),

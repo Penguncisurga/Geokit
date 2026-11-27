@@ -637,71 +637,20 @@ fn signed_ring_area(ring: &[[f64; 2]]) -> f64 {
 
 const WGS84_PRJ_WKT: &str = r#"GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
 
-/// Writes a valid ESRI Point Shapefile bundle (`.shp`, `.shx`, `.dbf`, `.prj` EPSG:4326)
-/// natively in pure Rust without external ArcGIS or GDAL dependencies.
-pub fn write_point_shapefile_wgs84(
-    shp_path: &Path,
-    points: &[(f64, f64)],
-    rows: &[Map<String, Value>],
-) -> Result<()> {
-    if points.len() != rows.len() {
-        bail!(
-            "Point count ({}) does not match row count ({}).",
-            points.len(),
-            rows.len()
-        );
-    }
-    if points.is_empty() {
-        bail!("Cannot write empty shapefile: {}", shp_path.display());
-    }
-    if let Some(parent) = shp_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
+fn write_shp_header(shape_type: i32, len_bytes: usize, bbox: [f64; 4]) -> Vec<u8> {
+    let mut h = vec![0u8; 100];
+    h[0..4].copy_from_slice(&9994_i32.to_be_bytes());
+    h[24..28].copy_from_slice(&((len_bytes / 2) as i32).to_be_bytes());
+    h[28..32].copy_from_slice(&1000_i32.to_le_bytes());
+    h[32..36].copy_from_slice(&shape_type.to_le_bytes());
+    h[36..44].copy_from_slice(&bbox[0].to_le_bytes());
+    h[44..52].copy_from_slice(&bbox[1].to_le_bytes());
+    h[52..60].copy_from_slice(&bbox[2].to_le_bytes());
+    h[60..68].copy_from_slice(&bbox[3].to_le_bytes());
+    h
+}
 
-    // 1. Build .shp + .shx
-    let mut shp_body = Vec::with_capacity(points.len() * 28);
-    let mut shx_body = Vec::with_capacity(points.len() * 8);
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (
-        f64::INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::NEG_INFINITY,
-    );
-    for (idx, &(x, y)) in points.iter().enumerate() {
-        min_x = min_x.min(x);
-        min_y = min_y.min(y);
-        max_x = max_x.max(x);
-        max_y = max_y.max(y);
-        let offset_words = ((100 + shp_body.len()) / 2) as i32;
-        shx_body.extend_from_slice(&offset_words.to_be_bytes());
-        shx_body.extend_from_slice(&10_i32.to_be_bytes());
-
-        shp_body.extend_from_slice(&((idx as i32) + 1).to_be_bytes());
-        shp_body.extend_from_slice(&10_i32.to_be_bytes());
-        shp_body.extend_from_slice(&1_i32.to_le_bytes());
-        shp_body.extend_from_slice(&x.to_le_bytes());
-        shp_body.extend_from_slice(&y.to_le_bytes());
-    }
-    let write_hdr = |len_bytes: usize| -> Vec<u8> {
-        let mut h = vec![0u8; 100];
-        h[0..4].copy_from_slice(&9994_i32.to_be_bytes());
-        h[24..28].copy_from_slice(&((len_bytes / 2) as i32).to_be_bytes());
-        h[28..32].copy_from_slice(&1000_i32.to_le_bytes());
-        h[32..36].copy_from_slice(&1_i32.to_le_bytes());
-        h[36..44].copy_from_slice(&min_x.to_le_bytes());
-        h[44..52].copy_from_slice(&min_y.to_le_bytes());
-        h[52..60].copy_from_slice(&max_x.to_le_bytes());
-        h[60..68].copy_from_slice(&max_y.to_le_bytes());
-        h
-    };
-    let mut shp_all = write_hdr(100 + shp_body.len());
-    shp_all.extend_from_slice(&shp_body);
-    let mut shx_all = write_hdr(100 + shx_body.len());
-    shx_all.extend_from_slice(&shx_body);
-
-    // 2. Build .dbf schema (ordered from first row, clamped to 10-char DBF field names)
+fn write_dbf_and_prj_wgs84(shp_path: &Path, rows: &[Map<String, Value>]) -> Result<()> {
     let mut cols: Vec<(String, String, u8, u8)> = Vec::new(); // (orig_key, dbf_name, type, len)
     for k in rows[0].keys() {
         let is_num = rows
@@ -729,17 +678,16 @@ pub fn write_point_shapefile_wgs84(
             })
             .max()
             .unwrap_or(16);
-        let (ftype, flen, fdec) = if is_num {
+        let (ftype, flen) = if is_num {
             if is_float {
-                (b'F', 18u8, 6u8)
+                (b'F', 18u8)
             } else {
-                (b'N', 12u8, 0u8)
+                (b'N', 12u8)
             }
         } else {
-            (b'C', (max_str.clamp(8, 128)) as u8, 0u8)
+            (b'C', (max_str.clamp(8, 128)) as u8)
         };
         cols.push((k.clone(), dbf_name, ftype, flen));
-        let _ = fdec;
     }
     let header_len = (32 + cols.len() * 32 + 1) as u16;
     let record_len = (1 + cols.iter().map(|c| c.3 as usize).sum::<usize>()) as u16;
@@ -787,11 +735,168 @@ pub fn write_point_shapefile_wgs84(
     }
     dbf.push(0x1A);
 
-    fs::write(shp_path, shp_all)?;
-    fs::write(shp_path.with_extension("shx"), shx_all)?;
     fs::write(shp_path.with_extension("dbf"), dbf)?;
     fs::write(shp_path.with_extension("prj"), WGS84_PRJ_WKT)?;
     Ok(())
+}
+
+/// Writes a valid ESRI Point Shapefile bundle (`.shp`, `.shx`, `.dbf`, `.prj` EPSG:4326)
+/// natively in pure Rust without external ArcGIS or GDAL dependencies.
+pub fn write_point_shapefile_wgs84(
+    shp_path: &Path,
+    points: &[(f64, f64)],
+    rows: &[Map<String, Value>],
+) -> Result<()> {
+    if points.len() != rows.len() {
+        bail!(
+            "Point count ({}) does not match row count ({}).",
+            points.len(),
+            rows.len()
+        );
+    }
+    if points.is_empty() {
+        bail!("Cannot write empty shapefile: {}", shp_path.display());
+    }
+    if let Some(parent) = shp_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let mut shp_body = Vec::with_capacity(points.len() * 28);
+    let mut shx_body = Vec::with_capacity(points.len() * 8);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for (idx, &(x, y)) in points.iter().enumerate() {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+        let offset_words = ((100 + shp_body.len()) / 2) as i32;
+        shx_body.extend_from_slice(&offset_words.to_be_bytes());
+        shx_body.extend_from_slice(&10_i32.to_be_bytes());
+
+        shp_body.extend_from_slice(&((idx as i32) + 1).to_be_bytes());
+        shp_body.extend_from_slice(&10_i32.to_be_bytes());
+        shp_body.extend_from_slice(&1_i32.to_le_bytes());
+        shp_body.extend_from_slice(&x.to_le_bytes());
+        shp_body.extend_from_slice(&y.to_le_bytes());
+    }
+    let bbox = [min_x, min_y, max_x, max_y];
+    let mut shp_all = write_shp_header(1, 100 + shp_body.len(), bbox);
+    shp_all.extend_from_slice(&shp_body);
+    let mut shx_all = write_shp_header(1, 100 + shx_body.len(), bbox);
+    shx_all.extend_from_slice(&shx_body);
+
+    fs::write(shp_path, shp_all)?;
+    fs::write(shp_path.with_extension("shx"), shx_all)?;
+    write_dbf_and_prj_wgs84(shp_path, rows)
+}
+
+/// Writes a valid ESRI Polygon Shapefile bundle (`.shp`, `.shx`, `.dbf`, `.prj` EPSG:4326)
+/// natively in pure Rust. Each polygon is represented by a closed outer ring `[lon, lat]`.
+pub fn write_polygon_shapefile_wgs84(
+    shp_path: &Path,
+    polygons: &[Vec<[f64; 2]>],
+    rows: &[Map<String, Value>],
+) -> Result<()> {
+    if polygons.len() != rows.len() {
+        bail!(
+            "Polygon count ({}) does not match row count ({}).",
+            polygons.len(),
+            rows.len()
+        );
+    }
+    if polygons.is_empty() {
+        bail!(
+            "Cannot write empty polygon shapefile: {}",
+            shp_path.display()
+        );
+    }
+    if let Some(parent) = shp_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let mut shp_body = Vec::new();
+    let mut shx_body = Vec::with_capacity(polygons.len() * 8);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+
+    for (idx, raw_ring) in polygons.iter().enumerate() {
+        if raw_ring.len() < 3 {
+            bail!("Polygon {} has fewer than 3 vertices.", idx + 1);
+        }
+        let mut ring = raw_ring.clone();
+        if ring.first() != ring.last() {
+            ring.push(ring[0]);
+        }
+        // Ensure clockwise orientation for ESRI Shapefile outer ring (signed area < 0)
+        let mut signed_area = 0.0;
+        for w in ring.windows(2) {
+            signed_area += w[0][0] * w[1][1] - w[1][0] * w[0][1];
+        }
+        if signed_area > 0.0 {
+            ring.reverse();
+        }
+
+        let (mut px0, mut py0, mut px1, mut py1) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for &[x, y] in &ring {
+            px0 = px0.min(x);
+            py0 = py0.min(y);
+            px1 = px1.max(x);
+            py1 = py1.max(y);
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+
+        let content_bytes = 48 + ring.len() * 16;
+        let content_words = (content_bytes / 2) as i32;
+        let offset_words = ((100 + shp_body.len()) / 2) as i32;
+        shx_body.extend_from_slice(&offset_words.to_be_bytes());
+        shx_body.extend_from_slice(&content_words.to_be_bytes());
+
+        shp_body.extend_from_slice(&((idx as i32) + 1).to_be_bytes());
+        shp_body.extend_from_slice(&content_words.to_be_bytes());
+        shp_body.extend_from_slice(&5_i32.to_le_bytes()); // Polygon
+        shp_body.extend_from_slice(&px0.to_le_bytes());
+        shp_body.extend_from_slice(&py0.to_le_bytes());
+        shp_body.extend_from_slice(&px1.to_le_bytes());
+        shp_body.extend_from_slice(&py1.to_le_bytes());
+        shp_body.extend_from_slice(&1_i32.to_le_bytes()); // NumParts
+        shp_body.extend_from_slice(&(ring.len() as i32).to_le_bytes()); // NumPoints
+        shp_body.extend_from_slice(&0_i32.to_le_bytes()); // Parts[0] = 0
+        for &[x, y] in &ring {
+            shp_body.extend_from_slice(&x.to_le_bytes());
+            shp_body.extend_from_slice(&y.to_le_bytes());
+        }
+    }
+
+    let bbox = [min_x, min_y, max_x, max_y];
+    let mut shp_all = write_shp_header(5, 100 + shp_body.len(), bbox);
+    shp_all.extend_from_slice(&shp_body);
+    let mut shx_all = write_shp_header(5, 100 + shx_body.len(), bbox);
+    shx_all.extend_from_slice(&shx_body);
+
+    fs::write(shp_path, shp_all)?;
+    fs::write(shp_path.with_extension("shx"), shx_all)?;
+    write_dbf_and_prj_wgs84(shp_path, rows)
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ Legend:
 | --- | :---: | :---: | :---: | :---: | --- |
 | `doctor`, `init`, `audit`, `report` | Yes | — | — | — | Pure Rust; no GIS license needed |
 | `accuracy sample\|matrix\|rmse\|roc` | Yes | — | — | — | Pure Rust validation suite: Stratified Random (`.shp`/`.kml`/`.geojson`/`.csv`), Confusion Matrix + Kappa + F1, RMSE/R²/BIG LE90/CE90, ROC-AUC + Youden's J |
+| `survey blocks\|gcp` | Yes | — | — | — | Pure Rust drone flight block grid (`.shp`/`.kml`/`.geojson`/`.csv` + `--split-kml` for DJI Pilot 2) & evenly distributed GCP/ICP planning |
 | `organize`, `sanitize`, `clean` | Yes | — | — | — | Transactional bundle rollback; protects `.gdb/*.lock` by default (`--include-gdb-locks` to override) |
 | `webmap` | Yes | — | — | — | Supports WGS84, UTM, & Web Mercator (`EPSG:3857`); rejects unrecognized projected CRS |
 | `gp summary`, `gp export-table` | Yes | Yes (`.gdb`) | Yes (`.gdb`) | Yes (`.gpkg`/etc.) | Pure Rust for `.shp`/`.geojson`; ArcGIS/GDAL for `.gdb`/`.gpkg` |
