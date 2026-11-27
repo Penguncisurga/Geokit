@@ -628,6 +628,7 @@ def _handle_command_on_ui_thread(req):
                 "north_style": north_style,
                 "grid": add_grid,
                 "grid_mode": grid_mode,
+                "warnings": _ao.get_last_warnings() if hasattr(_ao, "get_last_warnings") else [],
             }
 
         updated_elements = []

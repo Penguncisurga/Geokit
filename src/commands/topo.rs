@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
+use crate::engine::preflight::{check_output_not_locked, check_shapefile_bundle};
 use crate::engine::{
     abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
 };
@@ -85,6 +86,7 @@ pub fn run(
             if !input.exists() && !is_gdb_member(&input) {
                 bail!("Input path does not exist: {}", input.display());
             }
+            check_shapefile_bundle(&input)?;
             TopoPayload {
                 action: "topo_check".into(),
                 input: abs_string(&input),
@@ -103,6 +105,8 @@ pub fn run(
             if !input.exists() && !is_gdb_member(&input) {
                 bail!("Input path does not exist: {}", input.display());
             }
+            check_shapefile_bundle(&input)?;
+            check_output_not_locked(&out)?;
             TopoPayload {
                 action: "topo_fix".into(),
                 input: abs_string(&input),

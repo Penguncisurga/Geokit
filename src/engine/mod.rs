@@ -1,4 +1,5 @@
 pub mod gdal;
+pub mod preflight;
 
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
@@ -14,6 +15,8 @@ use std::time::{Duration, Instant};
 use tempfile::Builder;
 
 static OVERWRITE_ENABLED: AtomicBool = AtomicBool::new(false);
+static VERBOSE_ENABLED: AtomicBool = AtomicBool::new(false);
+static QUIET_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub fn set_overwrite(enabled: bool) {
     OVERWRITE_ENABLED.store(enabled, Ordering::Relaxed);
@@ -22,6 +25,28 @@ pub fn set_overwrite(enabled: bool) {
 pub fn overwrite_enabled() -> bool {
     OVERWRITE_ENABLED.load(Ordering::Relaxed)
         || env::var("GEOKIT_OVERWRITE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+}
+
+pub fn set_verbose(enabled: bool) {
+    VERBOSE_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn verbose_enabled() -> bool {
+    VERBOSE_ENABLED.load(Ordering::Relaxed)
+        || env::var("GEOKIT_VERBOSE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+}
+
+pub fn set_quiet(enabled: bool) {
+    QUIET_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn quiet_enabled() -> bool {
+    QUIET_ENABLED.load(Ordering::Relaxed)
+        || env::var("GEOKIT_QUIET")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
 }
@@ -601,6 +626,14 @@ pub fn abs_string(p: &Path) -> String {
 /// Runs the embedded `arcpy_runner.py` script in a single ArcGIS Pro Python session
 /// with the given JSON payload.
 pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -> Result<()> {
+    let enriched = enrich_payload(payload)?;
+    let action_name = enriched
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    if verbose_enabled() && !quiet_enabled() {
+        eprintln!("[geokit:verbose] Dispatching ArcGIS Pro action='{action_name}'");
+    }
     if let Some(res) = try_run_via_daemon(arcpy_daemon_port(), "ArcGIS", payload) {
         return res;
     }
@@ -613,6 +646,9 @@ pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -
              Run `geokit doctor` to inspect your environment."
         );
     };
+    if verbose_enabled() && !quiet_enabled() {
+        eprintln!("[geokit:verbose] Spawning propy: {}", propy.display());
+    }
 
     let script_file = Builder::new()
         .prefix("geokit_arcpy_")
@@ -627,10 +663,15 @@ pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -
         .suffix(".json")
         .tempfile()
         .context("Failed to create temporary payload file")?;
-    let json_str = serde_json::to_string_pretty(&enrich_payload(payload)?)?;
+    let json_str = serde_json::to_string_pretty(&enriched)?;
     std::fs::write(payload_file.path(), json_str)
         .context("Failed to write temporary payload file")?;
 
+    let stdout_mode = if quiet_enabled() {
+        Stdio::null()
+    } else {
+        Stdio::inherit()
+    };
     let status = if cfg!(target_os = "windows")
         && propy
             .extension()
@@ -644,7 +685,7 @@ pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -
             .arg(script_file.path())
             .arg(payload_file.path())
             .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
+            .stdout(stdout_mode)
             .stderr(Stdio::inherit())
             .status()
             .with_context(|| format!("Failed to invoke {}", propy.display()))?
@@ -653,7 +694,7 @@ pub fn run_arcpy_job<T: Serialize>(override_propy: Option<&Path>, payload: &T) -
             .arg(script_file.path())
             .arg(payload_file.path())
             .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
+            .stdout(stdout_mode)
             .stderr(Stdio::inherit())
             .status()
             .with_context(|| format!("Failed to invoke {}", propy.display()))?
@@ -674,6 +715,15 @@ pub fn run_arcmap_job<T: Serialize>(
     override_arcmap_python: Option<&Path>,
     payload: &T,
 ) -> Result<()> {
+    if verbose_enabled() && !quiet_enabled() {
+        if let Ok(v) = enrich_payload(payload) {
+            let act = v
+                .get("action")
+                .and_then(|a| a.as_str())
+                .unwrap_or("unknown");
+            eprintln!("[geokit:verbose] Dispatching ArcMap 10.x action='{act}'");
+        }
+    }
     if let Some(res) = try_run_via_daemon(arcmap_daemon_port(), "ArcMap", payload) {
         return res;
     }

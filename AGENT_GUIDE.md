@@ -1,113 +1,109 @@
-# GeoKit AI Agent Playbook (`AGENT_GUIDE.md`)
+# GeoKit AI Agent Playbook (`AGENT_GUIDE.md` — `v2.7.2`)
 
-> Standard Operating Procedures (SOP) for AI assistants (Claude, Antigravity, Cursor, Codex, Gemini) controlling ArcGIS Pro, ArcMap 10.x, and GDAL via **`geokit`** CLI or **`geokit mcp`**.
+> Standard Operating Procedures (SOP) for AI assistants (Claude, Antigravity, Cursor, Codex, Gemini) controlling ArcGIS Pro, ArcMap 10.x, and GDAL via **`geokit`** CLI or **`geokit mcp`** (**20 MCP tools** + 3 built-in SOP prompts).
 
 ## Golden Rules (Read First!)
 
 1. **Never guess file paths, extensions, or attribute field names.**
-   - Always start with `geokit audit <folder>` and `geokit gp info <folder>` to discover exact datasets and CRS.
-   - Always inspect attribute categories and numeric/raster ranges with `geokit gp values <dataset>` before writing any scoring rules or SQL queries.
-2. **Always check & unify CRS before spatial overlay or hydrology.**
-   - Area/length, buffer, watershed (`hydro`), and overlay analyses require a projected metric CRS (e.g. UTM `EPSG:32748` / `32749` / `32750` for Indonesia), **never** geographic WGS84 degrees (`EPSG:4326`).
-3. **Always run `geokit gp repair` before `union`, `intersect`, or `clip` on third-party shapefiles.**
-4. **Windows paths:** always use real drive letters (`D:\Data\layer.shp`), never Explorer display labels (`Lokal Disk (D:)\...`).
-5. **Never overwrite raw user inputs** — always write outputs into a clean subfolder (e.g. `<folder>\output_geokit\`).
-6. **Verify before reporting:** run `geokit qa <output_dir>` to confirm CRS uniformity, valid geometries, and zero unintended NULLs.
+   - Start with `geokit audit <folder>` and `geokit gp info <folder>` to discover exact datasets and CRS.
+   - Inspect categories and numeric/raster ranges with `geokit gp values <dataset>` before writing scoring rules or SQL queries.
+2. **Safe Mode is default (`overwrite = false`).**
+   - GeoKit refuses to overwrite existing outputs unless `--overwrite` (or `GEOKIT_OVERWRITE=1`) is explicitly passed, and **always blocks** writing onto any input dataset.
+   - Always write outputs into a clean subfolder (e.g. `<folder>\output_geokit\`).
+3. **Always unify CRS before overlay, topology, or hydrology.**
+   - Area/length, buffer, topology, raster morphometry, and watershed analyses require a projected metric CRS (e.g. UTM `EPSG:32748`–`32750` or DGN95 TM-3°), **never** geographic WGS84 degrees (`EPSG:4326`).
+4. **Use the Hot-Worker Daemon for multi-step ArcPy workflows.**
+   - Run `geokit daemon start` once (or use `geokit pipeline run pipeline.toml [--resume]`) so `import arcpy` executes once instead of per command (5×–15× faster).
+5. **Verify topology & QA before cartography.**
+   - Run `geokit topo check <layer> --strict` (or `geokit topo fix`) and `geokit qa <output_dir> --strict`.
+6. **Print-ready cartography defaults to 300 DPI.**
+   - Always export final PerKaBIG maps at `>= 300 DPI` (`geokit live export --out map.png --dpi 300`).
 
 ---
 
-## SOP 1: Peta Kerawanan / Kesesuaian Lahan (Weighted Overlay & Scoring)
-
-Example requests: *"Buat peta kerawanan longsor / banjir / kekeringan / kesesuaian lahan dari folder ini."*
+## SOP 1: Peta Kerawanan / Kesesuaian Lahan (Vector Overlay OR Raster Weighted-Sum)
 
 ```bash
-# 1. Discover datasets, CRS, fields, and unique values
+# 1. Discover datasets, CRS, fields, and values
 geokit audit ./bahan
 geokit gp info ./bahan
 geokit gp values ./bahan
 
-# 2. Unify CRS to local UTM & clip to study area + repair geometry
-geokit gp project ./bahan --epsg 32749 --out ./work/01_utm
+# 2. Clean 3D Z/M (RBI BIG), unify CRS to UTM, clip, and fix topology
+geokit gp flatten-2d ./bahan --out ./work/00_2d
+geokit gp project ./work/00_2d --epsg 32749 --out ./work/01_utm
 geokit gp clip ./work/01_utm --aoi ./work/01_utm/batas_studi.shp --out ./work/02_clipped
 geokit gp repair ./work/02_clipped
 
-# 3. Assign scores per parameter (categories OR numeric ranges)
-geokit gp classify ./work/02_clipped/tutupan_lahan.shp --field KELAS_PL --out-field SKOR_PL --rules "Hutan=1;Perkebunan=2;Sawah=3;Permukiman=4;Lahan Terbuka=5"
-geokit gp classify ./work/02_clipped/kemiringan.shp    --field PERSEN   --out-field SKOR_LR --rules "<=8:1;8-15:2;15-25:3;25-45:4;>45:5"
-geokit gp classify ./work/02_clipped/curah_hujan.shp   --field CH_MM    --out-field SKOR_CH --rules "<1500:1;1500-2000:2;2000-2500:3;2500-3000:4;>3000:5"
+# 3. Score parameters & overlay (Vector path)
+geokit gp classify ./work/02_clipped/tutupan_lahan.shp --field KELAS_PL --out-field SKOR_PL --rules "Hutan=1;Sawah=3;Permukiman=5"
+geokit gp union ./work/02_clipped/tutupan_lahan.shp ./work/02_clipped/lereng.shp --out ./work/03_union.shp
+geokit gp clean-fields ./work/03_union.shp
+geokit gp calc-field ./work/03_union.shp --field TOTAL_SKOR --expr "0.5 * SKOR_LR + 0.5 * SKOR_PL"
+geokit gp classify ./work/03_union.shp --field TOTAL_SKOR --out-field KELAS_RWN --rules "<2.3:Rendah;2.3-3.6:Sedang;>3.6:Tinggi"
+geokit gp dissolve ./work/03_union.shp --field KELAS_RWN --out ./output/kerawanan.shp
+geokit topo fix ./output/kerawanan.shp --min-sliver 100 --out ./output/kerawanan_clean.shp
+geokit gp calc-geom ./output/kerawanan_clean.shp --unit ha
 
-# 4. Union all scored parameter layers into one polygon layer
-geokit gp union ./work/02_clipped/tutupan_lahan.shp ./work/02_clipped/kemiringan.shp ./work/02_clipped/curah_hujan.shp --out ./work/03_union.shp
-
-# 5. Compute weighted total score & classify hazard levels
-geokit gp calc-field ./work/03_union.shp --field TOTAL_SKOR --expr "0.4 * SKOR_LR + 0.3 * SKOR_CH + 0.3 * SKOR_PL"
-geokit gp classify   ./work/03_union.shp --field TOTAL_SKOR --out-field KELAS_RAWAN --rules "<2.3:Rendah;2.3-3.6:Sedang;>3.6:Tinggi"
-
-# 6. Dissolve by hazard class & compute area (Ha)
-geokit gp dissolve  ./work/03_union.shp --field KELAS_RAWAN --out ./output/kerawanan_final.shp
-geokit gp calc-geom ./output/kerawanan_final.shp --unit ha
-
-# 7. Quality assurance check & inspect final area table
-geokit qa ./output/kerawanan_final.shp --expected-epsg 32749 --check-nulls KELAS_RAWAN
-geokit gp values ./output/kerawanan_final.shp
+# 4. QA, publishable area summary table, & standalone Leaflet webmap (zero ArcGIS needed!)
+geokit qa ./output/kerawanan_clean.shp --expected-epsg 32749 --check-nulls KELAS_RWN --strict
+geokit gp summary ./output/kerawanan_clean.shp --group-by KELAS_RWN --out ./output/rekap_luas.md
+geokit webmap ./output/kerawanan_clean.shp ./work/02_clipped/batas_studi.shp --field KELAS_RWN --preset hazard-pastel --out ./output/peta_interaktif.html
 ```
+
+**Raster Weighted-Sum path:** align all input rasters first with `geokit raster align <r1.tif> <r2.tif> --ref <dem_utm.tif> --out ./work/aligned`, then run `geokit raster reclass` and `geokit raster weighted-sum --inputs "r1.tif:0.4,r2.tif:0.6" --classes 5 --smooth --polygon-out ./output/zona.shp --out ./output/skor.tif`.
 
 ---
 
-## SOP 2: Peta Persebaran (Distribution Map from CSV / Points / Polygons)
-
-Example requests: *"Buat peta persebaran fasilitas kesehatan / stasiun hujan / titik kejadian dari folder ini."*
+## SOP 2: Data Lapangan, CSV/DMS, GPX & Peta Persebaran
 
 ```bash
-# 1. Audit folder & inspect CSV/shapefiles
-geokit audit ./bahan
-geokit gp info ./bahan
+# 1. Convert CSV (supports decimal OR DMS like 7°00'12"S / 110°24'30"BT) or GPX GPS tracks
+geokit gp xy2shp ./bahan/stasiun.csv --x-field lon --y-field lat --epsg 4326 --out ./work/stasiun_wgs84.shp
+geokit gp convert ./bahan/survey_gps.gpx --to shp --out ./work/survey_gps.shp
 
-# 2. Convert CSV with Lon/Lat columns into points (if needed)
-geokit gp xy2shp ./bahan/lokasi.csv --x-field lon --y-field lat --epsg 4326 --out ./work/lokasi_wgs84.shp
-
-# 3. Project to local UTM & spatially join administrative boundary attributes
-geokit gp project ./work/lokasi_wgs84.shp --epsg 32749 --out ./work/lokasi_utm.shp
-geokit gp spatial-join ./work/lokasi_utm.shp --join ./work/batas_kecamatan_utm.shp --out ./output/persebaran_final.shp --match within
-
-# 4. Inspect distribution counts & run QA
-geokit gp values ./output/persebaran_final.shp
-geokit qa ./output/persebaran_final.shp --expected-epsg 32749
+# 2. Join tabular BPS/survey CSV onto administrative polygons, or Thiessen / Multi-Buffer / Near
+geokit gp join ./work/batas_desa.shp --table ./bahan/data_bps.csv --in-field KODE_DESA --join-field KODE --out ./output/desa_bps.shp
+geokit gp thiessen ./work/stasiun_utm.shp --extent ./work/batas_utm.shp --out ./output/thiessen_hujan.shp
+geokit gp multi-buffer ./work/faskes_utm.shp --dists "500,1000,2000" --unit Meters --out ./output/jangkauan.shp
+geokit gp near ./work/permukiman_utm.shp --near ./work/sungai_utm.shp
+geokit raster extract-points --points ./work/stasiun_utm.shp --raster ./work/dem_utm.tif --field ELEV_M --out ./output/stasiun_elev.shp
 ```
 
 ---
 
-## SOP 3: Analisis Hidrologi & Delineasi DAS
-
-Example requests: *"Delineasi DAS, jaringan sungai, kemiringan lereng, dan statistik elevasi dari DEM di folder ini."*
+## SOP 3: Hidrologi DAS, DEM Morphometry & Peta Scan Georeferencing
 
 ```bash
-# 1. Inspect DEM CRS & elevation range
-geokit gp info ./bahan/dem.tif
-geokit gp values ./bahan/dem.tif
+# 1. Fetch free 30m SRTM DEM & OSM vectors for any AOI (no ArcGIS required)
+geokit fetch dem --aoi ./work/batas_wgs84.shp --clip-aoi --epsg 32749 --out ./work/dem
+geokit fetch osm --aoi ./work/batas_wgs84.shp --layers road,river,boundary --out ./work/osm
 
-# 2. Ensure projected metric CRS (UTM)
-geokit gp project ./bahan/dem.tif --epsg 32749 --out ./work/dem_utm.tif
+# 2. Watershed delineation, terrain, morphometry (TWI/TPI/Curvature), & BIG contours
+geokit hydro delineate ./work/dem/dem_aoi_clipped.tif --out ./output/das --threshold 1000
+geokit raster terrain ./work/dem/dem_aoi_clipped.tif --out ./output/terrain --all
+geokit raster morphometry ./work/dem/dem_aoi_clipped.tif --out ./output/morph --all
+geokit raster contour ./work/dem/dem_aoi_clipped.tif --interval 25 --index-every 4 --out ./output/kontur.shp
 
-# 3. Run watershed delineation + terrain derivatives + zonal stats
-geokit hydro delineate ./work/dem_utm.tif --out ./output/das --threshold 1000 --pour-point ./work/outlet_utm.shp
-geokit raster terrain ./work/dem_utm.tif --out ./output/terrain --all
-geokit gp calc-geom ./output/das/watershed.shp --unit ha
-geokit raster zonal-stats ./work/dem_utm.tif --zones ./output/das/watershed.shp --zone-field GRIDCODE --out ./output/elev_stats.csv
+# 3. Georeference scanned map from QGIS .points / CSV with RMSE report
+geokit raster georef ./bahan/peta_scan.tif --gcp ./bahan/peta_scan.points --epsg 32749 --order 1 --report ./output/rmse.md --out ./output/peta_georef.tif
 ```
 
 ---
 
-## Displaying Results Live in ArcMap 10.x
+## SOP 4: Cartography & PerKaBIG No. 3/2016 Print Layout (ArcMap 10.x / ArcGIS Pro Live-UI)
 
-If the user has ArcMap 10.1–10.8 open:
 ```bash
 geokit live ping
-geokit live add ./output/kerawanan_final.shp
-geokit live style kerawanan_final --field KELAS_RAWAN --preset hazard --transparency 30
-geokit live order sungai --position top
-geokit live layout --view layout --title "PETA KERAWANAN BANJIR" --zoom-layer kerawanan_final
-geokit live export --out ./output/preview.png --dpi 200
+geokit live add ./output/kerawanan_clean.shp
+geokit live style kerawanan_clean --field KELAS_RWN --preset hazard-pastel --transparency 20
+# Official 23-class Indonesian Land Cover or Fisher-Jenks Natural Breaks:
+# geokit live style tuplah --field TUTUPAN --preset klhk
+# geokit live style skor --field TOTAL_SKOR --mode graduated --break-method jenks --classes-count 5 --preset viridis
+geokit live layout --template perkabig --paper a4 --grid-mode dual --north-style big \
+  --title "PETA KERAWANAN LONGSOR" --region "WILAYAH STUDI" \
+  --inset-layer ./work/provinsi.shp --hide-legend "hillshade"
+geokit live export --out ./output/peta_cetak_300dpi.png --dpi 300
 ```
 
-> **Tip:** All 3 SOP playbooks above are also built directly into **`geokit mcp`** as standard MCP Prompts (`prompts/list` & `prompts/get`: `peta_kerawanan`, `peta_persebaran`, `analisis_das`).
+> **Reproducibility:** Analytical commands automatically emit `<out>.geokit.json` provenance sidecars, GeoTIFFs use lossless **LZW** compression by default, and multi-step `pipeline.toml` runs write `pipeline-run-<ts>.log` + support `--resume`.

@@ -332,7 +332,16 @@ fn send_live_request(port: u16, payload: &Value) -> Result<Value> {
              2. ArcMap 10.x is currently open."
         )
     })?;
-    stream.set_read_timeout(Some(Duration::from_secs(300)))?;
+    let default_timeout = match payload.get("action").and_then(|v| v.as_str()) {
+        Some("ping" | "list_layers" | "layer_info") => 30,
+        _ => 300,
+    };
+    let timeout_secs = std::env::var("GEOKIT_LIVE_TIMEOUT_SEC")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(default_timeout);
+    stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
     let mut req_val = payload.clone();

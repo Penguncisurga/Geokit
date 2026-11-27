@@ -131,24 +131,41 @@ def check_addin_zip():
     assert os.path.isfile(addin), f"Missing add-in archive: {addin}"
     with zipfile.ZipFile(addin, "r") as zf:
         names = set(zf.namelist())
-    required = {"Config.xml", "Install/geokit_addin.py", "Install/arcobjects.py"}
+    required = {
+        "Config.xml",
+        "Install/geokit_addin.py",
+        "Install/arcobjects.py",
+        "Install/com_core.py",
+        "Install/symbology.py",
+        "Install/layout_perkabig.py",
+    }
     missing = required - names
     assert not missing, f"Add-in ZIP missing required files: {missing} (found: {names})"
     print(f"[OK] ArcMap Add-In ZIP verified ({len(names)} files)")
 
 
 def check_jenks_klhk_and_perkabig_papers():
-    src = open(os.path.join(ROOT, "addin/arcmap/Install/arcobjects.py"), "r", encoding="utf-8").read()
-    # Extract pure-Python helper functions (KLHK + Jenks + PAPER_SPECS + _select_scalebar_division)
-    # Note: arcobjects.py uses unicode/basestring for Py2.7, shim them in Py3 test namespace
-    ns = {"unicode": str, "basestring": str}
-    s_pal = src.index("PALETTES = {")
-    e_pal = src.index("LINE_STYLES = {")
-    exec(src[s_pal:e_pal], ns)
+    core_src = open(os.path.join(ROOT, "addin/arcmap/Install/com_core.py"), "r", encoding="utf-8").read()
+    sym_src = open(os.path.join(ROOT, "addin/arcmap/Install/symbology.py"), "r", encoding="utf-8").read()
+    lay_src = open(os.path.join(ROOT, "addin/arcmap/Install/layout_perkabig.py"), "r", encoding="utf-8").read()
 
-    s_spec = src.index("PAPER_SPECS = {")
-    e_spec = src.index("def build_perkabig_layout(")
-    exec(src[s_spec:e_spec], ns)
+    ns = {"unicode": str, "basestring": str}
+    s_tf = core_src.index("def _to_float(")
+    e_tf = core_src.index("# Verified ArcObjects")
+    exec(core_src[s_tf:e_tf], ns)
+
+    # 0. Verify locale-safe anti-comma float parser
+    assert abs(ns["_to_float"]("1,5") - 1.5) < 1e-9
+    assert abs(ns["_to_float"]("1.250,75") - 1250.75) < 1e-9
+    assert abs(ns["_to_float"](None, 3.0) - 3.0) < 1e-9
+
+    s_pal = sym_src.index("PALETTES = {")
+    e_pal = sym_src.index("LINE_STYLES = {")
+    exec(sym_src[s_pal:e_pal], ns)
+
+    s_spec = lay_src.index("PAPER_SPECS = {")
+    e_spec = lay_src.index("def build_perkabig_layout(")
+    exec(lay_src[s_spec:e_spec], ns)
 
     # 1. Verify A4/A3/A1/A0 paper specs
     for p in ("a4", "a3", "a1", "a0"):
@@ -171,7 +188,7 @@ def check_jenks_klhk_and_perkabig_papers():
     vals = [1, 2, 2.5, 3, 10, 11, 12, 50, 51, 53]
     brks = ns["compute_jenks_breaks"](vals, 3)
     assert len(brks) == 3 and brks == [3.0, 12.0, 53.0], f"Unexpected Jenks breaks: {brks}"
-    print("[OK] PerKaBIG A4/A3/A1/A0, ScaleBar centering math, KLHK 23-class, & Jenks Natural Breaks passed")
+    print("[OK] Modularized Add-In (_to_float, A4/A3/A1/A0, ScaleBar, KLHK 23-class, Jenks) passed")
 
 
 if __name__ == "__main__":

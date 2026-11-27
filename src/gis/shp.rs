@@ -3,22 +3,25 @@ use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::Path;
 
-/// Exact WGS84 Inverse Transverse Mercator (UTM Easting/Northing -> Lon/Lat degrees).
-pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u8, south: bool) -> (f64, f64) {
+/// Exact WGS84/GRS80 Inverse Transverse Mercator (projected meters -> Lon/Lat degrees).
+/// Used for both standard UTM (`k0=0.9996`, `FE=500000`) and Indonesian DGN95 TM-3° BPN (`k0=0.9999`, `FE=200000`, `FN=1500000`).
+pub fn inverse_transverse_mercator(
+    easting: f64,
+    northing: f64,
+    lon0_deg: f64,
+    k0: f64,
+    false_easting: f64,
+    false_northing: f64,
+) -> (f64, f64) {
     const A: f64 = 6378137.0;
     const E2: f64 = 0.00669437999014;
-    const K0: f64 = 0.9996;
     let e_prime2 = E2 / (1.0 - E2);
     let e1 = (1.0 - (1.0 - E2).sqrt()) / (1.0 + (1.0 - E2).sqrt());
 
-    let x = easting - 500_000.0;
-    let y = if south {
-        northing - 10_000_000.0
-    } else {
-        northing
-    };
+    let x = easting - false_easting;
+    let y = northing - false_northing;
 
-    let m = y / K0;
+    let m = y / k0;
     let mu = m / (A * (1.0 - E2 / 4.0 - 3.0 * E2 * E2 / 64.0 - 5.0 * E2.powi(3) / 256.0));
 
     let phi1 = mu
@@ -35,7 +38,7 @@ pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u8, south: bool) -> (f64,
     let t1 = tan_p * tan_p;
     let c1 = e_prime2 * cos_p * cos_p;
     let r1 = A * (1.0 - E2) / (1.0 - E2 * sin_p * sin_p).powf(1.5);
-    let d = x / (n1 * K0);
+    let d = x / (n1 * k0);
 
     let lat = phi1
         - (n1 * tan_p / r1)
@@ -47,7 +50,7 @@ pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u8, south: bool) -> (f64,
                     * d.powi(6)
                     / 720.0);
 
-    let lon0 = ((zone as f64 - 1.0) * 6.0 - 180.0 + 3.0).to_radians();
+    let lon0 = lon0_deg.to_radians();
     let lon = lon0
         + (d - (1.0 + 2.0 * t1 + c1) * d.powi(3) / 6.0
             + (5.0 - 2.0 * c1 + 28.0 * t1 - 3.0 * c1 * c1 + 8.0 * e_prime2 + 24.0 * t1 * t1)
@@ -58,6 +61,32 @@ pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u8, south: bool) -> (f64,
     (lon.to_degrees(), lat.to_degrees())
 }
 
+/// Exact WGS84 Inverse Transverse Mercator (UTM Easting/Northing -> Lon/Lat degrees).
+pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u8, south: bool) -> (f64, f64) {
+    let lon0_deg = (zone as f64 - 1.0) * 6.0 - 180.0 + 3.0;
+    let false_northing = if south { 10_000_000.0 } else { 0.0 };
+    inverse_transverse_mercator(
+        easting,
+        northing,
+        lon0_deg,
+        0.9996,
+        500_000.0,
+        false_northing,
+    )
+}
+
+/// Exact Indonesian DGN95 TM-3° BPN (`EPSG:23830–23845`) -> WGS84 Lon/Lat degrees.
+pub fn dgn95_tm3_to_wgs84(easting: f64, northing: f64, central_meridian_deg: f64) -> (f64, f64) {
+    inverse_transverse_mercator(
+        easting,
+        northing,
+        central_meridian_deg,
+        0.9999,
+        200_000.0,
+        1_500_000.0,
+    )
+}
+
 /// Exact WGS84 Inverse Web Mercator (EPSG:3857 meters -> Lon/Lat degrees).
 pub fn web_mercator_to_wgs84(x: f64, y: f64) -> (f64, f64) {
     const R: f64 = 6378137.0;
@@ -66,10 +95,11 @@ pub fn web_mercator_to_wgs84(x: f64, y: f64) -> (f64, f64) {
     (lon, lat)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PrjCrs {
     Geographic,
     Utm(u8, bool),
+    Dgn95Tm3(f64),
     WebMercator,
     UnsupportedProjected(String),
 }
@@ -84,6 +114,9 @@ pub fn detect_crs_from_prj(shp_path: &Path) -> PrjCrs {
     let upper = text.to_ascii_uppercase();
     if let Some((zone, south)) = parse_utm_wkt(&upper) {
         return PrjCrs::Utm(zone, south);
+    }
+    if let Some(cm_deg) = parse_dgn95_tm3_wkt(&upper) {
+        return PrjCrs::Dgn95Tm3(cm_deg);
     }
     if upper.contains("MERCATOR_AUXILIARY_SPHERE")
         || upper.contains("PSEUDO_MERCATOR")
@@ -102,6 +135,32 @@ pub fn detect_crs_from_prj(shp_path: &Path) -> PrjCrs {
         return PrjCrs::UnsupportedProjected(name);
     }
     PrjCrs::Geographic
+}
+
+fn parse_dgn95_tm3_wkt(upper: &str) -> Option<f64> {
+    if !upper.contains("TRANSVERSE_MERCATOR") && !upper.contains("TM-3") && !upper.contains("TM3") {
+        return None;
+    }
+    let sf = extract_wkt_param(upper, "SCALE_FACTOR");
+    let fe = extract_wkt_param(upper, "FALSE_EASTING");
+    let fn_val = extract_wkt_param(upper, "FALSE_NORTHING");
+    let is_tm3_params = sf.is_some_and(|v| (v - 0.9999).abs() < 1e-5)
+        && fe.is_some_and(|v| (v - 200_000.0).abs() < 1.0)
+        && fn_val.is_some_and(|v| (v - 1_500_000.0).abs() < 1.0);
+    if is_tm3_params {
+        if let Some(cm) = extract_wkt_param(upper, "CENTRAL_MERIDIAN") {
+            return Some(cm);
+        }
+    }
+    // Fallback: match EPSG:23830..=23845 directly
+    for epsg in 23830u32..=23845 {
+        let p1 = format!("EPSG\",{epsg}");
+        let p2 = format!("EPSG\",\"{epsg}\"");
+        if upper.contains(&p1) || upper.contains(&p2) {
+            return Some(94.5 + (epsg - 23830) as f64 * 3.0);
+        }
+    }
+    None
 }
 
 fn parse_utm_wkt(upper: &str) -> Option<(u8, bool)> {
@@ -174,6 +233,9 @@ fn transform_xy(x: f64, y: f64, crs: &PrjCrs) -> (f64, f64) {
     match crs {
         PrjCrs::Utm(zone, south) if x.abs() > 180.0 || y.abs() > 90.0 => {
             utm_to_wgs84(x, y, *zone, *south)
+        }
+        PrjCrs::Dgn95Tm3(cm_deg) if x.abs() > 180.0 || y.abs() > 90.0 => {
+            dgn95_tm3_to_wgs84(x, y, *cm_deg)
         }
         PrjCrs::WebMercator if x.abs() > 180.0 || y.abs() > 90.0 => web_mercator_to_wgs84(x, y),
         _ => (x, y),
@@ -721,5 +783,25 @@ mod tests {
         );
         let err_gj = read_geojson_wgs84(&shp_path, 0.0).unwrap_err().to_string();
         assert!(err_gj.contains("Unsupported projected CRS"), "err={err_gj}");
+    }
+
+    #[test]
+    fn test_dgn95_tm3_bpn_conversion_and_prj_detection() {
+        let dir = tempdir().unwrap();
+        let shp_path = dir.path().join("persil_bpn.shp");
+        let prj_path = dir.path().join("persil_bpn.prj");
+        // Zone 49.1 (EPSG:23835): CM=109.5, FE=200000, FN=1500000, k0=0.9999
+        // False origin (200000, 1500000) maps exactly to (109.5E, 0.0N)
+        fs::write(&shp_path, build_point_shp(&[(200_000.0, 1_500_000.0)])).unwrap();
+        fs::write(
+            &prj_path,
+            r#"PROJCS["DGN_1995_Indonesia_TM-3_Zone_49.1",GEOGCS["GCS_DGN_1995",DATUM["D_DGN_1995",SPHEROID["WGS_1984",6378137.0,298.257223563]]],PROJECTION["Transverse_Mercator"],PARAMETER["False_Easting",200000.0],PARAMETER["False_Northing",1500000.0],PARAMETER["Central_Meridian",109.5],PARAMETER["Scale_Factor",0.9999],PARAMETER["Latitude_Of_Origin",0.0],UNIT["Meter",1.0]]"#,
+        )
+        .unwrap();
+
+        assert_eq!(detect_crs_from_prj(&shp_path), PrjCrs::Dgn95Tm3(109.5));
+        let (min_lon, min_lat, max_lon, max_lat) = read_wgs84_bbox(&shp_path).unwrap();
+        assert!((min_lon - 109.5).abs() < 1e-6 && (max_lon - 109.5).abs() < 1e-6);
+        assert!(min_lat.abs() < 1e-6 && max_lat.abs() < 1e-6);
     }
 }

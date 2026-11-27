@@ -9,6 +9,9 @@ use crate::engine::gdal::{
     gdal_flatten_2d, gdal_info, gdal_merge, gdal_pack_gpkg, gdal_project, gdal_select, gdal_split,
     gdal_unpack, gdal_xy2shp,
 };
+use crate::engine::preflight::{
+    check_fields_exist_native, check_output_not_locked, check_shapefile_bundle,
+};
 use crate::engine::{
     abs_string, resolve_backend, run_arcmap_job, run_arcpy_job, EngineBackend, ResolvedBackend,
 };
@@ -479,6 +482,58 @@ pub fn run(
     cfg: &GeokitConfig,
     backend: EngineBackend,
 ) -> Result<()> {
+    // Layer-1 Preflight checks (fast native validation before spawning Python/GDAL!)
+    match &cmd {
+        GpCommand::Project { input, out, .. }
+        | GpCommand::Clip { input, out, .. }
+        | GpCommand::Buffer { input, out, .. }
+        | GpCommand::Intersect { input, out, .. }
+        | GpCommand::Erase { input, out, .. }
+        | GpCommand::SpatialJoin { input, out, .. }
+        | GpCommand::Convert { input, out, .. }
+        | GpCommand::Select { input, out, .. }
+        | GpCommand::Flatten2d { input, out }
+        | GpCommand::Explode { input, out }
+        | GpCommand::Centroid { input, out, .. }
+        | GpCommand::MultiBuffer { input, out, .. }
+        | GpCommand::Thiessen { input, out, .. }
+        | GpCommand::Eliminate { input, out, .. }
+        | GpCommand::DeleteDuplicates { input, out, .. } => {
+            check_shapefile_bundle(input)?;
+            check_output_not_locked(out)?;
+        }
+        GpCommand::Dissolve { input, field, out } | GpCommand::Split { input, field, out } => {
+            check_shapefile_bundle(input)?;
+            check_fields_exist_native(input, field)?;
+            check_output_not_locked(out)?;
+        }
+        GpCommand::Classify { input, field, .. } => {
+            check_shapefile_bundle(input)?;
+            check_fields_exist_native(input, field)?;
+        }
+        GpCommand::Join {
+            input,
+            in_field,
+            out,
+            ..
+        } => {
+            check_shapefile_bundle(input)?;
+            check_fields_exist_native(input, in_field)?;
+            check_output_not_locked(out)?;
+        }
+        GpCommand::Info { input, .. }
+        | GpCommand::Repair { input }
+        | GpCommand::CalcGeom { input, .. }
+        | GpCommand::Values { input, .. }
+        | GpCommand::CalcField { input, .. }
+        | GpCommand::DefineCrs { input, .. }
+        | GpCommand::CleanFields { input, .. }
+        | GpCommand::Near { input, .. } => {
+            check_shapefile_bundle(input)?;
+        }
+        _ => {}
+    }
+
     // 100% native Rust summary runs in milliseconds without ArcGIS or GDAL!
     if let GpCommand::Summary {
         input,

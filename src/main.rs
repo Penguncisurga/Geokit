@@ -40,6 +40,14 @@ struct Cli {
     #[arg(long, global = true, env = "GEOKIT_OVERWRITE")]
     overwrite: bool,
 
+    /// Print verbose backend and diagnostic information to stderr
+    #[arg(short, long, global = true, env = "GEOKIT_VERBOSE")]
+    verbose: bool,
+
+    /// Suppress non-essential status messages
+    #[arg(short, long, global = true, env = "GEOKIT_QUIET")]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -246,6 +254,8 @@ fn main() -> Result<()> {
 fn real_main() -> Result<()> {
     let cli = Cli::parse();
     engine::set_overwrite(cli.overwrite);
+    engine::set_verbose(cli.verbose);
+    engine::set_quiet(cli.quiet);
     let cwd = std::env::current_dir()?;
     let (cfg, cfg_path) = config::load_config(&cwd)?;
     let effective_propy = cli.propy.as_deref().or(cfg.arcgis.propy.as_deref());
