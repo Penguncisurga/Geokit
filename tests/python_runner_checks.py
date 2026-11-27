@@ -50,6 +50,8 @@ def check_handlers_parity():
         "buffer", "dissolve", "calc_geom", "intersect", "erase", "spatial_join",
         "gp_tools", "gp_tool_usage", "gp_run", "xy2shp", "convert",
         "values", "classify", "calc_field", "union", "qa_check",
+        "select", "export_table", "flatten_2d", "define_crs", "split",
+        "clean_fields", "explode", "centroid",
         "raster_mosaic", "raster_terrain", "raster_zonal_stats", "raster_reclass",
         "raster_weighted_sum", "raster_interpolate", "raster_index", "raster_contour",
         "hydro_delineate", "hydro_basin",

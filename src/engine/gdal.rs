@@ -772,3 +772,265 @@ pub fn gdal_convert(gdal: &GdalEnvironment, input: &Path, to_fmt: &str, out: &Pa
     }
     Ok(())
 }
+
+fn driver_for_out(out: &Path) -> &'static str {
+    match out
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("shp")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "gpkg" => "GPKG",
+        "geojson" | "json" => "GeoJSON",
+        "fgb" => "FlatGeobuf",
+        "kml" => "KML",
+        "csv" => "CSV",
+        _ => "ESRI Shapefile",
+    }
+}
+
+pub fn gdal_select(
+    gdal: &GdalEnvironment,
+    input: &Path,
+    where_clause: &str,
+    out: &Path,
+) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    check_safe_gdal_output(out, &[input])?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut args = vec!["-f".into(), driver_for_out(out).into()];
+    if crate::engine::overwrite_enabled() {
+        args.push("-overwrite".into());
+    }
+    args.extend([
+        "-where".into(),
+        where_clause.to_string(),
+        out.display().to_string(),
+        input.display().to_string(),
+    ]);
+    run_cmd(gdal, ogr2ogr, &args)?;
+    println!("OK Selected features ({where_clause}) -> {}", out.display());
+    Ok(())
+}
+
+pub fn gdal_export_table(gdal: &GdalEnvironment, input: &Path, out: &Path) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    check_safe_gdal_output(out, &[input])?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut args = vec!["-f".into(), "CSV".into()];
+    if crate::engine::overwrite_enabled() {
+        args.push("-overwrite".into());
+    }
+    args.extend([out.display().to_string(), input.display().to_string()]);
+    run_cmd(gdal, ogr2ogr, &args)?;
+    println!("OK Exported attribute table -> {}", out.display());
+    Ok(())
+}
+
+pub fn gdal_flatten_2d(gdal: &GdalEnvironment, input: &Path, out: &Path) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    let items = collect_inputs(input, false);
+    if items.is_empty() {
+        println!("{}", "No vector datasets found to flatten.".yellow());
+        return Ok(());
+    }
+    let is_batch = items.len() > 1 || out.is_dir() || out.extension().is_none();
+    if is_batch {
+        fs::create_dir_all(out)?;
+    } else if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let overwrite = crate::engine::overwrite_enabled();
+    for (idx, (src, _)) in items.iter().enumerate() {
+        let dst = if is_batch {
+            out.join(src.file_name().unwrap_or_default())
+        } else {
+            out.to_path_buf()
+        };
+        check_safe_gdal_output(&dst, &[src.as_path()])?;
+        let mut args = vec!["-f".into(), driver_for_out(&dst).into()];
+        if overwrite {
+            args.push("-overwrite".into());
+        }
+        args.extend([
+            "-dim".into(),
+            "XY".into(),
+            dst.display().to_string(),
+            src.display().to_string(),
+        ]);
+        run_cmd(gdal, ogr2ogr, &args)?;
+        println!(
+            "[{}/{}] OK   Flattened 2D (Drop Z/M) {} -> {}",
+            idx + 1,
+            items.len(),
+            src.display(),
+            dst.display()
+        );
+    }
+    Ok(())
+}
+
+pub fn gdal_define_crs(gdal: &GdalEnvironment, input: &Path, epsg: u32) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "shp" {
+        bail!("GDAL `define-crs` in-place supports .shp files (use `gp project` or ArcGIS engine for other formats).");
+    }
+    let tmp = tempfile::tempdir()?;
+    let tmp_shp = tmp.path().join("crs_probe.shp");
+    run_cmd(
+        gdal,
+        ogr2ogr,
+        &[
+            "-f".into(),
+            "ESRI Shapefile".into(),
+            "-a_srs".into(),
+            format!("EPSG:{epsg}"),
+            "-limit".into(),
+            "1".into(),
+            tmp_shp.display().to_string(),
+            input.display().to_string(),
+        ],
+    )?;
+    let tmp_prj = tmp_shp.with_extension("prj");
+    if !tmp_prj.is_file() {
+        bail!("GDAL failed to generate .prj for EPSG:{epsg}.");
+    }
+    let dst_prj = input.with_extension("prj");
+    fs::copy(&tmp_prj, &dst_prj)?;
+    println!("OK Defined CRS EPSG:{epsg} -> {}", dst_prj.display());
+    Ok(())
+}
+
+pub fn gdal_explode(gdal: &GdalEnvironment, input: &Path, out: &Path) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    check_safe_gdal_output(out, &[input])?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut args = vec!["-f".into(), driver_for_out(out).into()];
+    if crate::engine::overwrite_enabled() {
+        args.push("-overwrite".into());
+    }
+    args.extend([
+        "-explodecollections".into(),
+        out.display().to_string(),
+        input.display().to_string(),
+    ]);
+    run_cmd(gdal, ogr2ogr, &args)?;
+    println!("OK Exploded multipart -> singlepart: {}", out.display());
+    Ok(())
+}
+
+pub fn gdal_split(gdal: &GdalEnvironment, input: &Path, field: &str, out_dir: &Path) -> Result<()> {
+    let Some(ogr2ogr) = &gdal.ogr2ogr else {
+        bail!("ogr2ogr not found in GDAL environment.");
+    };
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let unique_vals: Vec<String> = if ext == "shp" {
+        let recs = crate::gis::shp::read_dbf_records(&input.with_extension("dbf"))?;
+        let mut set = std::collections::BTreeSet::new();
+        for r in recs {
+            if let Some((_, v)) = r.iter().find(|(k, _)| k.eq_ignore_ascii_case(field)) {
+                let s = match v {
+                    serde_json::Value::String(s) => s.trim().to_string(),
+                    serde_json::Value::Null => continue,
+                    other => other.to_string(),
+                };
+                if !s.is_empty() {
+                    set.insert(s);
+                }
+            }
+        }
+        set.into_iter().collect()
+    } else if ext == "geojson" || ext == "json" {
+        let raw = fs::read_to_string(input)?;
+        let val: serde_json::Value = serde_json::from_str(&raw)?;
+        let mut set = std::collections::BTreeSet::new();
+        if let Some(feats) = val.get("features").and_then(|v| v.as_array()) {
+            for f in feats {
+                if let Some(props) = f.get("properties").and_then(|p| p.as_object()) {
+                    if let Some((_, v)) = props.iter().find(|(k, _)| k.eq_ignore_ascii_case(field))
+                    {
+                        let s = match v {
+                            serde_json::Value::String(s) => s.trim().to_string(),
+                            serde_json::Value::Null => continue,
+                            other => other.to_string(),
+                        };
+                        if !s.is_empty() {
+                            set.insert(s);
+                        }
+                    }
+                }
+            }
+        }
+        set.into_iter().collect()
+    } else {
+        bail!("GDAL `gp split` supports .shp and .geojson inputs (use ArcGIS/ArcMap engine for .gdb).");
+    };
+
+    if unique_vals.is_empty() {
+        bail!(
+            "No non-empty values found in field '{field}' of {}",
+            input.display()
+        );
+    }
+    fs::create_dir_all(out_dir)?;
+    let overwrite = crate::engine::overwrite_enabled();
+    for (idx, val) in unique_vals.iter().enumerate() {
+        let safe = crate::gis::sanitize_gis_name(val);
+        let dst = out_dir.join(format!("{safe}.shp"));
+        check_safe_gdal_output(&dst, &[input])?;
+        let escaped = val.replace('\'', "''");
+        let where_q = format!("\"{field}\" = '{escaped}'");
+        let mut args = vec!["-f".into(), "ESRI Shapefile".into()];
+        if overwrite {
+            args.push("-overwrite".into());
+        }
+        args.extend([
+            "-where".into(),
+            where_q,
+            dst.display().to_string(),
+            input.display().to_string(),
+        ]);
+        run_cmd(gdal, ogr2ogr, &args)?;
+        println!(
+            "[{}/{}] OK   {field}='{val}' -> {}",
+            idx + 1,
+            unique_vals.len(),
+            dst.display()
+        );
+    }
+    Ok(())
+}

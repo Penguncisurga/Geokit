@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config::GeokitConfig;
 use crate::engine::gdal::{
-    detect_gdal, gdal_clip, gdal_convert, gdal_info, gdal_merge, gdal_pack_gpkg, gdal_project,
+    detect_gdal, gdal_clip, gdal_convert, gdal_define_crs, gdal_explode, gdal_export_table,
+    gdal_flatten_2d, gdal_info, gdal_merge, gdal_pack_gpkg, gdal_project, gdal_select, gdal_split,
     gdal_unpack, gdal_xy2shp,
 };
 use crate::engine::{
@@ -272,6 +273,83 @@ pub enum GpCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Filter vector features by SQL WHERE clause and export (ArcGIS Pro, ArcMap, or GDAL)
+    Select {
+        /// Input shapefile, GeoJSON, .gpkg, or .gdb feature class
+        input: PathBuf,
+        /// SQL WHERE expression (e.g. "WADMKK = 'Semarang'" or "AREA_HA > 100")
+        #[arg(long = "where")]
+        where_clause: String,
+        /// Output filtered dataset path
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Export attribute table of any vector dataset (.shp, .geojson, .gpkg, .gdb) to UTF-8 CSV
+    ExportTable {
+        /// Input shapefile, GeoJSON, .gpkg, or .gdb feature class
+        input: PathBuf,
+        /// Output .csv file path
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Strip Z and M dimensions (Drop Z/M) from 3D/M-enabled shapefiles (common on RBI BIG datasets)
+    #[command(name = "flatten-2d", alias = "flatten2d")]
+    Flatten2d {
+        /// Input vector file or folder
+        input: PathBuf,
+        /// Output 2D vector file or directory
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Define/assign missing CRS (.prj) metadata without reprojecting coordinates
+    DefineCrs {
+        /// Input shapefile or .gdb feature class missing a CRS
+        input: PathBuf,
+        /// EPSG code to assign (e.g. 4326 or 32749)
+        #[arg(long)]
+        epsg: u32,
+    },
+    /// Split one vector dataset into separate files per unique attribute value (e.g. per kecamatan/desa)
+    Split {
+        /// Input shapefile, GeoJSON, or .gdb feature class
+        input: PathBuf,
+        /// Attribute field to split by (e.g. KECAMATAN, WADMKK)
+        #[arg(long)]
+        field: String,
+        /// Output directory for split shapefiles
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Remove overlay junk fields (FID_*, ORIG_FID, Shape_Le_*, OBJECTID_*) or keep only specified fields
+    CleanFields {
+        /// Input shapefile or .gdb feature class (modified in-place)
+        input: PathBuf,
+        /// Comma-separated field names to KEEP (drops all other non-required fields)
+        #[arg(long)]
+        keep: Option<String>,
+        /// Comma-separated field names to DROP explicitly (if omitted alongside --keep, drops standard overlay junk)
+        #[arg(long)]
+        drop: Option<String>,
+    },
+    /// Convert multipart geometries into singlepart features (Multipart-to-Singlepart)
+    Explode {
+        /// Input shapefile, GeoJSON, .gpkg, or .gdb feature class
+        input: PathBuf,
+        /// Output singlepart dataset path
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Create point centroids from polygon or line features (works on all ArcGIS licenses)
+    Centroid {
+        /// Input polygon/line shapefile or .gdb feature class
+        input: PathBuf,
+        /// Output point shapefile or .gdb feature class
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Force centroid point to lie strictly inside each polygon
+        #[arg(long)]
+        inside: bool,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -301,6 +379,10 @@ struct GpPayload {
     limit: Option<usize>,
     inputs: Option<Vec<String>>,
     json: Option<bool>,
+    where_clause: Option<String>,
+    keep_fields: Option<String>,
+    drop_fields: Option<String>,
+    inside: Option<bool>,
 }
 
 pub fn run(
@@ -325,6 +407,18 @@ pub fn run(
             out.as_deref(),
             as_json,
         );
+    }
+
+    // Native fast-path for `export-table` on .shp / .geojson (zero ArcGIS/GDAL needed!)
+    if let GpCommand::ExportTable { ref input, ref out } = cmd {
+        let ext = input
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(ext.as_str(), "shp" | "geojson" | "json") && input.is_file() {
+            return run_native_export_table(input, out);
+        }
     }
 
     let resolved = resolve_backend(backend, override_propy, cfg.arcgis.arcmap_python.as_deref());
@@ -398,9 +492,49 @@ pub fn run(
                 }
                 gdal_convert(&gdal, &input, &to, &out)
             }
+            GpCommand::Select {
+                input,
+                where_clause,
+                out,
+            } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_select(&gdal, &input, &where_clause, &out)
+            }
+            GpCommand::ExportTable { input, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_export_table(&gdal, &input, &out)
+            }
+            GpCommand::Flatten2d { input, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_flatten_2d(&gdal, &input, &out)
+            }
+            GpCommand::DefineCrs { input, epsg } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_define_crs(&gdal, &input, epsg)
+            }
+            GpCommand::Split { input, field, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_split(&gdal, &input, &field, &out)
+            }
+            GpCommand::Explode { input, out } => {
+                if !input.exists() {
+                    bail!("Input path does not exist: {}", input.display());
+                }
+                gdal_explode(&gdal, &input, &out)
+            }
             _ => bail!(
                 "This subcommand currently requires the ArcGIS Pro / ArcMap backend (`--engine arcgis` or `--engine arcmap`).\n\
-                 GDAL backend supports: info, project, clip, merge, pack (.gpkg), unpack, xy2shp, convert."
+                 GDAL backend supports: info, project, clip, merge, pack (.gpkg), unpack, xy2shp, convert, select, export-table, flatten-2d, define-crs, split, explode."
             ),
         };
     }
@@ -747,6 +881,102 @@ pub fn run(
                 ..Default::default()
             }
         }
+        GpCommand::Select {
+            input,
+            where_clause,
+            out,
+        } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "select".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                where_clause: Some(where_clause),
+                ..Default::default()
+            }
+        }
+        GpCommand::ExportTable { input, out } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "export_table".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                ..Default::default()
+            }
+        }
+        GpCommand::Flatten2d { input, out } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "flatten_2d".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                ..Default::default()
+            }
+        }
+        GpCommand::DefineCrs { input, epsg } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "define_crs".into(),
+                input: abs_string(&input),
+                epsg: Some(epsg),
+                ..Default::default()
+            }
+        }
+        GpCommand::Split { input, field, out } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "split".into(),
+                input: abs_string(&input),
+                field: Some(field),
+                out: Some(abs_string(&out)),
+                ..Default::default()
+            }
+        }
+        GpCommand::CleanFields { input, keep, drop } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "clean_fields".into(),
+                input: abs_string(&input),
+                keep_fields: keep,
+                drop_fields: drop,
+                ..Default::default()
+            }
+        }
+        GpCommand::Explode { input, out } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "explode".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                ..Default::default()
+            }
+        }
+        GpCommand::Centroid { input, out, inside } => {
+            if !input.exists() && !is_gdb_member(&input) {
+                bail!("Input path does not exist: {}", input.display());
+            }
+            GpPayload {
+                action: "centroid".into(),
+                input: abs_string(&input),
+                out: Some(abs_string(&out)),
+                inside: Some(inside),
+                ..Default::default()
+            }
+        }
         GpCommand::Summary { .. } => unreachable!(),
     };
 
@@ -755,6 +985,110 @@ pub fn run(
     } else {
         run_arcpy_job(override_propy, &payload)
     }
+}
+
+fn is_gdb_member(path: &Path) -> bool {
+    path.ancestors().skip(1).any(|a| {
+        a.is_dir()
+            && a.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("gdb"))
+                .unwrap_or(false)
+    })
+}
+
+fn csv_escape_cell(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn run_native_export_table(input: &Path, out: &Path) -> Result<()> {
+    use colored::Colorize;
+    use serde_json::Value;
+
+    if out.exists() && !crate::engine::overwrite_enabled() {
+        bail!(
+            "Output already exists: '{}'. Pass --overwrite to replace it.",
+            out.display()
+        );
+    }
+
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let rows: Vec<serde_json::Map<String, Value>> = if ext == "shp" {
+        let dbf = input.with_extension("dbf");
+        if !dbf.is_file() {
+            bail!("Missing .dbf attribute table for {}", input.display());
+        }
+        crate::gis::shp::read_dbf_records(&dbf)?
+    } else {
+        let raw = std::fs::read_to_string(input)?;
+        let val: Value = serde_json::from_str(&raw)?;
+        val.get("features")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|f| f.get("properties").and_then(|p| p.as_object()).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    if rows.is_empty() {
+        bail!("No attribute records found in {}", input.display());
+    }
+
+    let mut cols: Vec<String> = Vec::new();
+    for r in &rows {
+        for k in r.keys() {
+            if !cols.iter().any(|c| c == k) {
+                cols.push(k.clone());
+            }
+        }
+    }
+
+    let mut csv_out = String::new();
+    csv_out.push_str(
+        &cols
+            .iter()
+            .map(|c| csv_escape_cell(c))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    csv_out.push('\n');
+    for r in &rows {
+        let line: Vec<String> = cols
+            .iter()
+            .map(|c| match r.get(c) {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(s)) => csv_escape_cell(s),
+                Some(other) => csv_escape_cell(&other.to_string()),
+            })
+            .collect();
+        csv_out.push_str(&line.join(","));
+        csv_out.push('\n');
+    }
+
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(out, csv_out)?;
+    println!(
+        "{} Exported {} row(s) x {} col(s) -> {}",
+        "[OK]".green().bold(),
+        rows.len(),
+        cols.len(),
+        out.display()
+    );
+    Ok(())
 }
 
 fn run_native_summary(

@@ -15,11 +15,11 @@ Legend:
 | `doctor`, `init`, `audit`, `report` | Yes | — | — | — | Pure Rust; no GIS license needed |
 | `organize`, `sanitize`, `clean` | Yes | — | — | — | Transactional bundle rollback; protects `.gdb/*.lock` by default (`--include-gdb-locks` to override) |
 | `webmap` | Yes | — | — | — | Supports WGS84, UTM, & Web Mercator (`EPSG:3857`); rejects unrecognized projected CRS |
-| `gp summary` | Yes | — | — | — | Pure Rust `.shp`/`.geojson` attribute aggregation (`.md`/`.csv`/`.html`/`.json`) |
+| `gp summary`, `gp export-table` | Yes | Yes (`.gdb`) | Yes (`.gdb`) | Yes (`.gpkg`/etc.) | Pure Rust for `.shp`/`.geojson`; ArcGIS/GDAL for `.gdb`/`.gpkg` |
 | `fetch osm` | Yes | — | — | — | Uses `curl` + Overpass API mirrors; respects `--overwrite` |
 | `fetch dem` | Yes | Optional | Optional | Optional | Download is Native; `--clip-aoi` uses ArcGIS/ArcMap/GDAL for mosaic/reproject/clip |
-| `gp info`, `project`, `clip`, `merge`, `pack`, `unpack`, `xy2shp`, `convert` | — | Yes | Yes | Yes | Full cross-platform support with Safe Mode (`--overwrite` required to replace existing outputs) |
-| `gp repair`, `buffer`, `dissolve`, `calc-geom`, `intersect`, `erase`, `spatial-join`, `union`, `values`, `classify`, `calc-field`, `tools`, `tool-usage`, `run` | — | Yes | Yes | No | `erase` requires ArcGIS Advanced license; `calc-field` uses AST Safe Math Evaluator |
+| `gp info`, `project`, `clip`, `merge`, `pack`, `unpack`, `xy2shp`, `convert`, `select`, `flatten-2d`, `define-crs`, `split`, `explode` | — | Yes | Yes | Yes | Full cross-platform support with Safe Mode (`--overwrite` required to replace existing outputs) |
+| `gp repair`, `buffer`, `dissolve`, `calc-geom`, `intersect`, `erase`, `spatial-join`, `union`, `values`, `classify`, `calc-field`, `clean-fields`, `centroid`, `tools`, `tool-usage`, `run` | — | Yes | Yes | No | `erase` requires ArcGIS Advanced license; `centroid` works on Basic via cursor fallback; `calc-field` uses AST Safe Math |
 | `raster mosaic`, `terrain` | — | Yes | Yes | Yes | ArcGIS/ArcMap `terrain` requires **Spatial Analyst**; GDAL `gdaldem` requires no license |
 | `raster zonal-stats`, `reclass`, `weighted-sum`, `interpolate`, `index`, `contour` | — | Yes | Yes | No | Requires **Spatial Analyst** extension |
 | `hydro delineate`, `basin` | — | Yes | Yes | No | Requires **Spatial Analyst** extension |

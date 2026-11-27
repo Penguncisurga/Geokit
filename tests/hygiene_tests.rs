@@ -947,3 +947,203 @@ fn test_webmap_klhk_23_class_preset_embedded() {
     assert!(html.contains("#00441B"));
     assert!(html.contains("hutan lahan kering primer"));
 }
+
+#[test]
+fn test_gp_export_table_native_csv_and_safe_mode() {
+    let dir = tempdir().unwrap();
+    let gj = dir.path().join("desa.geojson");
+    fs::write(
+        &gj,
+        r#"{
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "properties": { "DESA": "Mekar, Jaya", "AREA_HA": 125.5 },
+              "geometry": { "type": "Point", "coordinates": [110.2, -7.0] }
+            },
+            {
+              "type": "Feature",
+              "properties": { "DESA": "Sari \"Utara\"", "AREA_HA": 80.0 },
+              "geometry": { "type": "Point", "coordinates": [110.3, -7.0] }
+            }
+          ]
+        }"#,
+    )
+    .unwrap();
+
+    let csv_out = dir.path().join("desa.csv");
+    let res = geokit_bin()
+        .args([
+            "gp",
+            "export-table",
+            gj.to_str().unwrap(),
+            "--out",
+            csv_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        res.status.success(),
+        "export-table stderr: {}",
+        String::from_utf8_lossy(&res.stderr)
+    );
+    let csv = fs::read_to_string(&csv_out).unwrap();
+    assert!(csv.contains("\"Mekar, Jaya\""));
+    assert!(csv.contains("\"Sari \"\"Utara\"\"\""));
+    assert!(csv.contains("125.5"));
+
+    // Safe Mode must refuse overwrite without --overwrite
+    let dup = geokit_bin()
+        .args([
+            "gp",
+            "export-table",
+            gj.to_str().unwrap(),
+            "--out",
+            csv_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!dup.status.success());
+}
+
+#[test]
+fn test_gdal_select_flatten_explode_and_split() {
+    let doc = geokit_bin().args(["doctor", "--json"]).output().unwrap();
+    let doc_json: serde_json::Value = serde_json::from_slice(&doc.stdout).unwrap();
+    if doc_json["gdal"]["ogr2ogr"].is_null() {
+        return;
+    }
+
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let src_gj = root.join("wilayah.geojson");
+    fs::write(
+        &src_gj,
+        r#"{
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "properties": { "WILAYAH": "Kota A", "SKOR": 5 },
+              "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                  [[[110.10, -7.00, 12.0], [110.12, -7.00, 12.0], [110.12, -6.98, 12.0], [110.10, -6.98, 12.0], [110.10, -7.00, 12.0]]],
+                  [[[110.15, -7.00, 15.0], [110.17, -7.00, 15.0], [110.17, -6.98, 15.0], [110.15, -6.98, 15.0], [110.15, -7.00, 15.0]]]
+                ]
+              }
+            },
+            {
+              "type": "Feature",
+              "properties": { "WILAYAH": "Kota B", "SKOR": 2 },
+              "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[110.20, -7.00, 5.0], [110.22, -7.00, 5.0], [110.22, -6.98, 5.0], [110.20, -6.98, 5.0], [110.20, -7.00, 5.0]]]
+              }
+            }
+          ]
+        }"#,
+    )
+    .unwrap();
+
+    // 1. Select by SQL WHERE
+    let sel_out = root.join("kota_a_only.geojson");
+    let r_sel = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "select",
+            src_gj.to_str().unwrap(),
+            "--where",
+            "SKOR >= 4",
+            "--out",
+            sel_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r_sel.status.success(),
+        "select stderr: {}",
+        String::from_utf8_lossy(&r_sel.stderr)
+    );
+    let sel_val: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&sel_out).unwrap()).unwrap();
+    assert_eq!(sel_val["features"].as_array().unwrap().len(), 1);
+
+    // 2. Flatten 2D (Drop Z)
+    let flat_out = root.join("flat_2d.geojson");
+    let r_flat = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "flatten-2d",
+            src_gj.to_str().unwrap(),
+            "--out",
+            flat_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r_flat.status.success(),
+        "flatten-2d stderr: {}",
+        String::from_utf8_lossy(&r_flat.stderr)
+    );
+    let flat_val: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&flat_out).unwrap()).unwrap();
+    let first_pt = &flat_val["features"][0]["geometry"]["coordinates"][0][0][0];
+    assert_eq!(
+        first_pt.as_array().unwrap().len(),
+        2,
+        "Z coordinate must be stripped"
+    );
+
+    // 3. Explode MultiPolygon -> Singlepart (2 original features -> 3 singlepart polygons!)
+    let exp_out = root.join("exploded.geojson");
+    let r_exp = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "explode",
+            flat_out.to_str().unwrap(),
+            "--out",
+            exp_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r_exp.status.success(),
+        "explode stderr: {}",
+        String::from_utf8_lossy(&r_exp.stderr)
+    );
+    let exp_val: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&exp_out).unwrap()).unwrap();
+    assert_eq!(exp_val["features"].as_array().unwrap().len(), 3);
+
+    // 4. Split by WILAYAH -> kota_a.shp + kota_b.shp
+    let split_dir = root.join("by_wilayah");
+    let r_split = geokit_bin()
+        .args([
+            "--engine",
+            "gdal",
+            "gp",
+            "split",
+            flat_out.to_str().unwrap(),
+            "--field",
+            "WILAYAH",
+            "--out",
+            split_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r_split.status.success(),
+        "split stderr: {}",
+        String::from_utf8_lossy(&r_split.stderr)
+    );
+    assert!(split_dir.join("kota_a.shp").is_file());
+    assert!(split_dir.join("kota_b.shp").is_file());
+}

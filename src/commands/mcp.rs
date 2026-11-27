@@ -285,7 +285,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["info", "values", "classify", "calc-field", "union", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
+                        "enum": ["info", "values", "classify", "calc-field", "union", "select", "export-table", "flatten-2d", "define-crs", "split", "clean-fields", "explode", "centroid", "project", "clip", "merge", "pack", "unpack", "repair", "buffer", "dissolve", "calc-geom", "intersect", "erase", "spatial-join", "xy2shp", "convert", "tools", "tool-usage", "run"]
                     },
                     "input": { "type": "string", "description": "Input file, folder, .gdb, or keyword pattern (for tools)" },
                     "inputs": { "type": "array", "items": { "type": "string" }, "description": "List of input polygon paths (for union)" },
@@ -311,7 +311,12 @@ fn tool_definitions() -> Value {
                     "y_field": { "type": "string", "description": "Y / Latitude column name (for xy2shp, default: lat)" },
                     "to": { "type": "string", "enum": ["shp", "gpkg", "geojson", "kml", "fgb"], "description": "Target vector format (for convert)" },
                     "tool": { "type": "string", "description": "Exact ArcPy tool name e.g. Buffer_analysis or Slope_sa (for tool-usage or run)" },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "Positional arguments passed to ArcPy tool (for run)" }
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Positional arguments passed to ArcPy tool (for run)" },
+                    "where": { "type": "string", "description": "SQL WHERE clause (for select)" },
+                    "keep": { "type": "string", "description": "Comma-separated field names to keep (for clean-fields)" },
+                    "drop": { "type": "string", "description": "Comma-separated field names to drop (for clean-fields)" },
+                    "inside": { "type": "boolean", "description": "Force centroid strictly inside polygon (for centroid)" },
+                    "overwrite": { "type": "boolean", "description": "Allow replacing existing output files (Safe Mode is default)" }
                 },
                 "required": ["action"]
             }
@@ -871,6 +876,18 @@ fn execute_tool_inner(name: &str, args: &Value) -> (String, bool) {
             }
             if let Some(dv) = str_arg(args, "default_value") {
                 cli_args.extend(["--default".into(), dv.into()]);
+            }
+            if let Some(w) = str_arg(args, "where") {
+                cli_args.extend(["--where".into(), w.into()]);
+            }
+            if let Some(k) = str_arg(args, "keep") {
+                cli_args.extend(["--keep".into(), k.into()]);
+            }
+            if let Some(d) = str_arg(args, "drop") {
+                cli_args.extend(["--drop".into(), d.into()]);
+            }
+            if bool_arg(args, "inside") {
+                cli_args.push("--inside".into());
             }
             if let Some(lim) = args.get("limit").and_then(|v| v.as_u64()) {
                 cli_args.extend(["--limit".into(), lim.to_string()]);

@@ -1985,6 +1985,184 @@ def cmd_raster_contour(payload):
     return 0
 
 
+def cmd_select(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    where = payload.get("where_clause") or ""
+    ensure_output_container(out_path, is_batch=False)
+    arcpy.analysis.Select(src, out_path, where)
+    cnt = int(arcpy.management.GetCount(out_path)[0])
+    print(f"OK Selected {cnt} feature(s) ({where}) -> {out_path}")
+    return 0
+
+
+def cmd_export_table(payload):
+    import csv
+
+    src = payload["input"]
+    out_path = payload["out"]
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    fields = [f.name for f in arcpy.ListFields(src) if f.type not in ("Geometry", "Blob", "Raster")]
+    if not fields:
+        print(f"No exportable attribute fields in {src}", file=sys.stderr)
+        return 1
+    rows = 0
+    with open(out_path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(fields)
+        with arcpy.da.SearchCursor(src, fields) as cur:
+            for row in cur:
+                writer.writerow(["" if v is None else v for v in row])
+                rows += 1
+    print(f"OK Exported {rows} row(s) x {len(fields)} col(s) -> {out_path}")
+    return 0
+
+
+def cmd_flatten_2d(payload):
+    items = [p for p, kind in collect_datasets(payload["input"], include_rasters=False) if kind == "vector"]
+    if not items:
+        print("No vector datasets found to flatten.")
+        return 0
+    out_path = payload["out"]
+    is_batch = len(items) > 1 or os.path.isdir(out_path) or not os.path.splitext(out_path)[1]
+    ensure_output_container(out_path, is_batch=is_batch)
+    prev_z = arcpy.env.outputZFlag
+    prev_m = arcpy.env.outputMFlag
+    arcpy.env.outputZFlag = "Disabled"
+    arcpy.env.outputMFlag = "Disabled"
+    failures = 0
+    try:
+        for idx, src in enumerate(items, 1):
+            dst = build_output_path(out_path, src, is_batch)
+            try:
+                arcpy.management.CopyFeatures(src, dst)
+                print(f"[{idx}/{len(items)}] OK   Flattened 2D {os.path.basename(src)} -> {dst}")
+            except Exception as exc:
+                failures += 1
+                print(f"[{idx}/{len(items)}] ERR  {os.path.basename(src)}: {exc}", file=sys.stderr)
+    finally:
+        arcpy.env.outputZFlag = prev_z
+        arcpy.env.outputMFlag = prev_m
+    return 1 if failures else 0
+
+
+def cmd_define_crs(payload):
+    src = payload["input"]
+    epsg = int(payload["epsg"])
+    sr = arcpy.SpatialReference(epsg)
+    arcpy.management.DefineProjection(src, sr)
+    print(f"OK Defined CRS EPSG:{epsg} ({sr.name}) -> {src}")
+    return 0
+
+
+def cmd_split(payload):
+    src = payload["input"]
+    req_field = payload["field"]
+    out_dir = payload["out"]
+    os.makedirs(out_dir, exist_ok=True)
+    existing = {f.name.lower(): f for f in arcpy.ListFields(src)}
+    fobj = existing.get(req_field.lower())
+    if not fobj:
+        print(f"Field '{req_field}' not found in {src}", file=sys.stderr)
+        return 1
+    fname = fobj.name
+    is_str = fobj.type == "String"
+    delim = arcpy.AddFieldDelimiters(src, fname)
+    vals = []
+    seen = set()
+    with arcpy.da.SearchCursor(src, [fname]) as cur:
+        for (v,) in cur:
+            if v is None:
+                continue
+            sv = str(v).strip()
+            if sv and sv not in seen:
+                seen.add(sv)
+                vals.append(v)
+    if not vals:
+        print(f"No non-empty values found in field '{fname}'.", file=sys.stderr)
+        return 1
+    overwrite = _is_overwrite(payload)
+    for idx, v in enumerate(vals, 1):
+        safe = sanitize_gdb_name(str(v))
+        dst = os.path.join(out_dir, f"{safe}.shp")
+        err = _check_safe_output(dst, [src], overwrite)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        if is_str:
+            esc = str(v).replace("'", "''")
+            where = f"{delim} = '{esc}'"
+        else:
+            where = f"{delim} = {v}"
+        arcpy.analysis.Select(src, dst, where)
+        print(f"[{idx}/{len(vals)}] OK   {fname}={v} -> {dst}")
+    return 0
+
+
+def cmd_clean_fields(payload):
+    src = payload["input"]
+    keep_raw = payload.get("keep_fields")
+    drop_raw = payload.get("drop_fields")
+    fields = arcpy.ListFields(src)
+    removable = [f.name for f in fields if not f.required and f.type not in ("OID", "Geometry")]
+    if keep_raw:
+        keep_set = {s.strip().lower() for s in keep_raw.split(",") if s.strip()}
+        to_drop = [n for n in removable if n.lower() not in keep_set]
+    elif drop_raw:
+        drop_set = {s.strip().lower() for s in drop_raw.split(",") if s.strip()}
+        to_drop = [n for n in removable if n.lower() in drop_set]
+    else:
+        junk_re = re.compile(r"^(fid_.*|orig_fid|shape_le_.*|shape_ar_.*|objectid_.*|id_\d+)$", re.I)
+        to_drop = [n for n in removable if junk_re.match(n)]
+    if not to_drop:
+        print(f"No matching fields to drop in {src}.")
+        return 0
+    arcpy.management.DeleteField(src, to_drop)
+    print(f"OK Dropped {len(to_drop)} field(s) ({', '.join(to_drop)}) from {src}")
+    return 0
+
+
+def cmd_explode(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    ensure_output_container(out_path, is_batch=False)
+    arcpy.management.MultipartToSinglepart(src, out_path)
+    cnt = int(arcpy.management.GetCount(out_path)[0])
+    print(f"OK Exploded multipart -> singlepart ({cnt} feature(s)) -> {out_path}")
+    return 0
+
+
+def cmd_centroid(payload):
+    src = payload["input"]
+    out_path = payload["out"]
+    inside = bool(payload.get("inside", False))
+    ensure_output_container(out_path, is_batch=False)
+    try:
+        arcpy.management.FeatureToPoint(src, out_path, "INSIDE" if inside else "CENTROID")
+    except Exception:
+        # License-independent fallback (works on ArcGIS Basic!)
+        desc = arcpy.Describe(src)
+        sr = getattr(desc, "spatialReference", None)
+        parent = os.path.dirname(out_path) or "."
+        name = os.path.basename(out_path)
+        arcpy.management.CreateFeatureclass(parent, name, "POINT", template=src, spatial_reference=sr)
+        attr_fields = [f.name for f in arcpy.ListFields(src) if not f.required and f.type not in ("OID", "Geometry", "Blob", "Raster")]
+        read_cols = ["SHAPE@"] + attr_fields
+        write_cols = ["SHAPE@XY"] + attr_fields
+        with arcpy.da.SearchCursor(src, read_cols) as sc, arcpy.da.InsertCursor(out_path, write_cols) as ic:
+            for row in sc:
+                geom = row[0]
+                if geom is None:
+                    continue
+                pt = geom.labelPoint if inside else geom.trueCentroid
+                ic.insertRow([(pt.X, pt.Y)] + list(row[1:]))
+    cnt = int(arcpy.management.GetCount(out_path)[0])
+    print(f"OK Created {cnt} centroid point(s) -> {out_path}")
+    return 0
+
+
 HANDLERS = {
     "info": cmd_info,
     "project": cmd_project,
@@ -2008,6 +2186,14 @@ HANDLERS = {
     "classify": cmd_classify,
     "calc_field": cmd_calc_field,
     "union": cmd_union,
+    "select": cmd_select,
+    "export_table": cmd_export_table,
+    "flatten_2d": cmd_flatten_2d,
+    "define_crs": cmd_define_crs,
+    "split": cmd_split,
+    "clean_fields": cmd_clean_fields,
+    "explode": cmd_explode,
+    "centroid": cmd_centroid,
     "qa_check": cmd_qa_check,
     "layout_list": cmd_layout_list,
     "layout_export": cmd_layout_export,
